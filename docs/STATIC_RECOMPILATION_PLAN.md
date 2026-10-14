@@ -50,8 +50,29 @@ committed and never distributed. Only the recompiler is part of the repository.
 | Relocations | 231k `R_X86_64_RELATIVE` (pointers in data: vtables, function tables, switch tables) |
 | Imports | 686, all named in `src/import_names.inc`; include **C++ exceptions** (`__cxa_throw`, `_Unwind_Resume`, `__cxa_begin_catch`, …) and `setjmp`/`longjmp` |
 
-Not yet counted: the linked `libc.prx` and `libSceFios2.prx` (same treatment, ~1.3 MB), and
-the patch sites of `patches/Bloodborne.xml` (60 FPS, resolution, camera).
+Not yet counted: the linked `libc.prx` and `libSceFios2.prx` (same treatment, ~1.3 MB; libc is
+linked into the image at 0x56e0000), and the patch sites of `patches/Bloodborne.xml` (60 FPS,
+resolution, camera).
+
+**M0 findings (2026-10-14 night):**
+
+- **Undecodable bytes are switch tables.** All 2,242 cases are arrays of 32-bit relative
+  offsets that the compiler placed at the end of the function, inside its FDE range. Discovery
+  must follow control flow from entry points (recursive descent), never decode linearly, and the
+  tables give the switch targets directly.
+- **Code without FDEs (3,717 ranges, 2.85 MB of real instructions) is static initialization**
+  (`_GLOBAL__sub_I_*`-style constructors that fill globals), reached through the initializer
+  array: relocation targets find them.
+- **No stack switching in game code.** Besides `alloca` (`mov rsp, reg` after `sub`), nothing in
+  the eboot loads `rsp`. So no hand-written fiber switch needs special handling in the game code
+  itself (still to check: libc).
+- **Run-time counts** (`BB_CALL_COUNTS=1`, count-only hooks on the linked libc, ~2.5 min: title,
+  load, walk): `__cxa_throw` **0**, `_Unwind_Resume` **0**; `setjmp` **> 262,000** (~1,700/s,
+  from a handful of call sites, e.g. image+0x296dc3b, +0x23057cf), `longjmp` **> 512** (from
+  image+0xa3217a, +0xa315a8, …). The protected-call pattern of a scripting VM (FromSoftware's engine
+  uses Havok Script, a Lua derivative: `pcall` = `setjmp`, errors/yields = `longjmp`). So C++
+  exceptions can start as "abort with a report", but `setjmp`/`longjmp` must be fast and
+  correct from day one.
 
 ## Architecture
 
@@ -118,19 +139,25 @@ eboot.bin ─► prepare/link (today's scripts)          recompiled game (.dylib
    (`rsp`/`rbp`-relative stack slots that do not escape), `lock`-prefixed ops as LSE atomics
    with sequential consistency. Measure the cost early (M2); try relaxing per region with
    tests. The load race we fixed on 2026-10-14 is the kind of bug wrong ordering would create.
-2. **Engine fibers.** The job system switches stacks itself (92 `mov rsp, …`). Recompiled code
+2. **Engine fibers** (M0: no stack switch found in the game code; the 92 `mov rsp, …` are
+   `alloca`. Confirm in libc and at run time before building this.) If the job system switches
+   stacks itself: Recompiled code
    runs on the host stack while the guest stack lives in guest memory, so a guest stack switch
    must also switch host stacks. Identify the switch routines (M0), and replace each with an
    intrinsic: every guest fiber stack gets a host stack, and the switch is a host context
    switch plus the guest register swap.
-3. **C++ exceptions.** The game imports `__cxa_throw`/`_Unwind_Resume`. Throwing must unwind
+3. **C++ exceptions** (0 throws in a 2.5 min run; can start as "abort with a report").
+   The game imports `__cxa_throw`/`_Unwind_Resume`. Throwing must unwind
    guest frames (eh_frame is present for all of them) and resume at a landing pad, which is a
    label inside a recompiled function. Plan: functions with landing pads get a host-level catch
    point (`setjmp`-style) that the guest unwinder `longjmp`s to with the pad's label; the guest
    unwinder works on guest stack and context. First measure whether throws happen at all during
    play (a counter on `__cxa_throw` under Rosetta, now).
-4. **`setjmp`/`longjmp`** (imported): implement in the runtime, saving guest context plus a host
-   jump buffer.
+4. **`setjmp`/`longjmp`** (libc, ~1,700 `setjmp`/s in play): calls to libc `setjmp` are known
+   statically, so the emitter writes them as a real host `setjmp` inside the generated C function
+   (clang handles "returns twice" there) that also saves the guest registers into the guest
+   `jmp_buf`; `longjmp` restores the guest registers and `longjmp`s the host buffer. No guest
+   stack scanning is needed.
 5. **Coverage of indirect targets.** Any address reached indirectly but missing from the table
    goes to the **interpreter fallback** (an x86-64 interpreter in arm64 built on the same
    semantics library: slow but correct), which logs the address; the next recompile includes
@@ -175,7 +202,7 @@ split path working until the merged one is proven.
 
 | | Milestone | Exit criteria |
 |---|---|---|
-| M0 | **Survey** (started) | Numbers above; classify the 2,242 undecodable ranges; find the fiber switch routines; count `__cxa_throw` and `longjmp` calls at run time under Rosetta; survey `libc.prx`/`libSceFios2.prx`; list patch sites. |
+| M0 | **Survey** (mostly done) | Done: numbers above, undecodable ranges (switch tables), non-FDE code (static init), stack switches (none), exception/`setjmp`/`longjmp` counts. Left: survey `libc.prx`/`libSceFios2.prx`; list patch sites; confirm how job "fiber stacks" are entered. |
 | M1 | **Discovery + test vectors** | `bbrecomp` lists functions, blocks, switch tables, indirect-target table; coverage report vs. an execution trace of a play session. Instruction test-vector generator committed; vectors for every form in the eboot. |
 | M2 | **Integer core** | Semantics for all integer/control-flow forms; emitter produces compilable C for the whole eboot; vectors pass. Memory-ordering cost measured on a synthetic benchmark. |
 | M3 | **SIMD, x87, FP** | AVX/SSE via SIMDe, x87, MXCSR; vectors pass. |
@@ -203,8 +230,7 @@ title screen (M5) as the first real proof. The Rosetta build stays the shipping 
 
 ## Next steps
 
-1. Finish M0: classify undecodable ranges, find the fiber switches, count exceptions/longjmp
-   at run time (instrument the HLE `__cxa_throw`/`longjmp` on master's Rosetta build).
+1. Finish M0: libc/Fios2 survey, patch sites, how jobs reach their own stacks.
 2. Start the instruction test-vector generator (M1) while Rosetta is available.
 3. Prototype the whole pipeline on a handful of leaf functions (string/math helpers): lift,
    compile for arm64, call from a test harness with a context, compare with Rosetta results.

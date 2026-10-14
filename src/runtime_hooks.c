@@ -236,50 +236,147 @@ static void print_stats(void) {
     }
 }
 
+/* Points the function at h->offset to `common` (with r11 = h); h->original runs the moved
+ * prologue and continues in the function. */
+static int install(unsigned char *image, uint64_t image_size, Hook *h, const void *common, const char *what) {
+    if (h->offset + 14 > image_size || h->offset + h->prologue_size > image_size ||
+        memcmp(image + h->offset, h->prologue, h->prologue_size)) {
+        printf("%s: %s at 0x%" PRIx64 " does not match Bloodborne 1.09; not hooked\n", what, h->name, h->offset);
+        return 0;
+    }
+    /* Stub page (one per hook, executable): mov r11, hook; jmp common, then the moved
+     * prologue and a jump back. Absolute jumps: the page can be anywhere. */
+    unsigned char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (page == MAP_FAILED) {
+        printf("%s: no stub page for %s; not hooked\n", what, h->name);
+        return 0;
+    }
+    unsigned char *p = page;
+    unsigned char *entry = p;
+    *p++ = 0x49; *p++ = 0xbb; /* movabs r11, imm64 */
+    uint64_t hook_address = (uint64_t)(uintptr_t)h;
+    memcpy(p, &hook_address, 8);
+    p += 8;
+    p = put_jump(p, (uint64_t)(uintptr_t)common);
+    p = (unsigned char *)(((uintptr_t)p + 15) & ~(uintptr_t)15);
+    unsigned char *original = p;
+    memcpy(p, h->prologue, h->prologue_size);
+    p += h->prologue_size;
+    p = put_jump(p, (uint64_t)(uintptr_t)(image + h->offset + h->prologue_size));
+    if (mprotect(page, 4096, PROT_READ | PROT_EXEC)) {
+        printf("%s: stub page for %s not executable; not hooked\n", what, h->name);
+        munmap(page, 4096);
+        return 0;
+    }
+    h->original = original;
+    unsigned char *target = image + h->offset;
+    put_jump(target, (uint64_t)(uintptr_t)entry);
+    for (unsigned b = 14; b < h->prologue_size; ++b) target[b] = 0xcc; /* never reached */
+    printf("%s: %s (0x%" PRIx64 ") hooked\n", what, h->name, h->offset);
+    return 1;
+}
+
+/* BB_CALL_COUNTS=1: counts calls to libc functions that a static recompilation must treat
+ * specially (docs/STATIC_RECOMPILATION_PLAN.md, M0). Count only, then jump on: setjmp must
+ * see its caller's frame, so these hooks never wrap the call. */
+static uint64_t hook_image_base;
+static Hook counted[] = {
+    /* push rdi; mov rcx,rdi; mov rdi,1; mov rsi,0 */
+    {NULL, "setjmp", 0x570fcb0,
+     {0x57, 0x48, 0x89, 0xf9, 0x48, 0xc7, 0xc7, 0x01, 0x00, 0x00, 0x00, 0x48, 0xc7, 0xc6, 0x00, 0x00, 0x00, 0x00},
+     18, 0, 0, 0, 0},
+    /* push rdi; push rsi; mov rdx,rdi; mov rdi,3; lea rsi,[rdx+0x48] */
+    {NULL, "longjmp", 0x570fd00,
+     {0x57, 0x56, 0x48, 0x89, 0xfa, 0x48, 0xc7, 0xc7, 0x03, 0x00, 0x00, 0x00, 0x48, 0x8d, 0x72, 0x48},
+     16, 0, 0, 0, 0},
+    /* push rbp; mov rbp,rsp; mov qword [rdi-0x80],1; mov [rdi-0x78],rsi */
+    {NULL, "__cxa_throw", 0x5740510,
+     {0x55, 0x48, 0x89, 0xe5, 0x48, 0xc7, 0x47, 0x80, 0x01, 0x00, 0x00, 0x00, 0x48, 0x89, 0x77, 0x88},
+     16, 0, 0, 0, 0},
+    /* push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; and rsp,-0x40 */
+    {NULL, "_Unwind_Resume", 0x5733950,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xe4,
+      0xc0, 0xff, 0xff, 0xff},
+     20, 0, 0, 0, 0},
+};
+
+void bb_count_hit(Hook *hook, uint64_t caller);
+void bb_count_hit(Hook *hook, uint64_t caller) {
+    uint64_t n = atomic_fetch_add_explicit(&hook->calls, 1, memory_order_relaxed) + 1;
+    if ((n & (n - 1)) == 0)
+        fprintf(stderr, "Call counts: %s #%" PRIu64 " from image+0x%" PRIx64 "\n", hook->name, n,
+                caller - hook_image_base);
+}
+
+/* Entry: r11 = Hook*, the caller's frame untouched. Saves every argument register around
+ * bb_count_hit, then jumps (not calls) to the original. */
+__asm__(
+    ".text\n"
+    ".p2align 4\n"
+#ifdef __APPLE__
+    "_bb_count_common:\n"
+#else
+    "bb_count_common:\n"
+#endif
+    "    pushq %rax\n"
+    "    pushq %rdi\n"
+    "    pushq %rsi\n"
+    "    pushq %rdx\n"
+    "    pushq %rcx\n"
+    "    pushq %r8\n"
+    "    pushq %r9\n"
+    "    pushq %r10\n"
+    "    pushq %r11\n"             /* 9 pushes: rsp = 0 mod 16 */
+    "    subq $128, %rsp\n"
+    "    movdqu %xmm0, 0(%rsp)\n"
+    "    movdqu %xmm1, 16(%rsp)\n"
+    "    movdqu %xmm2, 32(%rsp)\n"
+    "    movdqu %xmm3, 48(%rsp)\n"
+    "    movdqu %xmm4, 64(%rsp)\n"
+    "    movdqu %xmm5, 80(%rsp)\n"
+    "    movdqu %xmm6, 96(%rsp)\n"
+    "    movdqu %xmm7, 112(%rsp)\n"
+    "    movq %r11, %rdi\n"
+    "    movq 200(%rsp), %rsi\n"   /* the guest's return address: 128 + 9 * 8 */
+#ifdef __APPLE__
+    "    callq _bb_count_hit\n"
+#else
+    "    callq bb_count_hit\n"
+#endif
+    "    movdqu 0(%rsp), %xmm0\n"
+    "    movdqu 16(%rsp), %xmm1\n"
+    "    movdqu 32(%rsp), %xmm2\n"
+    "    movdqu 48(%rsp), %xmm3\n"
+    "    movdqu 64(%rsp), %xmm4\n"
+    "    movdqu 80(%rsp), %xmm5\n"
+    "    movdqu 96(%rsp), %xmm6\n"
+    "    movdqu 112(%rsp), %xmm7\n"
+    "    addq $128, %rsp\n"
+    "    popq %r11\n"
+    "    popq %r10\n"
+    "    popq %r9\n"
+    "    popq %r8\n"
+    "    popq %rcx\n"
+    "    popq %rdx\n"
+    "    popq %rsi\n"
+    "    popq %rdi\n"
+    "    popq %rax\n"
+    "    jmpq *(%r11)\n");
+extern char bb_count_common[];
+
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
+    hook_image_base = (uint64_t)(uintptr_t)image;
+    const char *counts = getenv("BB_CALL_COUNTS");
+    if (counts && counts[0] == '1') {
+        for (size_t i = 0; i < sizeof(counted) / sizeof(counted[0]); ++i)
+            install(image, image_size, &counted[i], bb_count_common, "Call counts");
+    }
     const char *env = getenv("BB_CONTEXT_LOCK");
     if (env && env[0] == '0') {
         printf("Context lock: off (BB_CONTEXT_LOCK=0)\n");
         return;
     }
-    for (size_t i = 0; i < HOOK_COUNT; ++i) {
-        Hook *h = &hooks[i];
-        if (h->offset + 14 > image_size || h->offset + h->prologue_size > image_size ||
-            memcmp(image + h->offset, h->prologue, h->prologue_size)) {
-            printf("Context lock: %s at 0x%" PRIx64 " does not match Bloodborne 1.09; not hooked\n", h->name,
-                   h->offset);
-            continue;
-        }
-        /* Stub page (one per hook, executable): mov r11, hook; jmp common, then the moved
-         * prologue and a jump back. Absolute jumps: the page can be anywhere. */
-        unsigned char *page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (page == MAP_FAILED) {
-            printf("Context lock: no stub page for %s; not hooked\n", h->name);
-            continue;
-        }
-        unsigned char *p = page;
-        unsigned char *entry = p;
-        *p++ = 0x49; *p++ = 0xbb; /* movabs r11, imm64 */
-        uint64_t hook_address = (uint64_t)(uintptr_t)h;
-        memcpy(p, &hook_address, 8);
-        p += 8;
-        p = put_jump(p, (uint64_t)(uintptr_t)bb_hook_common);
-        p = (unsigned char *)(((uintptr_t)p + 15) & ~(uintptr_t)15);
-        unsigned char *original = p;
-        memcpy(p, h->prologue, h->prologue_size);
-        p += h->prologue_size;
-        p = put_jump(p, (uint64_t)(uintptr_t)(image + h->offset + h->prologue_size));
-        if (mprotect(page, 4096, PROT_READ | PROT_EXEC)) {
-            printf("Context lock: stub page for %s not executable; not hooked\n", h->name);
-            munmap(page, 4096);
-            continue;
-        }
-        h->original = original;
-        unsigned char *target = image + h->offset;
-        put_jump(target, (uint64_t)(uintptr_t)entry);
-        for (unsigned b = 14; b < h->prologue_size; ++b) target[b] = 0xcc; /* never reached */
-        printf("Context lock: %s (0x%" PRIx64 ") hooked\n", h->name, h->offset);
-    }
+    for (size_t i = 0; i < HOOK_COUNT; ++i) install(image, image_size, &hooks[i], bb_hook_common, "Context lock");
     atexit(print_stats);
 }
 
