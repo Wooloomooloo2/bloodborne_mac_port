@@ -19,7 +19,10 @@ original PS4 `eboot.bin` (x86-64 machine code) directly on the CPU.
 
 ## Decisions already made (don't re-litigate)
 
-1. **No recompiling the game.** There is no game source; static x86→ARM recompilation is out
+1. **No recompiling the game** (on master). *Branch `static-recompilation`:* reversed by the user
+   on 2026-10-14 because Rosetta becomes a limited subset from macOS 28 (autumn 2027); plan and
+   milestones in `docs/STATIC_RECOMPILATION_PLAN.md`. Master keeps the Rosetta path until that
+   branch reaches parity. There is no game source; static x86→ARM recompilation is out
    of scope. Everything (game code + our code) runs as **one x86-64 process under Rosetta 2**.
    Our code is recompiled for `x86_64-apple-macos`, deployment target **15.0** (Rosetta AVX2).
 2. **Graphics = staged hybrid:** (1) MoltenVK with the existing Vulkan renderer;
