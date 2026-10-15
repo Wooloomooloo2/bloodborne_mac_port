@@ -102,6 +102,17 @@ functions remain beyond switches; every other indirect target goes through the a
 Next: mark which of the 2.5% unreached FDE bytes are padding/tables vs. code only reachable
 through computed pointers, and record execution traces under Rosetta to check coverage.
 
+**First end-to-end proof (2026-10-15): game functions running natively on arm64.**
+`tools/bbrecomp/proto/run.sh` takes every game function made only of a small integer subset
+(moves, add/sub/logic/shift/imul, compares, cmov/setcc, branches, register push/pop, frame
+pointer moves; no memory beyond its own stack): **279 functions, 2,239 instructions** (largest
+58; e.g. a UTF-8 length routine). It writes each as a C function (registers as locals, flags
+computed explicitly), compiles them with clang **for arm64**, runs the original x86 bytes under
+Rosetta 2 on 64 random argument sets each, and compares: **279 of 279 functions, 17,856 of
+17,856 cases identical.** Small, but it exercises the whole chain: decoding, control flow,
+sub-register writes, flags, C emission, native compilation, differential testing.
+Next: memory operands (guest addresses = host addresses), then calls between lifted functions.
+
 ## Architecture
 
 ```
@@ -260,8 +271,8 @@ title screen (M5) as the first real proof. The Rosetta build stays the shipping 
 
 1. Finish M0: libc/Fios2 survey, patch sites, how jobs reach their own stacks.
 2. Start the instruction test-vector generator (M1) while Rosetta is available.
-3. Prototype the whole pipeline on a handful of leaf functions (string/math helpers): lift,
-   compile for arm64, call from a test harness with a context, compare with Rosetta results.
+3. ~~Prototype the whole pipeline on leaf functions~~ (done for pure integer functions: 279 of
+   279 match); extend it to memory operands and calls.
 
 Sources for the Rosetta timeline: Apple's developer documentation as reported by
 [MacTrast](https://www.mactrast.com/2025/06/apple-phasing-out-rosetta-2-with-release-of-macos-28-as-intel-support-sunsets/amp/),
