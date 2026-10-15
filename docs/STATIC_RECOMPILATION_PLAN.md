@@ -120,7 +120,15 @@ run cleanly on random pointer arguments (most others follow random pointers or w
 701 of those touch memory. **1,012 of 1,012 match, 16,192 of 16,192 cases (rax and memory).**
 Harness lessons: give both sides identical register state (a bool return leaves rax's upper bits
 as they were) and identical stack arguments.
-Next: calls between lifted functions (guest stack + host calls), SSE via SIMDe.
+**Step 3, calls (same night):** `lift3.c`/`check3.c`: registers in a context struct shared by all
+lifted functions; `call` pushes the guest return address on the guest stack (the same value the
+original pushes when it runs in place) and calls the callee's C function; `jmp` to another
+function's start is a tail call. A function qualifies when it and everything it calls fit the
+integer subset (fixpoint over the call graph). **42,101 game functions (26% of the 162,959)
+lift and compile for arm64** (48 MB of C, 17 s with clang -O1); 19,451 run cleanly on random
+inputs and **all 19,451 match the original: 311,216 of 311,216 cases**, rax and memory (33 of
+them call other lifted functions; most callers call functions that use SSE, not yet lifted).
+Next: SSE/AVX via SIMDe to lift the callers' callees; indirect calls through the address table.
 
 ## Architecture
 

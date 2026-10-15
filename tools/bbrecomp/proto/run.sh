@@ -20,3 +20,10 @@ clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/
 arch -x86_64 "$out/lift2" "$out/image.bin" "$out/funcs.txt" "$out/proto"
 clang -arch arm64 -O1 -w "$out/proto/lifted2.c" tools/bbrecomp/proto/check2.c -o "$out/proto/check2"
 arch -arm64 "$out/proto/check2" "$out/image.bin" "$out/proto/reference2.bin"
+# Step 3: calls between lifted functions (registers in a shared context, guest return addresses
+# on the guest stack, tail jumps); a function qualifies when everything it calls does.
+clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/lift3.c \
+    deps/x86_64/lib/libZydis.a deps/x86_64/lib/libZycore.a -o "$out/lift3"
+arch -x86_64 "$out/lift3" "$out/image.bin" "$out/funcs.txt" "$out/proto"
+clang -arch arm64 -O1 -w "$out/proto/lifted3.c" tools/bbrecomp/proto/check3.c -o "$out/proto/check3"
+arch -arm64 "$out/proto/check3" "$out/image.bin" "$out/proto/reference3.bin"
