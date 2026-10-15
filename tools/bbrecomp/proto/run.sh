@@ -13,3 +13,10 @@ clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/
 arch -x86_64 "$out/lift" "$out/image.bin" "$out/funcs.txt" "$out/proto"
 clang -arch arm64 -O2 -w "$out/proto/lifted.c" tools/bbrecomp/proto/check.c -o "$out/proto/check"
 arch -arm64 "$out/proto/check" "$out/proto/reference.bin"
+# Step 2: leaf functions with memory operands (game image and a data buffer at the same fixed
+# addresses on both sides; 6 register + 4 stack arguments; rax and the buffer compared).
+clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/lift2.c \
+    deps/x86_64/lib/libZydis.a deps/x86_64/lib/libZycore.a -o "$out/lift2"
+arch -x86_64 "$out/lift2" "$out/image.bin" "$out/funcs.txt" "$out/proto"
+clang -arch arm64 -O1 -w "$out/proto/lifted2.c" tools/bbrecomp/proto/check2.c -o "$out/proto/check2"
+arch -arm64 "$out/proto/check2" "$out/image.bin" "$out/proto/reference2.bin"

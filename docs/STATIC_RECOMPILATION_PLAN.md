@@ -111,7 +111,16 @@ computed explicitly), compiles them with clang **for arm64**, runs the original 
 Rosetta 2 on 64 random argument sets each, and compares: **279 of 279 functions, 17,856 of
 17,856 cases identical.** Small, but it exercises the whole chain: decoding, control flow,
 sub-register writes, flags, C emission, native compilation, differential testing.
-Next: memory operands (guest addresses = host addresses), then calls between lifted functions.
+**Step 2, memory (same night):** `lift2.c`/`check2.c` map the game image and a 64 KiB random
+buffer at the same fixed virtual addresses in the x86 tool and the arm64 checker (guest address =
+host address, as planned), run the originals in place, and compare rax and the whole buffer.
+Integer leaf functions with memory operands (rip-relative globals and constants included, rsp as
+an ordinary register into a local stack, 6 register + 4 stack arguments): 15,409 qualify, 1,012
+run cleanly on random pointer arguments (most others follow random pointers or write globals),
+701 of those touch memory. **1,012 of 1,012 match, 16,192 of 16,192 cases (rax and memory).**
+Harness lessons: give both sides identical register state (a bool return leaves rax's upper bits
+as they were) and identical stack arguments.
+Next: calls between lifted functions (guest stack + host calls), SSE via SIMDe.
 
 ## Architecture
 
