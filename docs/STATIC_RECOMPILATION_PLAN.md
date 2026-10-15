@@ -74,6 +74,21 @@ resolution, camera).
   exceptions can start as "abort with a report", but `setjmp`/`longjmp` must be fast and
   correct from day one.
 
+**M1 progress (2026-10-15): instruction test vectors.** `tools/bbrecomp/testgen/build.sh` finds
+**866 distinct instruction forms** (mnemonic, encoding, prefixes, operand kinds and sizes) among
+the 7.1M testable instructions of the game's functions (2.9M more are control flow, stack or
+system instructions, tested differently), re-encodes one of each with its memory operand moved to
+a scratch buffer and a random immediate, and runs 32 random cases per form under Rosetta 2:
+16 GPRs, RFLAGS, the FXSAVE image (x87, MXCSR, xmm), upper ymm halves and 256 bytes of memory,
+in and out. 27,712 cases in 3.4 s; spot checks against independent arithmetic match
+(`add`, `vaddps`). Only divides trap (#DE, by design in a quarter of their cases). The vectors
+(69 MB) stay in `out/` with the other derived files; `vecdump.py` reads them.
+Learned on the way: **Rosetta 2 keeps translations by address** — rewriting a code page and
+toggling its protection still ran the previous instruction (SIGILL on valid code); each case now
+gets a fresh address. Next for the generator: vary the registers per case (today each form uses
+its first occurrence's registers) and decode by recursive descent (linear decoding still meets
+data: privileged instructions are filtered out).
+
 ## Architecture
 
 ```
@@ -203,7 +218,7 @@ split path working until the merged one is proven.
 | | Milestone | Exit criteria |
 |---|---|---|
 | M0 | **Survey** (mostly done) | Done: numbers above, undecodable ranges (switch tables), non-FDE code (static init), stack switches (none), exception/`setjmp`/`longjmp` counts. Left: survey `libc.prx`/`libSceFios2.prx`; list patch sites; confirm how job "fiber stacks" are entered. |
-| M1 | **Discovery + test vectors** | `bbrecomp` lists functions, blocks, switch tables, indirect-target table; coverage report vs. an execution trace of a play session. Instruction test-vector generator committed; vectors for every form in the eboot. |
+| M1 | **Discovery + test vectors** (vectors started) | `bbrecomp` lists functions, blocks, switch tables, indirect-target table; coverage report vs. an execution trace of a play session. Instruction test-vector generator committed; vectors for every form in the eboot. |
 | M2 | **Integer core** | Semantics for all integer/control-flow forms; emitter produces compilable C for the whole eboot; vectors pass. Memory-ordering cost measured on a synthetic benchmark. |
 | M3 | **SIMD, x87, FP** | AVX/SSE via SIMDe, x87, MXCSR; vectors pass. |
 | M4 | **Runtime on arm64** | `src/` builds for arm64; context, import thunks, TLS, `setjmp`/`longjmp`, exceptions, fibers, fault handlers; interpreter fallback. Unit tests pass on arm64. |
