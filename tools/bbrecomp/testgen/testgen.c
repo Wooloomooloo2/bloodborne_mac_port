@@ -396,9 +396,50 @@ static int encode_case(const Form *f, uint8_t *out, int *base_index) {
         }
     }
     req.prefixes &= ~(ZydisInstructionAttributes)(ZYDIS_ATTRIB_HAS_SEGMENT_FS | ZYDIS_ATTRIB_HAS_SEGMENT_GS);
-    ZyanUSize len = ZYDIS_MAX_INSTRUCTION_LENGTH;
-    if (!ZYAN_SUCCESS(ZydisEncoderEncodeInstruction(&req, out, &len))) return 0;
-    return (int)len;
+    /* Three cases in four use other registers than the occurrence the form came from (REX
+     * registers, operands aliasing each other); fall back to the original ones if the encoder
+     * refuses a combination. Never rsp, never the memory base. */
+    const ZydisEncoderRequest original = req;
+    const int base_id = base == ZYDIS_REGISTER_NONE ? -1 : (int)(base - ZYDIS_REGISTER_RAX);
+    for (int attempt = 0; attempt < 9; ++attempt) {
+        req = original;
+        const int fixed = f->in.mnemonic == ZYDIS_MNEMONIC_DIV || f->in.mnemonic == ZYDIS_MNEMONIC_IDIV;
+        if (attempt < 8 && !fixed && rnd() % 4) { /* div/idiv: main() sets up their divisor register */
+            for (int i = 0; i < req.operand_count; ++i) {
+                ZydisEncoderOperand *o = &req.operands[i];
+                if (o->type != ZYDIS_OPERAND_TYPE_REGISTER || f->ops[i].encoding == ZYDIS_OPERAND_ENCODING_NONE)
+                    continue;
+                ZydisRegisterClass cls = ZydisRegisterGetClass(o->reg.value);
+                int id;
+                switch (cls) {
+                case ZYDIS_REGCLASS_GPR8: {
+                    static const ZydisRegister r8[] = {ZYDIS_REGISTER_AL, ZYDIS_REGISTER_CL, ZYDIS_REGISTER_DL,
+                        ZYDIS_REGISTER_BL, ZYDIS_REGISTER_SIL, ZYDIS_REGISTER_DIL, ZYDIS_REGISTER_BPL,
+                        ZYDIS_REGISTER_R8B, ZYDIS_REGISTER_R9B, ZYDIS_REGISTER_R10B, ZYDIS_REGISTER_R11B,
+                        ZYDIS_REGISTER_R12B, ZYDIS_REGISTER_R13B, ZYDIS_REGISTER_R14B, ZYDIS_REGISTER_R15B,
+                        ZYDIS_REGISTER_AH, ZYDIS_REGISTER_CH, ZYDIS_REGISTER_DH, ZYDIS_REGISTER_BH};
+                    ZydisRegister pick;
+                    do {
+                        pick = r8[rnd() % (sizeof(r8) / sizeof(r8[0]))];
+                    } while (ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, pick) == base);
+                    o->reg.value = pick;
+                    break;
+                }
+                case ZYDIS_REGCLASS_GPR16: case ZYDIS_REGCLASS_GPR32: case ZYDIS_REGCLASS_GPR64:
+                    do { id = (int)(rnd() % 16); } while (id == 4 || id == base_id);
+                    o->reg.value = ZydisRegisterEncode(cls, (ZyanU8)id);
+                    break;
+                case ZYDIS_REGCLASS_XMM: case ZYDIS_REGCLASS_YMM:
+                    o->reg.value = ZydisRegisterEncode(cls, (ZyanU8)(rnd() % 16));
+                    break;
+                default: break;
+                }
+            }
+        }
+        ZyanUSize len = ZYDIS_MAX_INSTRUCTION_LENGTH;
+        if (ZYAN_SUCCESS(ZydisEncoderEncodeInstruction(&req, out, &len))) return (int)len;
+    }
+    return 0;
 }
 
 static int is_string_op(const ZydisDecodedInstruction *in) {
