@@ -128,7 +128,17 @@ integer subset (fixpoint over the call graph). **42,101 game functions (26% of t
 lift and compile for arm64** (48 MB of C, 17 s with clang -O1); 19,451 run cleanly on random
 inputs and **all 19,451 match the original: 311,216 of 311,216 cases**, rax and memory (33 of
 them call other lifted functions; most callers call functions that use SSE, not yet lifted).
-Next: SSE/AVX via SIMDe to lift the callers' callees; indirect calls through the address table.
+**Step 4, AVX (same night):** `simd.inc` implements ~70 VEX instructions (moves, ps/ss arithmetic,
+min/max, logic, shuffles/unpacks/inserts/blends, dpps, hadd, compares, ucomiss, conversions,
+integer lanes, pshufb) lane by lane in C, with x86's rules where ARM differs: NaN operand
+priority, **the default NaN (x86 0xffc00000 vs ARM 0x7fc00000, the only mismatch the first run
+found)**, maxps/minps operand order, cvtt out-of-range = integer indefinite, ucomiss flags, dpps
+summation order; compiled with `-ffp-contract=off` (no FMA fusion). Written by hand rather than
+with SIMDe, to control those rules. **47,125 functions lift (29%), 4,793 of them with AVX;
+19,736 run on random inputs, all match: 315,776 of 315,776 cases (rax, xmm0, memory)**, 288 of
+them AVX functions (most AVX code takes struct pointers that random arguments cannot satisfy;
+the function-level traces of the plan will cover those). 73 MB of C, 43 s to compile at -O1.
+Next: indirect calls through an address table, x87, rcpps/rsqrtps tables, then traced inputs.
 
 ## Architecture
 

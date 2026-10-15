@@ -27,3 +27,10 @@ clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/
 arch -x86_64 "$out/lift3" "$out/image.bin" "$out/funcs.txt" "$out/proto"
 clang -arch arm64 -O1 -w "$out/proto/lifted3.c" tools/bbrecomp/proto/check3.c -o "$out/proto/check3"
 arch -arm64 "$out/proto/check3" "$out/image.bin" "$out/proto/reference3.bin"
+# Step 4: AVX (simd.inc): ~70 VEX instructions lane by lane with x86 rules; xmm0-7 arguments,
+# xmm0 compared too. Compile without FP contraction (an FMA would round differently).
+clang -arch x86_64 -O2 -Wall -Wextra -Ideps/x86_64/include tools/bbrecomp/proto/lift4.c \
+    deps/x86_64/lib/libZydis.a deps/x86_64/lib/libZycore.a -o "$out/lift4"
+arch -x86_64 "$out/lift4" "$out/image.bin" "$out/funcs.txt" "$out/proto"
+clang -arch arm64 -O1 -ffp-contract=off -w "$out/proto/lifted4.c" tools/bbrecomp/proto/check4.c -o "$out/proto/check4"
+arch -arm64 "$out/proto/check4" "$out/image.bin" "$out/proto/reference4.bin"
