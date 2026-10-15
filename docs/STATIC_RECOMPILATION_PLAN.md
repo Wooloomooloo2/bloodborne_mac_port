@@ -89,6 +89,19 @@ gets a fresh address. Next for the generator: vary the registers per case (today
 its first occurrence's registers) and decode by recursive descent (linear decoding still meets
 data: privileged instructions are filtered out).
 
+**M1 progress (2026-10-15): code discovery.** `tools/bbrecomp/discover/run.sh`: recursive descent
+from 162,959 FDE starts, the entry point, 2 module inits, 218 libc exports and 167,625 relocation
+values that land in code (function pointers, vtables, initializer arrays). Result: **1.90M basic
+blocks, 11.2M instructions, 97.5% of the FDE function bytes reached** plus 3.4 MB of code
+outside FDEs (static initializers); 2,982 switch tables recovered (lea + movsxd + add + jmp;
+361,728 entries: some generated functions hold 1,873-case switches). Indirect control flow:
+170k indirect calls; indirect jumps that are not switches are tail calls through a pointer
+(5,805 after an epilogue, 2,969 through a vtable `jmp [reg+disp]`, 119 `jmp [rip+slot]`, and
+~4,700 in frameless functions, same shape in every sample). So no computed jumps inside
+functions remain beyond switches; every other indirect target goes through the address table.
+Next: mark which of the 2.5% unreached FDE bytes are padding/tables vs. code only reachable
+through computed pointers, and record execution traces under Rosetta to check coverage.
+
 ## Architecture
 
 ```
