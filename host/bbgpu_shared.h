@@ -202,6 +202,12 @@ typedef struct {
     /* Game side, for the spike log: faults on GPU-tracked pages relayed to the host, and the
      * time the faulting game threads waited for them (steady clock ns). */
     BBGPU_ALIGNAS(BBGPU_CACHE_LINE) uint64_t game_faults, game_fault_ns;
+    /* Game side, at each flip submit: CPU time (ns) so far of the game's main thread and of the
+     * thread that submits flips, for the spike log ("busy or waiting"). */
+    uint64_t game_main_cpu_ns, game_flip_cpu_ns;
+    /* ... and over the last game frame: all guest threads' CPU time, the busiest thread's. */
+    uint64_t game_frame_cpu_ns, game_busiest_ns;
+    char game_busiest_name[32];
 } BbGpuShared;
 
 #define BBGPU_SUBMIT_RING_OFFSET (UINT64_C(64) << 10)

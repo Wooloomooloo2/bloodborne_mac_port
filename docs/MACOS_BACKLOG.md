@@ -118,6 +118,26 @@ Each item: what was done for now, what the refinement is, and where it lives.
   *2026-10-14, later:* game-side GPU page faults ruled out (spike lines now show them: ~1–3 per
   frame, ~0.1 ms). In the Hunter's Dream gameplay has 0–3 long game frames per 5 s; most
   "game" spikes in a run are title/loading screens at 30 FPS. Re-measure in Central Yharnam.
+  *2026-10-15: largely fixed.* Late game frames were the game waiting ~13 ms behind MoltenVK's
+  encoding inside the flip's `vkQueueSubmit` (all game threads use ~12 ms of CPU in a 30 ms
+  frame). Prefilled Metal command buffers (default unless MetalFX) cut late game frames ~6x
+  (4–5 per 5 s → 0.6–0.8). *Remaining:* MetalFX keeps encode-at-submit (its command buffer
+  queues behind a prefilled one); encode MetalFX into the frame's own Metal command buffer, or
+  order it with an event, to give MetalFX the same gain. Re-measure in Central Yharnam.
+  *Tried 2026-10-15:* encoding MetalFX right after the submit, before the next command buffer
+  begins: no change (~38 late frames per 5 s with prefill). The spikes alternate: one frame
+  spends ~22 ms in "frame prep" (the upscaler step on the GPU thread), the next is a late game
+  frame; the presenter's submit takes exactly one vsync (16.7 ms). *Profiled (sample of
+  bbgpu-host, MetalFX + prefill):* `bb:DrawRec` spends ~58% of its time in
+  `Presenter::PrepareFrame` → `GetRenderFrame` → `vkWaitForFences` (no free presenter frame),
+  because `bb:Present` sits in `CAMetalLayer nextDrawable`: with prefill, MoltenVK takes the
+  drawable when the swapchain image is first used in recording (`vkCmdClearColorImage` in
+  `Presenter::Present`), and both drawables are in flight. Three drawables: 10.9 late frames
+  per 5 s (vs 3.9–4.8 without prefill) and +16 ms latency, so no. *Next idea:* with MetalFX,
+  record the presenter's swapchain work in a command buffer that is not prefilled (MoltenVK
+  decides per command buffer? check `VkCommandBufferUsageFlags`/one-time-submit handling), or
+  make the presenter frame pool deeper than the drawable count. *Tried:* presenter command
+  buffers begun without ONE_TIME_SUBMIT: 46 late frames per 5 s, no help.
 - **Fixed 2026-10-14: full screen froze the window** (⌃⌘F / green button: the picture
   stopped, the window stayed off screen at its old size while the game kept running). The
   window's event loop ran forever inside one main-queue block, starving AppKit's own main-queue
@@ -300,6 +320,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
   game's copy shader, not uploads, so zero-copy mostly saves CPU work (write faults, staging
   copies), not GPU time. It also needs EOP fences signalled at GPU completion (they are
   signalled at record time today), or the GPU reads buffers the game is already reusing.
+- **1440p idle stalls located (2026-10-15, FINDINGS "1440p idle gaps, located").** ~2.9 ms of
+  the ~3.6 ms idle per frame are four stalls at fixed encoder positions: ~1 ms inside the
+  tessellated-draw run (MoltenVK tessellation emulation; `BB_DROP_TESS=1` removes it, +4.6 FPS
+  at 1440p), ~0.7 ms after a `vkCmdCopyImage`, ~0.6 ms at the frame→presenter command-buffer
+  boundary, ~0.75 ms between two compute encoders. Not memory allocation, not heaps. *Next:*
+  find the MoltenVK barrier/fence at those positions; for tessellation, consider emulating it
+  ourselves (vertex-stage expansion in our shader recompiler) instead of MoltenVK's path.
 - **Versioned copy-shader table.** ~24 copies per frame rewrite one table between draws inside a
   pass, ending it. *Refinement:* give each draw group its own version of the table (copies built
   ahead of the submission) so the pass stays open; bound ~1 ms GPU at 1440p.
@@ -318,4 +345,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   swallows ⌘, (its "Preferences…" item), wire that menu item to the overlay instead.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
-- **Launcher and `.app` bundle** (planned in `MACOS_PORT.md`).
+- **Launcher and `.app` bundle.** *Done 2026-10-14 night:* `scripts/macos/make_app.sh` builds a
+  local `Bloodborne.app` (launcher for this checkout, game icon from `sce_sys/icon0.png`, log in
+  `~/Library/Logs/Bloodborne`, error dialog; the window process runs as the bundle's executable
+  through a link so the Dock shows "Bloodborne"). *Remaining:* a self-contained, signed app
+  that carries the built binaries and does not need the repository or a Terminal build.

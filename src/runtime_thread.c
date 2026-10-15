@@ -131,9 +131,36 @@ void runtime_thread_attach_host(const char *name) {
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "host");
 }
 
+#ifdef __APPLE__
+/* Mach thread ports and names of the running guest threads (runtime_threadcpu.c). Ports are
+ * read under the registry lock: a thread marks itself finished under it before exiting. */
+int runtime_thread_ports(unsigned *ports, char (*names)[32], int max) {
+    int n=0;
+    host_lock(&lock);
+    for (GuestThread *t=threads;t && n<max;t=t->next) {
+        if (t->finished || t->host_owned) continue;
+        ports[n]=pthread_mach_thread_np(t->host);
+        memcpy(names[n],t->name,32);
+        ++n;
+    }
+    host_unlock(&lock);
+    return n;
+}
+#endif
+
+static pthread_t main_pthread;
+static int main_pthread_set;
+/* The game's main thread (runtime_threadcpu.c reads its CPU time for the spike log). */
+int runtime_main_pthread(pthread_t *out) {
+    if (main_pthread_set) *out=main_pthread;
+    return main_pthread_set;
+}
+
 void runtime_thread_attach_main(void) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"main");
+    main_pthread=pthread_self();
+    main_pthread_set=1;
     uint64_t tid=0;
     pthread_threadid_np(NULL,&tid);
     printf("Runtime: guest thread 'main' is host thread %llu, handle %p\n",(unsigned long long)tid,(void *)t);

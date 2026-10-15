@@ -339,14 +339,17 @@ struct FrameTrace {
     Vulkan::Presenter::PresentTiming present;
     // What the GPU process did between the previous flip and this one.
     double gpu_cpu_ms, rec_busy_ms, rec_idle_ms, ahead_ms, drain_ms, host_copies_ms,
-        compile_wait_ms, game_fault_ms;
+        compile_wait_ms, game_fault_ms, game_main_cpu_ms, game_flip_cpu_ms, game_cpu_ms,
+        game_busiest_ms;
+    char game_busiest[32];
     u64 preempted, draws, compiles, gpu_done, game_faults;
 };
 
 /// Counter deltas between flips. Counters the 5 s summary resets are re-based by Rebase().
 struct SpikeCounters {
     enum : u32 { GpuCpu, Preempted, Draws, RecBusy, RecIdle, Ahead, Drain, HostCopies,
-                 CompileWait, Compiles, GpuDone, GameFaults, GameFaultNs, Count };
+                 CompileWait, Compiles, GpuDone, GameFaults, GameFaultNs, GameMainCpu,
+                 GameFlipCpu, Count };
     u64 last[Count]{};
     static void Read(u64* v) {
         v[GpuCpu] = BbStats::gpu_user_us.load() + BbStats::gpu_sys_us.load();
@@ -363,6 +366,8 @@ struct SpikeCounters {
         BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr;
         v[GameFaults] = shared ? __atomic_load_n(&shared->game_faults, __ATOMIC_RELAXED) : 0;
         v[GameFaultNs] = shared ? __atomic_load_n(&shared->game_fault_ns, __ATOMIC_RELAXED) : 0;
+        v[GameMainCpu] = shared ? __atomic_load_n(&shared->game_main_cpu_ns, __ATOMIC_RELAXED) : 0;
+        v[GameFlipCpu] = shared ? __atomic_load_n(&shared->game_flip_cpu_ns, __ATOMIC_RELAXED) : 0;
     }
     void Fill(FrameTrace& t) {
         u64 now[Count];
@@ -385,6 +390,18 @@ struct SpikeCounters {
         t.gpu_done = d[GpuDone];
         t.game_faults = d[GameFaults];
         t.game_fault_ms = d[GameFaultNs] / 1e6;
+        t.game_main_cpu_ms = d[GameMainCpu] / 1e6;
+        t.game_flip_cpu_ms = d[GameFlipCpu] / 1e6;
+        // Per-frame values from the game's last flip submit (not counters).
+        BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr;
+        t.game_cpu_ms = shared ? __atomic_load_n(&shared->game_frame_cpu_ns, __ATOMIC_ACQUIRE) / 1e6 : 0;
+        t.game_busiest_ms = shared ? __atomic_load_n(&shared->game_busiest_ns, __ATOMIC_RELAXED) / 1e6 : 0;
+        if (shared) {
+            std::memcpy(t.game_busiest, shared->game_busiest_name, sizeof(t.game_busiest));
+            t.game_busiest[sizeof(t.game_busiest) - 1] = 0;
+        } else {
+            t.game_busiest[0] = 0;
+        }
     }
     /// After the summary exchanged its counters to zero.
     void Rebase() {
@@ -480,7 +497,8 @@ private:
                 "vkQueuePresent %.1f), presented->display %.1f | GPU thread on CPU %.1f ms, %llu "
                 "preempted, %llu draws; recording busy %.1f idle %.1f, frames-ahead wait %.1f, "
                 "recorder waits %.1f, host copies %.1f; %llu GPU frames done; %llu compiles "
-                "(%.1f ms waited) | game: %llu GPU page faults, %.1f ms waited\n",
+                "(%.1f ms waited) | game: %llu GPU page faults, %.1f ms waited; on CPU: main "
+                "thread %.1f ms, flip thread %.1f ms, all threads %.1f ms, busiest %s %.1f ms\n",
                 t.id, t.id - prev.id, prev.id, game, mark(late_game), flip, mark(late_flip),
                 present, mark(late_present), display, mark(late_display),
                 gap(t.arrival_ns, t.game_ns), gap(t.flip_packet_ns, t.arrival_ns),
@@ -494,7 +512,9 @@ private:
                 t.ahead_ms, t.drain_ms, t.host_copies_ms,
                 static_cast<unsigned long long>(t.gpu_done),
                 static_cast<unsigned long long>(t.compiles), t.compile_wait_ms,
-                static_cast<unsigned long long>(t.game_faults), t.game_fault_ms);
+                static_cast<unsigned long long>(t.game_faults), t.game_fault_ms,
+                t.game_main_cpu_ms, t.game_flip_cpu_ms, t.game_cpu_ms, t.game_busiest,
+                t.game_busiest_ms);
         }
         prev = t;
     }

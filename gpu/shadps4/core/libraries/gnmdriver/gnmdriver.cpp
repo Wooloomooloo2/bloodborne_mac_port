@@ -156,6 +156,8 @@ GnmCall gnm_calls[GnmCallRing];
 std::atomic<u64> gnm_call_seq{0};
 
 extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_t size);
+extern "C" uint64_t runtime_thread_cpu_ns(int which);
+extern "C" void runtime_game_cpu_since_last(uint64_t* total_ns, uint64_t* busiest_ns, char busiest_name[32]);
 
 u64 TraceThreadId() {
     thread_local const u64 id = [] {
@@ -615,6 +617,16 @@ static s32 RemoteSubmit(u32 count, const u32* dcb_gpu_addrs[], const u32* dcb_si
                 std::chrono::duration_cast<std::chrono::microseconds>(
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count());
+            if (BbGpuShared* shared = BbSplit::Shared()) {
+                __atomic_store_n(&shared->game_main_cpu_ns, runtime_thread_cpu_ns(0), __ATOMIC_RELAXED);
+                __atomic_store_n(&shared->game_flip_cpu_ns, runtime_thread_cpu_ns(1), __ATOMIC_RELAXED);
+                u64 total = 0, busiest = 0;
+                char name[32];
+                runtime_game_cpu_since_last(&total, &busiest, name);
+                std::memcpy(shared->game_busiest_name, name, sizeof(name));
+                __atomic_store_n(&shared->game_busiest_ns, busiest, __ATOMIC_RELAXED);
+                __atomic_store_n(&shared->game_frame_cpu_ns, total, __ATOMIC_RELEASE);
+            }
         }
         for (u32 i = 0; i < n; ++i) {
             record.dcb[i] = reinterpret_cast<u64>(dcb_gpu_addrs[done + i]);

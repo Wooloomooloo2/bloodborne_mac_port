@@ -93,6 +93,9 @@ void *runtime_low_alloc(size_t size);
 /* runtime_hooks.c: one lock around the engine paths that share the immediate GX context. */
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size);
 void runtime_context_lock_stats(void);
+/* runtime_thread.c (macOS): CPU time of the game's main thread (0) or the calling thread (1). */
+uint64_t runtime_thread_cpu_ns(int which);
+void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char busiest_name[32]);
 void *runtime_low_malloc(size_t size);
 void *runtime_low_calloc(size_t nmemb, size_t size);
 void *runtime_low_alloc_aligned(size_t size, size_t align);

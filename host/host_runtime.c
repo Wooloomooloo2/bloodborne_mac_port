@@ -215,6 +215,16 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     store_once((unsigned char *)address, data, size);
     return 1;
 }
+/* Game threads live in bb-probe: the spike log's CPU times come through the control block. */
+uint64_t runtime_thread_cpu_ns(int which) {
+    (void)which;
+    return 0;
+}
+void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char busiest_name[32]) {
+    *total_ns = *busiest_ns = 0;
+    busiest_name[0] = 0;
+}
+
 int runtime_memory_read_backing(uintptr_t address, void *out, uint64_t size) {
     if (!host_view_covered(address, address + size)) return 0;
     memcpy(out, (const void *)address, size);

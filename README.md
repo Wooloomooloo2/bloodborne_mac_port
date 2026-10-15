@@ -77,16 +77,20 @@ geometry corruption at 1440p (scenes above 1080p now use live resolution changes
   missing-geometry reports below.
 - **Shader compile mode `balanced`** is the default: new shaders compile in the background
   and a frame waits at most 6 ms for them, so new areas no longer freeze for 100+ ms.
+- **Less judder:** late game frames (the cause of judder at a steady 60) dropped about 6x with
+  the upscaler off or FSR: MoltenVK now encodes each frame's Metal commands while they are
+  recorded instead of all at once at the flip, which the game was waiting behind.
 - **Diagnostics:** `BB_FRAME_STATS=1` prints per-stage timings of every late frame ("Spike"
-  lines), and corrupted GPU command streams are reported with the game threads and code
-  involved.
+  lines, with each game thread's CPU time), and corrupted GPU command streams are reported
+  with the game threads and code involved.
 
 ### Known issues
 
 - **Missing geometry after a respawn or reload** (character's legs, a flight of stairs, a
   floor), reported on an M4 Max and an M2 Pro; a relaunch brings it back. It coincided with the
   load race below, now fixed, so it may be gone: reports welcome.
-- **Occasional judder at a steady 60 FPS** (some game frames take 20–45 ms).
+- **Occasional judder at a steady 60 FPS** (some game frames take 20–45 ms): much rarer since
+  2026-10-15 (about 6x fewer late frames), except with the MetalFX upscaler.
 
 ### What's next
 
@@ -95,7 +99,8 @@ geometry corruption at 1440p (scenes above 1080p now use live resolution changes
   resolution — about 3 ms per frame — and leaves the GPU idle in periodic gaps. Merging passes
   is the main lever for 1440p and 4K at 60.
 - Confirm the missing-geometry reports are gone; the frame-time judder.
-- A `.app` bundle (for now, `Bloodborne.command` launches from Finder; see below).
+- A signed, self-contained app that does not need the repository (today's `Bloodborne.app` is a
+  launcher for your checkout).
 
 Details:
 - Plan, design decisions and porting checklist: [docs/MACOS_PORT.md](docs/MACOS_PORT.md)
@@ -155,10 +160,26 @@ Launching rebuilds whatever changed, so after a `git pull` you can simply launch
 
 ## Launching
 
-### From Finder
+### As a Mac app (no Terminal window)
+
+Once, in Terminal from the repository folder:
+
+```sh
+bash scripts/macos/make_app.sh
+```
+
+This creates **`Bloodborne.app`** in the repository folder, with the game's own icon (taken from
+your game folder, so the app is made on your Mac and never uploaded). Double-click it, or drag
+it to the Dock. It uses the same settings as `Bloodborne.command` below (including the game
+folder question on first launch), runs without a Terminal window, and writes the game's log to
+`~/Library/Logs/Bloodborne/game.log` (the session before in `game.previous.log`). If the game
+stops with an error, a dialog offers to show the log. Run the script again if you move the
+repository folder.
+
+### From Finder with a Terminal window
 
 Double-click **`Bloodborne.command`** in the repository folder. It opens a Terminal window and
-starts the game.
+starts the game, with its log in that window.
 
 - **First launch:** it asks for your game folder (the `CUSA03173` folder containing
   `eboot.bin`) and remembers it in `launch.conf` next to it. If the game folder sits next to the
@@ -223,6 +244,7 @@ launcher.
 | `scripts/` | Eboot preparation, linking, patch compiler (`patches.py`); `scripts/macos/` dependency bootstrap |
 | `patches/` | Community XML patches for Bloodborne 1.09 |
 | `Bloodborne.command` | Finder launcher (runs `run.sh` in Terminal) |
+| `scripts/macos/make_app.sh` | Builds `Bloodborne.app`, a launcher without a Terminal window (local, not committed) |
 | `Saves` | Shortcut to the save folder (created on first launch, not committed) |
 | `launcher/` | GTK launcher from the Linux port (Linux reference path) |
 | `tools/` | Developer utilities, including `pkg_extract` (fpkg unpacker) |

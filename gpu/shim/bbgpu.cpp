@@ -232,6 +232,20 @@ static void OpenWindow(const BbGpuConfig* config);
 
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
+#ifdef __APPLE__
+    // MoltenVK encodes Metal commands while our recorder thread records them, instead of all at
+    // once inside the flip's vkQueueSubmit (~13 ms per frame on the M4 Max): the flip and the
+    // game's fences no longer wait behind it, and late game frames (judder) drop ~6x (FINDINGS
+    // "Judder: the flip submit"). Not with MetalFX: its own Metal command buffer then queues
+    // behind the next frame's prefilled one (late frames went up 7x). Decided at start (before
+    // MoltenVK reads its configuration); the environment overrides (0 = encode at submit).
+    if (BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx) {
+        setenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS", "2", 0);
+    }
+    if (const char* prefill = std::getenv("MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS")) {
+        std::printf("MoltenVK: prefilled command buffers %s\n", prefill);
+    }
+#endif
 #ifdef BB_PGO_GENERATE
     StartProfileWriter();
 #endif
