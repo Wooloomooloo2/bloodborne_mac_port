@@ -9,6 +9,9 @@
 #include <bit>
 #include <cstdlib>
 #include <magic_enum/magic_enum.hpp>
+#ifdef __APPLE__
+#include <sys/sysctl.h>
+#endif
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "common/alignment.h"
@@ -100,10 +103,25 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     const u64 first_page = MacArenaBase >> ARENA_PAGE_BITS;
     // BB_ARENA_GIB (multiple of 4): smaller arenas for tools that snapshot every buffer (Metal
     // frame capture fails on the full size).
+    // Without it, the Mac's memory caps the arena at a quarter of it (at least 8 GiB; 16 GB
+    // Macs are held to 8 GiB by maxBufferLength below anyway): the arena's memory is wired for
+    // the GPU again and again, and with 16 GiB on a 36 GB Mac (M5 Max, macOS 27) that wiring
+    // never settled. Metal System Trace: 254 GiB wired in 8 s, 224 GiB of it the 4 GiB arena
+    // pages; GPU work started ~1.2 s after submission, 7 FPS. 12 GiB: 60 FPS with ~110 ms
+    // stalls four times a second; 8 GiB: 60 FPS, the same scene.
     const u64 wanted_pages = [] {
         const char* env = std::getenv("BB_ARENA_GIB");
         const u64 gib = env ? std::strtoull(env, nullptr, 10) : 0;
-        return gib >= 4 ? std::min<u64>(gib / 4, 6) : MacArenaPages;
+        if (gib >= 4) {
+            return std::min<u64>(gib / 4, 6);
+        }
+        u64 pages = MacArenaPages;
+        u64 memsize = 0;
+        size_t size = sizeof memsize;
+        if (sysctlbyname("hw.memsize", &memsize, &size, nullptr, 0) == 0 && memsize) {
+            pages = std::min(pages, std::max<u64>(2, (memsize / 4) >> ARENA_PAGE_BITS));
+        }
+        return pages;
     }();
     // One Metal buffer is limited to maxBufferLength, about 60% of the Mac's memory (28 GiB with
     // 48 GB; ~9 GiB with 16 GB): the full 16 GiB failed to allocate on Macs with less than
