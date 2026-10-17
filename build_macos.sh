@@ -72,7 +72,9 @@ ARM64_PREFIX=$ROOT/deps/arm64
 if [[ -f $ARM64_PREFIX/lib/pkgconfig/sdl3.pc ]]; then
     bash scripts/macos/build_gpu_arm64.sh
     /usr/bin/clang -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c11 -O2 -g -Wall -Wextra -Werror \
-        -I. host/main.c host/host_runtime.c -Lout/gpu-arm64 -lbbgpu -Wl,-rpath,"$ROOT/out/gpu-arm64" \
+        -I. host/main.c host/host_runtime.c host/guest_reservation.s \
+        -Wl,-segaddr,__GUESTRSV,0x7000000000 -Wl,-segprot,__GUESTRSV,---,--- \
+        -Lout/gpu-arm64 -lbbgpu -Wl,-rpath,"$ROOT/out/gpu-arm64" \
         -Wl,-rpath,"$ARM64_PREFIX/lib" -framework CoreFoundation -o out/bbgpu-host
     echo "Built $PWD/out/bbgpu-host (arm64, renderer: out/gpu-arm64/libbbgpu.dylib)"
 else

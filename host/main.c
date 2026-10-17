@@ -33,6 +33,7 @@
 #include <limits.h>
 #include <mach-o/dyld.h>
 #include <libproc.h>
+#include <mach-o/loader.h>
 
 void say(const char *format, ...) {
     char line[512];
@@ -335,6 +336,48 @@ static void report_guest_range(void) {
     }
 }
 
+/* The guest range, mapped PROT_NONE at its exact addresses. The __GUESTRSV segment
+ * (host/guest_reservation.s) holds it from exec, slid by the image's ASLR slide; from macOS 27
+ * on, libmalloc would otherwise have put regions there before main. The range is taken over
+ * only if nothing but that segment is in it, so no foreign mapping is overwritten. */
+static int reserve_guest_range(void) {
+    const uint64_t span = BBGPU_GUEST_MAX - BBGPU_GUEST_MIN;
+    const struct mach_header_64 *image = (const struct mach_header_64 *)_dyld_get_image_header(0);
+    const struct segment_command_64 *seg = NULL;
+    const struct load_command *cmd = (const struct load_command *)(image + 1);
+    for (uint32_t i = 0; i < image->ncmds; ++i, cmd = (const struct load_command *)((const char *)cmd + cmd->cmdsize))
+        if (cmd->cmd == LC_SEGMENT_64 && !strncmp(((const struct segment_command_64 *)cmd)->segname, "__GUESTRSV", 16))
+            seg = (const struct segment_command_64 *)cmd;
+    if (!seg) { /* built without the segment: the reservation from main() alone */
+        void *reserved = mmap((void *)BBGPU_GUEST_MIN, span, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+        if (reserved == (void *)BBGPU_GUEST_MIN) return 0;
+        say("cannot reserve the guest range 0x%" PRIx64 "-0x%" PRIx64 " (got %p)", BBGPU_GUEST_MIN, BBGPU_GUEST_MAX, reserved);
+        if (reserved != MAP_FAILED) munmap(reserved, span);
+        return ENOMEM;
+    }
+    const uint64_t own_lo = seg->vmaddr + (uint64_t)_dyld_get_image_vmaddr_slide(0), own_hi = own_lo + seg->vmsize;
+    for (mach_vm_address_t at = BBGPU_GUEST_MIN; at < BBGPU_GUEST_MAX;) {
+        mach_vm_size_t size = 0;
+        vm_region_basic_info_data_64_t info;
+        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+        mach_port_t object = MACH_PORT_NULL;
+        if (mach_vm_region(mach_task_self(), &at, &size, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info, &count,
+                           &object) != KERN_SUCCESS || at >= BBGPU_GUEST_MAX)
+            break;
+        if (at < own_lo || at + size > own_hi || info.protection != VM_PROT_NONE) {
+            say("cannot reserve the guest range 0x%" PRIx64 "-0x%" PRIx64 ": 0x%llx-0x%llx is in use",
+                BBGPU_GUEST_MIN, BBGPU_GUEST_MAX, (unsigned long long)at, (unsigned long long)(at + size));
+            return ENOMEM;
+        }
+        at += size;
+    }
+    void *reserved =
+        mmap((void *)BBGPU_GUEST_MIN, span, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_FIXED, -1, 0);
+    if (reserved == (void *)BBGPU_GUEST_MIN) return 0;
+    say("cannot reserve the guest range 0x%" PRIx64 "-0x%" PRIx64 ": %s", BBGPU_GUEST_MIN, BBGPU_GUEST_MAX, strerror(errno));
+    return ENOMEM;
+}
+
 int main(void) {
     find_vulkan_driver();
     /* A signal ends the host as a signal, not as SDL's polite quit event (exit status 0). */
@@ -342,19 +385,12 @@ int main(void) {
     say("pid %d, %s, page %d bytes", (int)getpid(), translated() ? "TRANSLATED (Rosetta)" : "native arm64", getpagesize());
     /* The guest range first, before anything (Metal, the window server) maps memory there. The
      * kernel hole below 0x7000000000 is the same in arm64 processes. */
-    int status = 0;
-    const uint64_t span = BBGPU_GUEST_MAX - BBGPU_GUEST_MIN;
     /* BBGPU_TEST_BLOCK_RANGE=1 (testing) occupies the start of the range, as seen on an M2 Max. */
     const char *block = getenv("BBGPU_TEST_BLOCK_RANGE");
     if (block && !strcmp(block, "1"))
         mmap((void *)BBGPU_GUEST_MIN, 1 << 20, PROT_READ, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0);
-    void *reserved = mmap((void *)BBGPU_GUEST_MIN, span, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
-    if (reserved != (void *)BBGPU_GUEST_MIN) {
-        say("cannot reserve the guest range 0x%" PRIx64 "-0x%" PRIx64 " (got %p)", BBGPU_GUEST_MIN, BBGPU_GUEST_MAX, reserved);
-        if (reserved != MAP_FAILED) munmap(reserved, span);
-        report_guest_range();
-        status = ENOMEM;
-    }
+    int status = reserve_guest_range();
+    if (status) report_guest_range();
     mach_port_t parent = MACH_PORT_NULL;
     if (handshake(&parent)) return 1;
     mach_port_deallocate(mach_task_self(), parent); /* the handshake port; control goes through ctl_port */
