@@ -405,6 +405,30 @@ Each item: what was done for now, what the refinement is, and where it lives.
   open which thread it was; the log has no thread name for the other side (worth adding to
   `ReportChunkRace`: the other thread's name, captured with its caller). Workaround for long
   co-op sessions: `BB_DRAW_PIPE=0` (no stage B, so no chunk race; ~18% slower draw recording).
+  *2026-10-17, later (code review of every thread that can record):* **found and fixed.** The
+  other thread was the GPU command thread itself, through `Liverpool::ProcessCommands`: it
+  drained stage B only `if (num_commands)` *before* the `while (num_commands)` loop, so a
+  command queued between those two reads ran without a drain. The queue is fed by the fault
+  relay thread (`bbgpu_host_fault` → `ReadMemory(assume_locks=false)` → `SendCommand<true>`)
+  and by non-EOP flips; `ProcessCommands` runs before every PM4 packet, the game faults ~1000
+  times a second, so the two-instruction window is hit in a long session. The relayed read
+  fault's download (`ReadMemory` → `DownloadMemory` → `Runtime::CopyBuffer` → `Record`,
+  the reported caller) then raced stage B's draw. The same hole explains the 2026-10-14
+  crash: that download's `scheduler.Finish()` kicks the recorder (`SyncRecording` →
+  `KickRecording`, `record_chunk` momentarily null) while stage B kicked from `RunWriteData`.
+  Fix: `ProcessCommands` drains after a command was taken, before it runs (the fast path, no
+  command, is unchanged: one atomic load); `Rasterizer::WaitDeferredSignals` drains too (its
+  kick touches the chunk; every caller drained already). Every other recording thread was
+  checked: stage B's own faults run inline (it owns the chunk), the fault relay, the host ring
+  thread (`UnmapMemory`, `InvalidateMemory`), the copy threads, the recorder, the priority-ops
+  thread, the present/swap threads, the draw-preparation workers and the pipeline builders
+  never record or go through `SendCommand`; the EOP flip's `PrepareFrame` runs on the
+  signalling thread (B via `RunInOrder`, else A drained); the opt-in texture bind helper binds
+  without refreshing images. `ReportChunkRace` now names both threads and, on macOS, prints
+  the other thread's stack at report time (the thread is suspended, its frame chain walked),
+  so a future report needs no guessing. Tests pass; an offline run with `BB_GPU_LOG=debug`
+  showed no report. The co-op reproduction (long session, phantoms) is the user's to confirm;
+  `BB_DRAW_PIPE=0` stays a fallback until then.
   *Same day, test runs:* the load-time corrupted command buffer (cloth-thread entry above) also
   killed the host twice in ~14 test loads: `SignalFence: Unreachable code!` (pm4_cmds.h:492)
   after "Gnm check: bad packet", and a SIGSEGV in `Shader::StageSpecialization` building a
