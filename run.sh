@@ -151,8 +151,10 @@ fi
 # Online play (BB_ONLINE=1, or online=1 in bbport.ini; the online module gpu/bbnet): the game's
 # own server goes to the community server, summon signs to the shadNet WebAPI (scripts/online.py).
 # The shadNet account comes from BB_SHADNET_NPID / BB_SHADNET_PASSWORD (or bbport.ini).
+# On The Hunter's Dream pool (BB_NET_BACKEND=thd; online_pool=huntersdream) bells and summons go
+# through its session service instead, with the Discord-linked account (BB_THD_ONLINE_ID /
+# BB_THD_TOKEN from `scripts/online.py signin`, or thd_online_id= / thd_token= in bbport.ini).
 if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
-    export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-srv.shadps4.net:31313}
     # HTTPS needs CA certificates: the module's OpenSSL looks only in its own prefix (macOS:
     # deps/x86_64/ssl, a link to the system bundle), so the system's bundle is named here too.
     if [[ ! -r ${SSL_CERT_FILE:-} ]]; then
@@ -160,11 +162,26 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
             [[ -n $bundle && -r $bundle ]] && { export SSL_CERT_FILE=$bundle; break; }
         done
     fi
-    [[ -n ${BB_SHADNET_WEBAPI:-} ]] || export BB_SHADNET_WEBAPI=http://${BB_SHADNET_SERVER%:*}:31315
-    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
-    export SHADPS4_HTTP_HOST_OVERRIDES_JSON
-    if [[ -z ${BB_SHADNET_NPID:-} ]]; then
-        echo 'Online: no shadNet account (BB_SHADNET_NPID / BB_SHADNET_PASSWORD, or shadnet_npid= / shadnet_password= in bbport.ini): the game cannot sign in' >&2
+    if [[ ${BB_NET_BACKEND:-} == thd ]]; then
+        community=$("$PYTHON" -c 'import sys; sys.path.insert(0, "scripts"); import online; print(online.community_address(sys.argv[1]))' "${BB_COMMUNITY_SERVER:-}")
+        SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py thd-overrides --user "${BB_USER_DIR:-$data/user}") || true
+        export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+        export BB_THD_SERVER=${BB_THD_SERVER:-$community:18671} BB_THD_AUTH=${BB_THD_AUTH:-$community}
+        export BB_THD_RULESET=${BB_THD_RULESET:-vanilla} BB_P2P_PORT=${BB_P2P_PORT:-3658}
+        unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
+        if [[ -z ${BB_THD_TOKEN:-} || -z ${BB_THD_ONLINE_ID:-} ]]; then
+            echo "Online: not signed in to The Hunter's Dream (run: python3 scripts/online.py signin --ini \"$data/bbport.ini\"): the game cannot sign in" >&2
+        else
+            echo "Co-op: The Hunter's Dream as $BB_THD_ONLINE_ID ($community)"
+        fi
+    else
+        export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-srv.shadps4.net:31313}
+        [[ -n ${BB_SHADNET_WEBAPI:-} ]] || export BB_SHADNET_WEBAPI=http://${BB_SHADNET_SERVER%:*}:31315
+        SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
+        export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+        if [[ -z ${BB_SHADNET_NPID:-} ]]; then
+            echo 'Online: no shadNet account (BB_SHADNET_NPID / BB_SHADNET_PASSWORD, or shadnet_npid= / shadnet_password= in bbport.ini): the game cannot sign in' >&2
+        fi
     fi
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")

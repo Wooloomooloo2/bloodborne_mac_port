@@ -13,10 +13,15 @@
 #   upnp=0                   no UPnP port mapping (BB_UPNP=0; on by default)
 #   p2p_port=3658            the UDP port for co-op traffic (BB_P2P_PORT; 3658, the PS4's, by
 #                            default; 0 = any free port; a busy port falls back to a free one)
+#   online_pool=huntersdream bells and summons through The Hunter's Dream (BB_NET_BACKEND=thd)
+#                            instead of a shadNet server (online_pool=shadnet, the default) ...
+#   thd_online_id=name       ... with the Discord-linked account (BB_THD_ONLINE_ID) ...
+#   thd_token=secret         ... and its token (BB_THD_TOKEN; `scripts/online.py signin` writes both)
 #   metal_hud=1              Apple's Metal Performance HUD (MTL_HUD_ENABLED=1)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
     local line cap='' full='' hud='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
+    local pool='' thd_id='' thd_token=''
     [[ -f $1 ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
@@ -31,6 +36,9 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^community_server=(.+)$ ]]; then community=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^upnp=([01])$ ]]; then upnp=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^p2p_port=([0-9]{1,5})$ ]]; then p2p=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^online_pool=(shadnet|huntersdream)$ ]]; then pool=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^thd_online_id=(.+)$ ]]; then thd_id=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
     done < "$1"
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
     if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
@@ -43,5 +51,8 @@ bb_launch_settings() { # ini file
     if [[ -n $community && -z ${BB_COMMUNITY_SERVER:-} ]]; then export BB_COMMUNITY_SERVER=$community; fi
     if [[ -n $upnp && -z ${BB_UPNP:-} ]]; then export BB_UPNP=$upnp; fi
     if [[ -n $p2p && -z ${BB_P2P_PORT:-} ]]; then export BB_P2P_PORT=$p2p; fi
+    if [[ $pool == huntersdream && -z ${BB_NET_BACKEND:-} ]]; then export BB_NET_BACKEND=thd; fi
+    if [[ -n $thd_id && -z ${BB_THD_ONLINE_ID:-} ]]; then export BB_THD_ONLINE_ID=$thd_id; fi
+    if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi
     return 0
 }

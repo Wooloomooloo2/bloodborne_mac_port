@@ -62,6 +62,7 @@
 #include "core/libraries/np/np_utility/np_utility.h"
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "core/libraries/np/np_web_api2/np_web_api2.h"
+#include "thd/thd.h"
 
 #include "bbnet.h"
 
@@ -69,6 +70,24 @@ namespace {
 /// The runtime's side (bbnet_init).
 BbNetHost g_host{};
 } // namespace
+
+// The Hunter's Dream backend (thd/) was written against the Windows port, where the runtime is
+// linked in: its two runtime calls come through the host here.
+extern "C" int32_t runtime_thread_spawn(void** out, void* PS4_SYSV_ABI (*entry)(void*),
+                                        void* argument, uint64_t stack, const char* name) {
+    return g_host.thread_spawn(out, entry, argument, stack, name);
+}
+namespace BbEngine {
+// The backend reads game structures (the host's position for the summon): only from mapped
+// guest memory.
+bool host_read_safe(const void* p, void* out, std::size_t n) {
+    if (!g_host.memory_is_mapped || !g_host.memory_is_mapped(reinterpret_cast<uintptr_t>(p), n)) {
+        return false;
+    }
+    std::memcpy(out, p, n);
+    return true;
+}
+} // namespace BbEngine
 
 // ---- Kernel ---------------------------------------------------------------------------------
 
@@ -484,6 +503,18 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     Configure(host->app0, host->serial, host->title, host->app_ver);
     Core::Loader::SymbolsResolver resolver;
     Core::Loader::SymbolsResolver* sym = &resolver;
+    if (BbThd::Enabled()) {
+        // The Hunter's Dream (BB_NET_BACKEND=thd): its NP and sceNet imports, registered first;
+        // the game's HTTP stays shadPS4's, with the account's headers added (http.cpp).
+        BbThd::Register(sym);
+        Libraries::Http::RegisterLib(sym);
+        Libraries::Http2::RegisterLib(sym);
+        Libraries::Ssl::RegisterLib(sym);
+        Libraries::Ssl2::RegisterLib(sym);
+        std::printf("Online: The Hunter's Dream backend, %zu network and PSN functions\n",
+                    g_symbols.size());
+        return 0;
+    }
     // shadPS4's libkernel does this before any socket exists: net ids come from the module's
     // own handle table, and the P2P transport learns its UDP port, UPnP and public address.
     Libraries::Net::InstallKernelIntegration();
@@ -507,4 +538,15 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     Libraries::Np::NpWebApi2::RegisterLib(sym);
     std::printf("Online: %zu network and PSN functions\n", g_symbols.size());
     return 0;
+}
+
+extern "C" __attribute__((visibility("default"))) void bbnet_set_image(unsigned char* image,
+                                                                        uint64_t size) {
+    BbThd::SetImage(image, size);
+}
+
+extern "C" __attribute__((visibility("default"))) void bbnet_start(void) {
+    if (BbThd::Enabled()) {
+        BbThd::Initialize();
+    }
 }

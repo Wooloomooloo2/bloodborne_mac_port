@@ -47,6 +47,9 @@ int runtime_net_symbol(const char *symbol) {
     return match;
 }
 
+static BbNetSetImageFn module_set_image;
+static BbNetStartFn module_start;
+
 /* The module: BB_NET_MODULE, else gpu/libbbnet.* beside bb-probe (where the GPU library is). */
 static BbNetResolveFn module_resolve(void) {
     static int tried;
@@ -91,7 +94,21 @@ static BbNetResolveFn module_resolve(void) {
     }
     printf("Online: module %s\n",path);
     resolve=found;
+    module_set_image=(BbNetSetImageFn)dlsym(module,"bbnet_set_image");
+    module_start=(BbNetStartFn)dlsym(module,"bbnet_start");
     return resolve;
+}
+
+/* The loaded image before the patches (probe.c): loads the module now, so it can read it. */
+void runtime_net_set_image(unsigned char *image, uint64_t size) {
+    if (!runtime_net_enabled() || !module_resolve() || !module_set_image) return;
+    module_set_image(image,size);
+}
+
+/* The game is about to start (probe.c): the module's online session may begin. */
+void runtime_net_start(void) {
+    if (!runtime_net_enabled() || !module_resolve() || !module_start) return;
+    module_start();
 }
 
 uintptr_t runtime_net_resolve(const char *name) {

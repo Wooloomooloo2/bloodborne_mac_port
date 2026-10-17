@@ -208,7 +208,22 @@ told. Fix (`bbport` marks in `signaling_handler.cpp` HandleStunEcho, `net_upnp.{
 MapExternalPortAsync): when the STUN echo's port differs from the bound port, the module also
 forwards that router port to the bound port by UPnP. Log: `the router maps our UDP port 3658 to
 N: asking it to forward port N too` then `UPNP: mapped router UDP port N to our port 3658`
-(or a `failed to map` warning if the router refuses a port its NAT table already uses).
+(or a `failed to map` warning if the router refuses a port its NAT table already uses). The
+router accepted it, but the friend's router randomizes too, so nothing arrived either way.
+
+**2026-10-17, The Hunter's Dream pool (what works for the user on Windows, same router):**
+`gpu/bbnet/thd` is Supermedo's backend for it (droogie/bbhost's protocol: session service over
+HTTPS at thehuntersdream.com:18671, STUN + relay through its STUN port, hole punching, bbhost's
+P2P framing), copied unchanged (CRLF) and selected by `BB_NET_BACKEND=thd`
+(`online_pool=huntersdream`). Glue: `runtime_thread_spawn` and `BbEngine::host_read_safe`
+defined in bbnet_glue.cpp on the host callbacks; `bbnet_set_image` (probe.c, before the patches:
+the backend checks the 1.09 code and reads FrpgNetMan for the host's position) and `bbnet_start`
+(probe.c, right before entering the game: `BbThd::Initialize`); with thd only Http/Http2/Ssl/Ssl2
+are registered beside `BbThd::Register`. http.cpp carries the Windows port's two hooks
+(`bbthd_enabled`, `bbthd_add_game_headers`, `*.host` override keys). Account: `scripts/online.py
+signin` (Discord device code, from the Windows launcher) → bbport.ini `thd_online_id` /
+`thd_token`; run.sh's thd branch writes the overrides (`*.scej-network.jp` → the game server,
+play logs → :18671) and sets `BB_THD_SERVER` / `BB_THD_AUTH` / `BB_THD_RULESET`.
 
 ## Gotchas learned
 

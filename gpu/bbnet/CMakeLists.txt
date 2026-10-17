@@ -34,7 +34,11 @@ file(GLOB_RECURSE BBNET_SOURCES CONFIGURE_DEPENDS shadps4/core/libraries/net/*.c
 list(FILTER BBNET_SOURCES EXCLUDE REGEX
     "np_trophy|trophy_ui|np_sns_facebook_dialog|np_profile_dialog/|np_commerce/")
 
-add_library(bbnet SHARED ${BBNET_SOURCES} "${SHADNET_PROTO_OUT}/shadnet.pb.cc" bbnet_glue.cpp)
+# The Hunter's Dream backend (thd/, from droogie's bbhost through the Windows port, GPL-3.0):
+# BB_NET_BACKEND=thd puts its NP and sceNet code in front of shadPS4's.
+file(GLOB BBNET_THD_SOURCES CONFIGURE_DEPENDS thd/*.cpp)
+add_library(bbnet SHARED ${BBNET_SOURCES} ${BBNET_THD_SOURCES} "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
+    bbnet_glue.cpp)
 # The module's own headers first, then the port's shim and shadPS4 (common/, logging).
 target_include_directories(bbnet PRIVATE include shadps4 shadps4/shadnet "${SHADNET_PROTO_OUT}"
     ${CMAKE_CURRENT_SOURCE_DIR} ../shim ../shadps4 ../third_party/imgui ../third_party/httplib)

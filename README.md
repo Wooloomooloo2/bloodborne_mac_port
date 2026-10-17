@@ -360,7 +360,7 @@ or with the same settings as environment variables in `launch.conf` (`BB_ONLINE=
 `BB_SHADNET_NPID`, `BB_SHADNET_PASSWORD`). Optional: `shadnet_server=host:port`,
 `shadnet_webapi=http://host:31315`, `community_server=https://...`, `upnp=0` (no UPnP port
 mapping), `p2p_port=3658` (the UDP port co-op traffic uses; the PS4's 3658 by default, `0` for
-any free port). An account is needed to sign in: without one the module loads but no shadNet user
+any free port), `online_pool=huntersdream` (see below). An account is needed to sign in: without one the module loads but no shadNet user
 connects, and the game stays offline. `run.sh` writes `user/host_overrides.json` for each launch (the game's server
 `ss4.scej-network.jp` → the community server; summon signs → the shadNet WebAPI when it has the
 Bloodborne summon service), and the log starts with `Online: module ...` when the module is in
@@ -373,11 +373,25 @@ network libraries come from (`shadPS4 v0.20.0`); `BB_SHADNET_CLIENT_VERSION` ove
 refused first sign-in is retried in the background; the title screen's *Play Online* works once
 the log shows `Logged in npid=...`.
 
-Co-op (bells, summons) needs UDP to reach the other player: the module asks the router to
-forward its port through UPnP (`upnp=0` turns that off; forward `p2p_port` by hand then).
-Co-op with mainline shadPS4 0.20 and Windows-port players is expected to work and has not been
-tested yet from this port; `BB_GPU_LOG=debug` logs the signaling exchange (`NpSignaling`,
-`Lib_Net`) if a bell is not answered.
+Co-op (bells, summons) needs UDP to reach the other player. On the shadNet pool the module
+asks the router to forward its port through UPnP (`upnp=0` turns that off; forward `p2p_port`
+by hand then) and also the port the signaling server observed, but a router that gives every
+flow a random external port and answers only the host it was sent to (a symmetric NAT) still
+leaves the players unable to reach each other, on either side. `BB_GPU_LOG=debug` logs the
+signaling exchange (`NpSignaling`, `Lib_Net`) if a bell is not answered.
+
+**The Hunter's Dream pool** gets through that: its session service relays and punches through
+NATs, with bbhost and Windows-port players on the same pool. Sign in once with Discord, as the
+Windows port's launcher does:
+
+```bash
+python3 scripts/online.py signin --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
+```
+
+which writes `online_pool=huntersdream`, `thd_online_id=` and `thd_token=` (keep the token to
+yourself) and leaves the rest of the file alone; `online_pool=shadnet` (or removing the line)
+goes back to the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
+That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
 
 ### From Terminal
 

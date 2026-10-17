@@ -75,6 +75,8 @@ void runtime_net_configure(const char *app0, const char *serial, const char *tit
 int runtime_net_enabled(void);
 int runtime_net_symbol(const char *symbol);
 uintptr_t runtime_net_resolve(const char *name);
+void runtime_net_set_image(unsigned char *image, uint64_t size);
+void runtime_net_start(void);
 /* Guest threads for host code (the online module's NP threads); 0 or a positive errno value. */
 int32_t runtime_thread_spawn(void **thread, void *(ABI *entry)(void *), void *argument, uint64_t stack, const char *name);
 int32_t runtime_thread_join_spawned(void *thread, void **result);

@@ -1,7 +1,7 @@
 /* bbport online module (libbbnet.so, gpu/bbnet): the PS4 network and PSN libraries with the
  * shadNet client. A separate library the runtime loads only for online play (BB_ONLINE=1,
  * src/runtime_net.c); offline the port never touches it, and a build without it runs offline.
- * Its C++ inside is private (hidden symbols, -Bsymbolic): these two calls are all it exports. */
+ * Its C++ inside is private (hidden symbols, -Bsymbolic): these few calls are all it exports. */
 #ifndef BBNET_H
 #define BBNET_H
 #include <stdint.h>
@@ -38,6 +38,14 @@ int bbnet_init(const BbNetHost *host);
 /* The module's function for an imported NID ("NID#lib#mod"), or 0. */
 typedef uintptr_t (*BbNetResolveFn)(const char *scoped_nid);
 uintptr_t bbnet_resolve(const char *scoped_nid);
+
+/* The game's loaded image before the patches change it (The Hunter's Dream backend reads the
+ * 1.09 executable's code and a few of its variables), and the moment the game starts (its
+ * online session begins then). Both optional: a module without them plays on shadNet. */
+typedef void (*BbNetSetImageFn)(unsigned char *image, uint64_t size);
+void bbnet_set_image(unsigned char *image, uint64_t size);
+typedef void (*BbNetStartFn)(void);
+void bbnet_start(void);
 
 #ifdef __cplusplus
 }

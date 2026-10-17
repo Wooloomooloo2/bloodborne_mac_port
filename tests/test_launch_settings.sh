@@ -57,4 +57,20 @@ check_p2p $'online=1\np2p_port=3658\n' "3658"
 check_p2p $'p2p_port=0\n' "0"
 check_p2p $'p2p_port=abc\n' "-"
 check_p2p $'p2p_port=3658\n' "55692" BB_P2P_PORT=55692
-echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port)"
+# The Hunter's Dream pool (online_pool, thd_online_id, thd_token -> BB_NET_BACKEND=thd and the
+# account); the token never reaches the command line here either.
+check_pool() { # ini text, expected "BACKEND ID TOKENLEN" (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_NET_BACKEND -u BB_THD_ONLINE_ID -u BB_THD_TOKEN "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s %s %s" "${BB_NET_BACKEND:--}" "${BB_THD_ONLINE_ID:--}" "${#BB_THD_TOKEN}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: pool launch settings for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+check_pool $'online=1\nonline_pool=huntersdream\nthd_online_id=hunter\nthd_token=abcdef\n' "thd hunter 6"
+check_pool $'online_pool=shadnet\nthd_online_id=hunter\n' "- hunter 0"
+check_pool $'online_pool=other\n' "- - 0"
+check_pool $'online_pool=huntersdream\n' "shadnet - 0" BB_NET_BACKEND=shadnet
+echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port, online_pool)"

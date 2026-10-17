@@ -646,9 +646,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
   symmetric NAT (random external port per flow, answers only from the host sent to), so the port
   the signaling server told the peer (51566) was reachable by the server alone. Now the module
   also UPnP-forwards the router port the STUN echo reports to the bound port (HandleStunEcho).
-  *Open:* whether the router accepts that mapping, and a real co-op session with a second player
-  (sign-in, messages and bloodstains verified on the new tree); stream (TCP-over-UDP) traffic if
-  the game uses it beyond signaling and datagrams.
+  The router accepted the mapping, but the friend's router randomizes too, so neither side's
+  offers arrive on shadNet. The user's Windows co-op (same router) ran on The Hunter's Dream
+  pool, whose service relays: its backend (`gpu/bbnet/thd`, from the Windows port) is in,
+  `online_pool=huntersdream` with a Discord-linked account (`scripts/online.py signin`).
+  *Open:* a real co-op session on that pool from this port; the shadNet pool stays limited to
+  reachable routers; stream (TCP-over-UDP) traffic if the game uses it beyond signaling and
+  datagrams; the Windows port's live-map patch (`BB_BRIDGE_LIVE_MAP`) is not ported.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or
