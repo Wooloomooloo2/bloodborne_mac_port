@@ -40,17 +40,31 @@ for patch in gpu/patches/fsr-vulkan/*.patch; do
 done
 # Boost is header-only: the arm64 Homebrew headers are fine (nothing is linked from there).
 boost=$(brew --prefix boost 2>/dev/null || echo /opt/homebrew/opt/boost)
+# Online module (gpu/bbnet; BB_NET=OFF skips it): its libraries come from deps/x86_64 too, and
+# protoc from deps/host (arm64) when bootstrap_deps.sh built it.
+protoc=; [[ -x $ROOT/deps/host/bin/protoc ]] && protoc=$ROOT/deps/host/bin/protoc
 cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_C_COMPILER="$CC" -DCMAKE_CXX_COMPILER="${CXX:-/usr/bin/clang++}" \
     -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
     -DCMAKE_PREFIX_PATH="$PREFIX;$boost" -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew \
     -DBoost_INCLUDE_DIR="$boost/include" \
-    -DBB_PGO=off -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" -DBB_METAL_NATIVE_STAGE=6 -Wno-dev >/dev/null
+    -DBB_PGO=off -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" -DBB_METAL_NATIVE_STAGE=6 \
+    -DBB_NET="${BB_NET:-ON}" ${protoc:+-DBB_PROTOC="$protoc"} -Wno-dev >/dev/null
 echo "GPU library: LTO ${BB_LTO:-ON}"
 # A failed GPU build must stop here: an older libbbgpu.dylib would otherwise be used silently.
 if ! ninja -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
     grep -v '^\[' out/gpu-build.log | tail -40 >&2
     echo 'GPU library build failed (full log: out/gpu-build.log)' >&2; exit 1
+fi
+# The online module, when CMake found its libraries (otherwise the port plays offline).
+if ninja -C out/gpu -t targets all 2>/dev/null | grep '^bbnet:' >/dev/null; then # no -q: pipefail
+    if ! ninja -C out/gpu bbnet > out/gpu-net-build.log 2>&1; then
+        grep -v '^\[' out/gpu-net-build.log | tail -40 >&2
+        echo 'Online module build failed (full log: out/gpu-net-build.log)' >&2; exit 1
+    fi
+    echo "Online module: $PWD/out/gpu/libbbnet.dylib"
+else
+    echo 'Online module: not built (its libraries are missing: run bash scripts/macos/bootstrap_deps.sh)'
 fi
 if [[ ${1:-} == --gpu-only ]]; then echo "Built $PWD/out/gpu/libbbgpu.dylib"; exit 0; fi
 
@@ -102,6 +116,9 @@ if [[ ${1:-} == --test ]]; then
     out/sema-test
     "$CC" "${cflags[@]}" -I. -Isrc tests/test_content.c src/runtime_content.c -o out/content-test
     out/content-test
+    # Online imports go to the online module when it is there (skips without it).
+    "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_online.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -framework CoreFoundation -o out/online-test
+    out/online-test
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test
