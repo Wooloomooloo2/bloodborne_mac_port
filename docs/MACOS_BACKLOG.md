@@ -28,6 +28,16 @@ Each item: what was done for now, what the refinement is, and where it lives.
   visibility culling reading stale results (`BB_READBACKS` Relaxed). Unknown whether 0.4.0 does it.
   Repro: long scripted walk from `save-backups/dense-20261017` with before/after snapshots.
 
+- **Metal-native: "Submit inside a render pass" assertion ended a co-op session (2026-10-17,
+  online-shadnet; made survivable).** The first phantom to load in on The Hunter's Dream pool
+  hit `Encoder::Finish`'s `ASSERT_MSG(!in_pass)` (bbgpu-host exited with status 23). The
+  scheduler ends its pass before every submission (`SubmitExecution` → `EndRendering`), so the
+  encoder's `in_pass` and the scheduler's `is_rendering` had come apart; the two direct
+  `BeginRenderPass` users in vk_runtime.cpp (layer resolves, clears) are balanced, so the path is
+  not found yet (no backtrace from the host process). Now `Finish` closes the render encoder,
+  commits, and keeps the pass: the next draw reopens it with load actions, as after compute or
+  blit work inside a pass; a `Submit inside a render pass` warning (first 8) marks it in the log.
+  *Open:* which recorded command begins a pass the scheduler does not count.
 - **Metal-native (M4 → M5): render pipelines declare a depth/stencil format the pass does not
   bind.** Fixed 2026-10-16 (M5 Task 3): `BoundDepthAttachment` (vk_depth_attachment.h) is the one
   rule for the pass's depth attachment and the pipeline key's formats; `MTL_DEBUG_LAYER=1` title +
