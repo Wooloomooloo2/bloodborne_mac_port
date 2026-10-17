@@ -67,6 +67,7 @@ enum class CommandType : u16 {
     AddBlock = 10,
     RemoveBlock = 11,
     GetServerFeatures = 12,
+    SetClientVersion = 13,
     GetBoardInfos = 30,
     RecordScore = 31,
     RecordScoreData = 32,
@@ -105,6 +106,7 @@ enum class NotificationType : u16 {
     RoomEvent = 10,
     RoomMessage = 11,
     WebApiPushEvent = 17, // Generic NP WebApi push event
+    ClientRejected = 19,  // the server is signing this client out (version not accepted)
 };
 
 enum class ErrorType : uint8_t {
@@ -304,6 +306,10 @@ public:
     // Allocates a packet id, builds the packet, pushes it to the writer queue.
     // Returns the packet id so callers can correlate the eventual reply.
     u64 SubmitRequest(CommandType cmd, const std::vector<u8>& payload);
+    // bbport: the version the server checks against its clientversions.cfg (a client that reports
+    // none is signed out by current servers). BB_SHADNET_CLIENT_VERSION overrides the default.
+    u64 ReportClientVersion();
+    static std::string BuildVersionString();
 
     // Friend / block commands.
     u64 AddFriend(const std::string& npid);

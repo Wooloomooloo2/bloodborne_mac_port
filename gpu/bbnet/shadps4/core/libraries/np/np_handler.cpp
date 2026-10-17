@@ -160,7 +160,21 @@ void NpHandler::Initialize() {
 
     if (connected_count == 0) {
         LOG_WARNING(NpHandler, "no users connected to shadNet");
-        return;
+        // bbport: a refused first login (the server's version cooldown after a rejection, a
+        // session the server has not dropped yet) is retried with backoff like a dropped
+        // connection, instead of leaving the game signed out for the whole session.
+        bool retry = false;
+        for (int i = 0; i < Libraries::UserService::ORBIS_USER_SERVICE_MAX_LOGIN_USERS; ++i) {
+            const User* u = logged_in[i];
+            if (u && u->shadnet_enabled && !u->shadnet_npid.empty() &&
+                !u->shadnet_password.empty()) {
+                MarkForReconnect(u->user_id);
+                retry = true;
+            }
+        }
+        if (!retry)
+            return;
+        LOG_INFO(NpHandler, "sign-in will be retried");
     }
 
     StartWorker();

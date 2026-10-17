@@ -364,6 +364,13 @@ connects, and the game stays offline. `run.sh` writes `user/host_overrides.json`
 Bloodborne summon service), and the log starts with `Online: module ...` when the module is in
 use. `BB_GPU_LOG=info` shows the network libraries' own log.
 
+shadNet servers check the client version reported after signing in and sign out builds they
+do not accept (the log then says `the shadNet server rejected this client: ...`, and the
+account's logins are refused for a few minutes). The module reports the shadPS4 release its
+network libraries come from (`shadPS4 v0.20.0`); `BB_SHADNET_CLIENT_VERSION` overrides it. A
+refused first sign-in is retried in the background; the title screen's *Play Online* works once
+the log shows `Logged in npid=...`.
+
 ### From Terminal
 
 ```sh

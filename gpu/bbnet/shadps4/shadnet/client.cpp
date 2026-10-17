@@ -4,10 +4,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #include "client.h"
 #include "common/elf_info.h"
+#include "common/error.h"
 #include "common/logging/log.h"
 #include "common/thread.h"
 #include "shadnet.pb.h"
@@ -445,8 +448,14 @@ bool ShadNetClient::RecvN(u8* buf, u32 n) {
             return false;
         const int r = static_cast<int>(::recv(m_sock, reinterpret_cast<char*>(buf + received),
                                               static_cast<int>(n - received), 0));
-        if (r <= 0)
+        if (r < 0 && errno == EINTR) // bbport: the runtime's signals (thread dumps) land here too
+            continue;
+        if (r <= 0) {
+            if (!m_terminate)
+                LOG_WARNING(ShadNet, "recv returned {} ({})", r,
+                            r == 0 ? "peer closed" : Common::GetLastErrorMsg());
             return false;
+        }
         received += static_cast<u32>(r);
     }
     return true;
@@ -718,9 +727,38 @@ void ShadNetClient::HandleServerFeaturesReply(const std::vector<u8>& payload) {
 
     m_matching2_enabled.store(matching2_enabled);
     m_server_features_received.store(parsed);
+    ReportClientVersion();
     LOG_INFO(ShadNet, "Server features: matching2_enabled={}{}",
              matching2_enabled ? "true" : "false", parsed ? "" : " (defaulted)");
     m_sem_authenticated.release();
+}
+
+// bbport: shadNet servers check the version a client reports after signing in against their
+// clientversions.cfg and sign out what they do not accept (with a login cooldown afterwards);
+// the public server also refused a fork-style string ("shadPS4 v0.20.1 bbport-mac/..."). The
+// network libraries here are shadPS4's of October 2026, so the string is that release's, in the
+// form an official release build reports. BB_SHADNET_CLIENT_VERSION overrides it.
+std::string ShadNetClient::BuildVersionString() {
+    if (const char* forced = std::getenv("BB_SHADNET_CLIENT_VERSION"); forced && forced[0]) {
+        return forced;
+    }
+    return "shadPS4 v0.20.0";
+}
+
+u64 ShadNetClient::ReportClientVersion() {
+    shadnet::SetClientVersionRequest req;
+    req.set_version(BuildVersionString());
+    const std::string blob = req.SerializeAsString();
+    std::vector<u8> payload;
+    payload.reserve(4 + blob.size());
+    const u32 sz = static_cast<u32>(blob.size());
+    payload.push_back(static_cast<u8>(sz));
+    payload.push_back(static_cast<u8>(sz >> 8));
+    payload.push_back(static_cast<u8>(sz >> 16));
+    payload.push_back(static_cast<u8>(sz >> 24));
+    payload.insert(payload.end(), blob.begin(), blob.end());
+    LOG_INFO(ShadNet, "Reporting client version '{}'", req.version());
+    return SubmitRequest(CommandType::SetClientVersion, payload);
 }
 
 // Notifications
@@ -909,6 +947,17 @@ void ShadNetClient::HandleNotification(u16 cmd_raw, const std::vector<u8>& paylo
                  n.npServiceName, n.dataType, n.fromNpid, n.data.size(), n.extdData.size());
         if (onWebApiPushEvent)
             onWebApiPushEvent(n);
+        break;
+    }
+    case NotificationType::ClientRejected: {
+        shadnet::NotifyClientRejected pb;
+        if (!pb.ParseFromString(blob)) {
+            LOG_WARNING(ShadNet, "ClientRejected parse error");
+            break;
+        }
+        LOG_ERROR(ShadNet, "Server rejected this client (reason={}, version='{}'): {}",
+                  pb.reason(), pb.version(), pb.message());
+        std::printf("Online: the shadNet server rejected this client: %s\n", pb.message().c_str());
         break;
     }
     default:

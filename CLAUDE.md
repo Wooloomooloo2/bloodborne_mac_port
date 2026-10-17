@@ -178,6 +178,12 @@ miniupnpc / nlohmann_json / **epoll-shim** (epoll + eventfd on kqueue; built wit
 `gpu/bbnet/bbnet.exports` lists the two exported symbols, hidden visibility hides the rest,
 two-level namespace binds the module's own symbols to itself. httplib takes HTTPS anchors from the
 keychain (Security.framework). `tests/test_online.c` checks the import routing.
+**Verified 2026-10-17 with the user's shadNet account:** sign-in, The Hunter's Dream login, messages,
+bloodstains, ghosts (all HTTP 200). Two fixes were needed beyond upstream bbport: the server
+(shadps4-emu/shadNet) signs out clients that report no version or a fork-style one, so the client
+sends `SetClientVersion` ("shadPS4 v0.20.0", `BB_SHADNET_CLIENT_VERSION`) and logs notification 19
+(ClientRejected); and a refused first login (the server's post-rejection cooldown → LoginError 5)
+is retried with backoff (NpHandler::Initialize). Summons/bells untested (no second player).
 
 ## Gotchas learned
 
