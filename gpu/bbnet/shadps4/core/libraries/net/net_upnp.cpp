@@ -30,6 +30,8 @@ UPnPClient::~UPnPClient() {
     // Mappings have no lease time: leave nothing behind on the router.
     if (const u16 port = m_mapped_port.exchange(0); port != 0)
         RemoveMapping(port);
+    if (const u16 port = m_mapped_external.exchange(0); port != 0)
+        RemoveMapping(port);
     if (m_available.load())
         FreeUPNPUrls(&m_urls);
 }
@@ -120,25 +122,52 @@ void UPnPClient::DiscoverThread() {
 }
 
 void UPnPClient::AddMapping(u16 port) {
+    AddMapping(port, port);
+}
+
+void UPnPClient::AddMapping(u16 external, u16 internal) {
     if (!m_p2p_features_enabled.load())
         return;
 
     if (!m_available.load())
         return;
 
-    const std::string port_str = std::to_string(port);
+    const std::string external_str = std::to_string(external);
+    const std::string internal_str = std::to_string(internal);
     const int ret =
-        UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, port_str.c_str(),
-                            port_str.c_str(), m_lan_addr, "shadPS4", "UDP", nullptr, "0");
+        UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, external_str.c_str(),
+                            internal_str.c_str(), m_lan_addr, "shadPS4", "UDP", nullptr, "0");
 
     if (ret == UPNPCOMMAND_SUCCESS) {
-        m_external_port.store(port);
-        LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", port);
+        m_external_port.store(external);
+        if (external == internal)
+            LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", external);
+        else
+            LOG_INFO(Lib_Net, "UPNP: mapped router UDP port {} to our port {}", external, internal);
     } else {
         // Store the requested port as best-guess even on failure so callers still get a value.
-        m_external_port.store(port);
-        LOG_WARNING(Lib_Net, "UPNP: failed to map port {} ({})", port, strupnperror(ret));
+        m_external_port.store(external);
+        LOG_WARNING(Lib_Net, "UPNP: failed to map port {} -> {} ({})", external, internal,
+                    strupnperror(ret));
     }
+}
+
+void UPnPClient::MapExternalPortAsync(u16 external, u16 internal) {
+    std::scoped_lock lock{m_map_mutex};
+    if (external == 0 || internal == 0 || m_mapped_external.load() == external)
+        return;
+    if (m_map_thread.joinable())
+        m_map_thread.join();
+    m_map_thread = std::thread([this, external, internal] {
+        if (!WaitReady(10'000)) {
+            LOG_INFO(Lib_Net, "UPNP: no IGD, router UDP port {} is not forwarded", external);
+            return;
+        }
+        const u16 previous = m_mapped_external.exchange(external);
+        if (previous != 0 && previous != external)
+            RemoveMapping(previous);
+        AddMapping(external, internal);
+    });
 }
 
 void UPnPClient::MapPortAsync(u16 port) {

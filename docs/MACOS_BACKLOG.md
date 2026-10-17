@@ -642,9 +642,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
   crypto), so the two could not parse each other. `gpu/bbnet/shadps4` is now mainline v0.20.0's
   network tree (its P2P transport included; macOS uses its kqueue path, epoll-shim is gone),
   `tests/test_p2p_codec.cpp` pins the frame bytes, `p2p_port=` / `BB_P2P_PORT` picks the UDP port
-  (3658 by default). *Open:* a real co-op session with a second player (sign-in, messages and
-  bloodstains verified on the new tree); UPnP on the user's router; stream (TCP-over-UDP) traffic
-  if the game uses it beyond signaling and datagrams.
+  (3658 by default). First try on the new tree: 631 offers out, none in; the user's router is a
+  symmetric NAT (random external port per flow, answers only from the host sent to), so the port
+  the signaling server told the peer (51566) was reachable by the server alone. Now the module
+  also UPnP-forwards the router port the STUN echo reports to the bound port (HandleStunEcho).
+  *Open:* whether the router accepts that mapping, and a real co-op session with a second player
+  (sign-in, messages and bloodstains verified on the new tree); stream (TCP-over-UDP) traffic if
+  the game uses it beyond signaling and datagrams.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or

@@ -199,6 +199,17 @@ socket can be created. `BB_P2P_PORT` / `p2p_port=` picks the UDP port (3658 by d
 `tests/test_p2p_codec.cpp` (`out/gpu/bbnet-codec-test`) pins the frame layout. Co-op itself is
 still untested from this port (needs a second player).
 
+**2026-10-17, first co-op try on the new tree:** 631 offers out, nothing in. Cause on this side:
+the user's router gives every outbound UDP flow a random external port and only lets the host we
+sent to answer on it (symmetric NAT, checked with STUN change requests: `scratchpad`
+`stun_probe.py` / `nat_filter.py` of session 2f782701). shadNet's signaling server reports the
+port it observed (51566) to peers, while UPnP forwarded only the bound port 3658, which nobody is
+told. Fix (`bbport` marks in `signaling_handler.cpp` HandleStunEcho, `net_upnp.{h,cpp}`
+MapExternalPortAsync): when the STUN echo's port differs from the bound port, the module also
+forwards that router port to the bound port by UPnP. Log: `the router maps our UDP port 3658 to
+N: asking it to forward port N too` then `UPNP: mapped router UDP port N to our port 3658`
+(or a `failed to map` warning if the router refuses a port its NAT table already uses).
+
 ## Gotchas learned
 
 - **Never attach lldb/debugserver to a Rosetta (x86-64) process and kill it**: on 2026-10-12 it

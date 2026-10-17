@@ -15,7 +15,10 @@
 
 #include "common/logging/log.h"
 #include "common/singleton.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/net/net.h"
+#include "core/libraries/net/net_p2p.h"
+#include "core/libraries/net/net_upnp.h"
 #include "core/libraries/net/net_util.h"
 #include "core/libraries/np/np_error.h"
 #include "core/libraries/np/np_handler/np_handler.h"
@@ -99,6 +102,20 @@ void HandleStunEcho(const NpSignaling::StunEcho& echo) {
 
     auto* netinfo = Common::Singleton<NetUtil::NetUtilInternal>::Instance();
     netinfo->SetExternalIp(echo.ext_ip);
+
+    // bbport: the server tells peers the address it saw this echo's request come from. A router
+    // that gives every outbound flow a random external port (and only lets the host we sent to
+    // answer on it) makes that port reachable by the server alone, while UPnP forwarded only the
+    // bound port, which nobody is told: peers' offers never arrive. Forward the observed port too.
+    const u16 ext_port = Net::sceNetNtohs(echo.ext_port);
+    const u16 bound_port = Net::GetP2PBoundPort();
+    if (ext_port != 0 && bound_port != 0 && ext_port != bound_port &&
+        EmulatorSettings.IsConnectedToNetwork() && EmulatorSettings.IsUPnPEnabled()) {
+        LOG_INFO(Lib_NpSignaling,
+                 "the router maps our UDP port {} to {}: asking it to forward port {} too (UPnP)",
+                 bound_port, ext_port, ext_port);
+        Net::UPnPClient::Instance().MapExternalPortAsync(ext_port, bound_port);
+    }
 }
 
 void ProcessSignalingPacket(const void* data, u32 len, u32 from_addr, u16 from_port) {

@@ -38,6 +38,7 @@ public:
     u16 GetExternalPort() const;
 
     void AddMapping(u16 port);
+    void AddMapping(u16 external, u16 internal); // bbport
     void RemoveMapping(u16 port);
 
     // Forwards `port` once discovery has finished (waiting up to 10 s for it), on a background
@@ -45,6 +46,11 @@ public:
     void MapPortAsync(u16 port);
     // Removes what MapPortAsync forwarded, if it is `port`.
     void UnmapPort(u16 port);
+    // bbport: forwards router port `external` to our `internal` port, for routers that give
+    // every outbound flow a random external port (the signaling server then tells peers that
+    // port, which only the server could reach). Same thread as MapPortAsync; repeated calls
+    // with the same ports do nothing, a new external port replaces the previous mapping.
+    void MapExternalPortAsync(u16 external, u16 internal);
 
 private:
     UPnPClient() = default;
@@ -61,6 +67,7 @@ private:
     std::atomic<u32> m_external_ip_nbo{0};
     std::atomic<u16> m_external_port{0};
     std::atomic<u16> m_mapped_port{0}; // forwarded by MapPortAsync, removed on exit
+    std::atomic<u16> m_mapped_external{0}; // bbport: MapExternalPortAsync's router port
     char m_external_ip_str[16]{};
 
     char m_lan_addr[64]{};
