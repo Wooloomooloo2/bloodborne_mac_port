@@ -392,6 +392,19 @@ Each item: what was done for now, what the refinement is, and where it lives.
   chunk users ("two threads use the recording chunk at once", with both callers and a
   backtrace). Not reproduced in 6 reloads. *Next:* read that report from the next crash, add
   the missing drain there.
+  *2026-10-17 (co-op on The Hunter's Dream, two phantoms in the world, ~40 min in):* the report
+  fired once and the game froze (no frame presented after it; the user closed the window):
+  `bb:DrawRec` from `BufferCache::ObtainBuffer+0xcbc` (SmallGuestCopy → Record) while another
+  thread had entered from `Vulkan::Runtime::CopyBuffer` (its Record). Paths checked and found
+  draining first: the DMA copies (`Rasterizer::CopyBuffer`), queued commands
+  (`Liverpool::ProcessCommands`), the fault relay (`bbgpu_host_fault` → `ReadMemory(assume_locks
+  = false)` → `SendCommand<true>`), `OnWriteFault` / `InvalidateMemory`; stage B advances
+  `consumed` only after a packet's handler returns, so `Drain` does not return early. The
+  remaining `Runtime::CopyBuffer` users are `BufferCache::ReadMemory`'s download (runs on A after
+  a drain, or inline on B/A with `assume_locks`) and `ObtainBuffer`'s upload (line ~489). Still
+  open which thread it was; the log has no thread name for the other side (worth adding to
+  `ReportChunkRace`: the other thread's name, captured with its caller). Workaround for long
+  co-op sessions: `BB_DRAW_PIPE=0` (no stage B, so no chunk race; ~18% slower draw recording).
   *Same day, test runs:* the load-time corrupted command buffer (cloth-thread entry above) also
   killed the host twice in ~14 test loads: `SignalFence: Unreachable code!` (pm4_cmds.h:492)
   after "Gnm check: bad packet", and a SIGSEGV in `Shader::StageSpecialization` building a
