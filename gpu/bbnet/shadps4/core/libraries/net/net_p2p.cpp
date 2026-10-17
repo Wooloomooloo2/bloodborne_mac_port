@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <iterator>
@@ -89,6 +90,24 @@ u16 StartLocked(P2PState& state, u16 udp_port, bool allow_fallback) {
     P2P::TransportConfig config;
     config.signaling_channels = ChannelCount;
     config.classify_signaling = ClassifySignaling;
+    // bbport: the first packets from each peer, so a log shows whether anything reaches the
+    // socket (NAT and port forwarding are the usual reasons nothing does).
+    config.observe_packet = [](std::span<const u8> packet, const P2P::Endpoint& from, int kind) {
+        static std::atomic<int> reported{0};
+        if (reported.fetch_add(1, std::memory_order_relaxed) >= 64) {
+            return;
+        }
+        std::string head;
+        for (size_t i = 0; i < std::min<size_t>(packet.size(), 12); ++i) {
+            head += fmt::format("{:02x} ", packet[i]);
+        }
+        const auto* in = reinterpret_cast<const sockaddr_in*>(from.Sockaddr());
+        const u32 a = ntohl(in->sin_addr.s_addr);
+        LOG_DEBUG(Lib_Net, "P2P packet from {}.{}.{}.{}:{}: {} bytes, kind {} [{}]", a >> 24,
+                  (a >> 16) & 0xff, (a >> 8) & 0xff, a & 0xff, from.Port(), packet.size(),
+                  kind == 1 ? "stream" : kind == 2 ? "datagram" : kind == 3 ? "signaling" : "not a frame",
+                  head);
+    };
     const auto try_port = [&](u16 port, Error* error) {
         auto codec = std::make_unique<P2P::FramingCodec>(state.keyring, LogBroadcast);
         return P2P::Transport::Create(AF_INET, P2P::Endpoint::IPv4("0.0.0.0", port),

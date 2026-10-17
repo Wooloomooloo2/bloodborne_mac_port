@@ -66,6 +66,9 @@ struct TransportConfig {
     size_t signaling_queue_packets = 256;    // per channel
     size_t signaling_channels = 1;
     std::function<size_t(std::span<const u8>)> classify_signaling;
+    // bbport: every packet the socket receives, before decoding, with the decoded kind after
+    // (Codec::Kind as int). For logging what peers send us.
+    std::function<void(std::span<const u8>, const Endpoint&, int kind)> observe_packet;
     int max_backlog = 64;
     // TODO: NAT changes the addresses in the pseudo-header, so peer checksums may not
     // match. Off until tested.

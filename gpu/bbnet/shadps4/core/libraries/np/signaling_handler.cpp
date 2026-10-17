@@ -109,8 +109,10 @@ void HandleStunEcho(const NpSignaling::StunEcho& echo) {
     // bound port, which nobody is told: peers' offers never arrive. Forward the observed port too.
     const u16 ext_port = Net::sceNetNtohs(echo.ext_port);
     const u16 bound_port = Net::GetP2PBoundPort();
+    static std::atomic<u16> forwarded{0};
     if (ext_port != 0 && bound_port != 0 && ext_port != bound_port &&
-        EmulatorSettings.IsConnectedToNetwork() && EmulatorSettings.IsUPnPEnabled()) {
+        forwarded.exchange(ext_port) != ext_port && EmulatorSettings.IsConnectedToNetwork() &&
+        EmulatorSettings.IsUPnPEnabled()) {
         LOG_INFO(Lib_NpSignaling,
                  "the router maps our UDP port {} to {}: asking it to forward port {} too (UPnP)",
                  bound_port, ext_port, ext_port);

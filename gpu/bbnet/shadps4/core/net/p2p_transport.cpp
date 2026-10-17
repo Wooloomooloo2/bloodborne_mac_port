@@ -308,6 +308,9 @@ u16 Transport::AllocateVport(bool stream) {
 void Transport::HandlePacket(std::span<const u8> packet, const Endpoint& from,
                              Clock::time_point now) {
     Codec::Decoded decoded = codec_->Decode(packet, from);
+    if (config_.observe_packet) {
+        config_.observe_packet(packet, from, static_cast<int>(decoded.kind));
+    }
     switch (decoded.kind) {
     case Codec::Kind::Stream:
         HandleStreamSegment(decoded.payload, from, now);
