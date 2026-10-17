@@ -16,8 +16,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
 3. Build it in stages, the costliest path first, with MoltenVK kept as the fallback.
 4. Meanwhile: the M2 Max 2–3 FPS report (issue #2), an earlier shader compile start, a native
    Mac launcher built for more than one game.
-5. Later: merge upstream bbport 0.5/0.6 (native game settings, online play, mouse look, aspect
-   ratios).
+5. Later: merge the rest of upstream bbport 0.5/0.6 (native game settings, mouse look, aspect
+   ratios). Online play came in on 2026-10-17 (branch online-shadnet: gpu/bbnet, src/runtime_net.c).
 
 ## 1. Stability
 

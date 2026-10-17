@@ -287,6 +287,33 @@ To keep them elsewhere, set `BB_DATA_DIR=/some/folder` in `launch.conf` (or the 
 A checkout that already has saves in its own folder (`user/`, from before this default) keeps
 using them; move `user/` and `bbport.ini` to the folder above to switch.
 
+### Online play (shadNet)
+
+Messages, bloodstains and ghosts come from the community game server (The Hunter's Dream);
+bells and summons go through a shadNet server (`srv.shadps4.net:31313` by default) with a
+shadNet account. The network and PSN libraries are a separate module, `out/gpu/libbbnet.dylib`
+(`gpu/bbnet`, from upstream bbport: shadp2p's shadPS4 libraries with the shadNet client), built
+by `build_macos.sh` once `scripts/macos/bootstrap_deps.sh` has added its libraries (protobuf,
+OpenSSL, miniupnpc, nlohmann_json, epoll-shim) to `deps/x86_64`. Offline the module is never
+loaded, and a build without it plays offline exactly as before.
+
+Turn it on in `bbport.ini` (`~/Library/Application Support/Bloodborne/bbport.ini`):
+
+```ini
+online=1
+shadnet_npid=YourOnlineId
+shadnet_password=YourPassword
+```
+
+or with the same settings as environment variables in `launch.conf` (`BB_ONLINE=1`,
+`BB_SHADNET_NPID`, `BB_SHADNET_PASSWORD`). Optional: `shadnet_server=host:port`,
+`shadnet_webapi=http://host:31315`, `community_server=https://...`, `upnp=0` (no UPnP port
+mapping). An account is needed to sign in: without one the module loads but no shadNet user
+connects, and the game stays offline. `run.sh` writes `user/host_overrides.json` for each launch (the game's server
+`ss4.scej-network.jp` → the community server; summon signs → the shadNet WebAPI when it has the
+Bloodborne summon service), and the log starts with `Online: module ...` when the module is in
+use. `BB_GPU_LOG=info` shows the network libraries' own log.
+
 ### From Terminal
 
 ```sh

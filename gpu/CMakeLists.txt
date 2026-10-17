@@ -378,3 +378,31 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+
+# bbport online module (gpu/bbnet, libbbnet.dylib / libbbnet.so): built when its libraries are
+# there (macOS: deps/x86_64 from scripts/macos/bootstrap_deps.sh; Linux: shell.nix); BB_NET=OFF
+# leaves it out. Without it the port plays offline. x86-64 only: it runs in the game process.
+option(BB_NET "Build the online module (shadNet)" ON)
+if (BB_NET AND NOT BB_ARM64)
+    set(OPENSSL_USE_STATIC_LIBS TRUE)
+    find_package(Protobuf CONFIG QUIET)
+    find_package(nlohmann_json CONFIG QUIET)
+    find_package(OpenSSL QUIET)
+    find_package(ZLIB QUIET)
+    find_path(MINIUPNPC_INCLUDE miniupnpc.h PATH_SUFFIXES miniupnpc)
+    find_library(MINIUPNPC_LIBRARY NAMES miniupnpc)
+    set(bb_net_platform_ok TRUE)
+    if (APPLE)
+        find_package(epoll-shim CONFIG QUIET)
+        if (NOT epoll-shim_FOUND)
+            set(bb_net_platform_ok FALSE)
+        endif()
+    endif()
+    if (Protobuf_FOUND AND nlohmann_json_FOUND AND OpenSSL_FOUND AND ZLIB_FOUND AND
+        MINIUPNPC_INCLUDE AND MINIUPNPC_LIBRARY AND bb_net_platform_ok)
+        add_subdirectory(bbnet)
+        message(STATUS "Online module: on (libbbnet)")
+    else()
+        message(STATUS "Online module: off (protobuf, nlohmann_json, OpenSSL, zlib, miniupnpc or epoll-shim missing)")
+    endif()
+endif()
