@@ -392,6 +392,9 @@ which writes `online_pool=huntersdream`, `thd_online_id=` and `thd_token=` (keep
 yourself) and leaves the rest of the file alone; `online_pool=shadnet` (or removing the line)
 goes back to the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
 That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
+The server shows summon signs only to clients it knows: `run.sh` presents the build as
+`bbport 1.9.1` (the Windows port's client field) unless `BB_CLIENT_VERSION` says otherwise. With
+the backend's default name the sign is accepted but never offered to a host.
 
 ### From Terminal
 

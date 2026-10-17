@@ -653,6 +653,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
   *Open:* a real co-op session on that pool from this port; the shadNet pool stays limited to
   reachable routers; stream (TCP-over-UDP) traffic if the game uses it beyond signaling and
   datagrams; the Windows port's live-map patch (`BB_BRIDGE_LIVE_MAP`) is not ported.
+- **The Hunter's Dream pool: summon signs were never requested. Fixed 2026-10-17 (online-shadnet).**
+  As a guest the sign posted fine (`summon_messenger/create` 200) but no host ever requested it:
+  no `guest_invite` event, nothing on the P2P port. The backend's client field (User-Agent,
+  `BB_CLIENT_VERSION`, default "BloodBorneButPc") is what the server tells clients apart by; with
+  the Windows port's "bbport 1.9.1" a bbhost host requested the sign within a minute, the relay
+  handshake ran and the game joined the room (coop8.log). run.sh now sets it for that pool.
+  Still open on that pool: about one in six `sceHttp` calls to thehuntersdream.com:18671 fails
+  with cpp-httplib error 8 (SSL connection failed), intermittently, including sign-ins; the
+  backend's own httplib client (keep-alive) never failed in the same runs.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or
