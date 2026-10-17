@@ -1015,11 +1015,17 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     ASSERT(col_buf_id < NUM_COLOR_BUFFERS);
 
                     const auto nop_offset = header->type3.count;
-                    if (nop_offset == 0x0e || nop_offset == 0x0d || nop_offset == 0x0b) {
-                        ASSERT_MSG(payload[nop_offset] == 0xc0001000,
-                                   "NOP hint is missing in CB setup sequence");
+                    // bbport: a missing hint is a corrupted command buffer (the load-time race,
+                    // MACOS_BACKLOG "Load crash"); the extent is unknown then, not a reason to
+                    // take the GPU host down.
+                    if ((nop_offset == 0x0e || nop_offset == 0x0d || nop_offset == 0x0b) &&
+                        payload[nop_offset] == 0xc0001000) {
                         last_cb_extent[col_buf_id].raw = payload[nop_offset + 1];
                     } else {
+                        if (nop_offset == 0x0e || nop_offset == 0x0d || nop_offset == 0x0b) {
+                            LOG_WARNING(Render, "NOP hint is missing in CB setup sequence "
+                                                "(corrupted command buffer): extent unknown");
+                        }
                         last_cb_extent[col_buf_id].raw = 0;
                     }
                     break;
@@ -1039,18 +1045,24 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 
                     const auto nop_offset = header->type3.count;
                     if (nop_offset == 0x04) {
-                        ASSERT_MSG(payload[nop_offset] == 0xc0001000,
-                                   "NOP hint is missing in CB setup sequence");
-                        last_cb_extent[col_buf_id].raw = payload[nop_offset + 1];
+                        if (payload[nop_offset] == 0xc0001000) {
+                            last_cb_extent[col_buf_id].raw = payload[nop_offset + 1];
+                        } else { // bbport: corrupted command buffer, see CbColorNBase
+                            LOG_WARNING(Render, "NOP hint is missing in CB (cmask) setup "
+                                                "sequence (corrupted command buffer)");
+                            last_cb_extent[col_buf_id].raw = 0;
+                        }
                     }
                     break;
                 }
                 case ContextRegs::DbZInfo: {
-                    if (header->type3.count == 8) {
-                        ASSERT_MSG(payload[20] == 0xc0001000,
-                                   "NOP hint is missing in DB setup sequence");
+                    if (header->type3.count == 8 && payload[20] == 0xc0001000) {
                         last_db_extent.raw = payload[21];
                     } else {
+                        if (header->type3.count == 8) { // bbport: corrupted command buffer
+                            LOG_WARNING(Render, "NOP hint is missing in DB setup sequence "
+                                                "(corrupted command buffer): extent unknown");
+                        }
                         last_db_extent.raw = 0;
                     }
                     break;

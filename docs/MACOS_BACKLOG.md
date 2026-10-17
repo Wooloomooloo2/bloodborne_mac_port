@@ -108,6 +108,16 @@ Each item: what was done for now, what the refinement is, and where it lives.
   0.3–0.7 ms for the render thread's frame in 5 of 9 loads (each a prevented overlap), no
   timeouts. Option A stays as a safety net. *Watch:* missing geometry after loads (entry below)
   should stop if it came from this race.
+  **2026-10-17:** one overlap still got through the lock on a death reload (log: "Gnm: context
+  ... used by thread A, then B after 44.6 us", a type-0 packet at word 283 holding a guest
+  pointer) and landed on the one corrupted-stream path that was still fatal: the command
+  processor's "NOP hint is missing in CB/DB setup sequence" assertions (`liverpool.cpp`,
+  `SetContextReg` for `CbColorNBase`, `CbColorNCmask`, `DbZInfo`), which took the GPU host down
+  (status 23). They now log a warning and leave the extent unknown (`raw = 0`), like the other
+  survivable paths. Why the lock did not cover this overlap is still open: the main thread was
+  in `0xebb960` (hooked) while the render thread's frame job (hooked) had used the context 44.6
+  us earlier, so either a third direct user of the immediate context exists or the frame job's
+  recording outlives the hooked call.
 - **Fixed 2026-10-14: `MapNumberConversion` UNREACHABLE (data_fmt 0, SnormNz) killed the GPU
   host during a level load** (1 in ~60 loads). A descriptor with that format reads as zeros on
   the GPU; it now logs once ("SnormNz descriptor with data format …") and converts nothing.
