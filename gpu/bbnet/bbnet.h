@@ -10,10 +10,11 @@
 extern "C" {
 #endif
 
-#define BBNET_ABI_VERSION 1
+#define BBNET_ABI_VERSION 2
 
 /* What the runtime gives the module: the game's identity (param.sfo, its folder for
- * sce_sys/npbind.dat) and guest threads for the NP libraries' callbacks into the game. */
+ * sce_sys/npbind.dat), guest threads for the NP libraries' callbacks into the game, and what
+ * is mapped in guest memory (NpSignaling's diagnostics dump memory around a bad activation). */
 typedef struct BbNetHost {
     uint32_t abi;           /* BBNET_ABI_VERSION */
     const char *app0;       /* the game's folder */
@@ -24,6 +25,10 @@ typedef struct BbNetHost {
     int32_t (*thread_spawn)(void **thread, void *(__attribute__((sysv_abi)) *entry)(void *),
                             void *argument, uint64_t stack_size, const char *name);
     int32_t (*thread_join)(void *thread, void **result);
+    /* Ends the calling thread (one started with thread_spawn) with this result; never returns. */
+    void (*thread_exit)(void *result);
+    /* 1 when [address, address + size) is mapped guest memory. */
+    int (*memory_is_mapped)(uintptr_t address, uint64_t size);
 } BbNetHost;
 
 /* Registers the libraries; 0 on success, else the module cannot run (the game stays offline). */

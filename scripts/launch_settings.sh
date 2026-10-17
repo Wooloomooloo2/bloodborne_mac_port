@@ -11,10 +11,12 @@
 #   shadnet_password=secret  ... and its password (BB_SHADNET_PASSWORD; the file is the player's own)
 #   community_server=url     the game server (BB_COMMUNITY_SERVER; default https://thehuntersdream.com)
 #   upnp=0                   no UPnP port mapping (BB_UPNP=0; on by default)
+#   p2p_port=3658            the UDP port for co-op traffic (BB_P2P_PORT; 3658, the PS4's, by
+#                            default; 0 = any free port; a busy port falls back to a free one)
 #   metal_hud=1              Apple's Metal Performance HUD (MTL_HUD_ENABLED=1)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
-    local line cap='' full='' hud='' online='' server='' webapi='' npid='' password='' community='' upnp=''
+    local line cap='' full='' hud='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
     [[ -f $1 ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
@@ -28,6 +30,7 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^shadnet_password=(.+)$ ]]; then password=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^community_server=(.+)$ ]]; then community=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^upnp=([01])$ ]]; then upnp=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^p2p_port=([0-9]{1,5})$ ]]; then p2p=${BASH_REMATCH[1]}; fi
     done < "$1"
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
     if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
@@ -39,5 +42,6 @@ bb_launch_settings() { # ini file
     if [[ -n $password && -z ${BB_SHADNET_PASSWORD:-} ]]; then export BB_SHADNET_PASSWORD=$password; fi
     if [[ -n $community && -z ${BB_COMMUNITY_SERVER:-} ]]; then export BB_COMMUNITY_SERVER=$community; fi
     if [[ -n $upnp && -z ${BB_UPNP:-} ]]; then export BB_UPNP=$upnp; fi
+    if [[ -n $p2p && -z ${BB_P2P_PORT:-} ]]; then export BB_P2P_PORT=$p2p; fi
     return 0
 }

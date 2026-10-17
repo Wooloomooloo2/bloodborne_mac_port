@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport online module (libbbnet.so): what the network and NP libraries from shadp2p need
-// from the rest of shadPS4, on top of the bbport runtime (BbNetHost), their registration and the
+// bbport online module (libbbnet): what shadPS4 v0.20.0's network and NP libraries need from
+// the rest of shadPS4, on top of the bbport runtime (BbNetHost), their registration and the
 // module's C interface (bbnet.h). From the Linux co-op fork of bbport, which took it from the
-// Windows port; the libraries are shadp2p's (a shadPS4 fork, GPL-2.0).
+// Windows port; the libraries are shadPS4's (GPL-2.0).
 
 #include <chrono>
 #include <condition_variable>
@@ -30,7 +30,6 @@
 #include "common/elf_info.h"
 #include "common/types.h"
 #include "core/emulator_settings.h"
-#include "core/bloodborne_re.h"
 #include "core/debugger.h"
 #include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/memory.h"
@@ -39,13 +38,15 @@
 #include "core/libraries/libs.h"
 #include "core/libraries/system/systemservice.h"
 #include "core/libraries/system/userservice.h"
+#include "core/memory.h"
 #include "core/user_manager.h"
 #include "imgui/invitation_prompt_layer.h"
 #include "imgui/shadnet_notifications_layer.h"
 
 #include "core/libraries/network/http.h"
 #include "core/libraries/network/http2.h"
-#include "core/libraries/network/net.h"
+#include "core/libraries/net/net.h"
+#include "core/libraries/net/net_kernel.h"
 #include "core/libraries/network/netctl.h"
 #include "core/libraries/network/ssl.h"
 #include "core/libraries/network/ssl2.h"
@@ -57,7 +58,8 @@
 #include "core/libraries/np/np_party.h"
 #include "core/libraries/np/np_score/np_score.h"
 #include "core/libraries/np/np_signaling/np_signaling.h"
-#include "core/libraries/np/np_tus.h"
+#include "core/libraries/np/np_tus/np_tus.h"
+#include "core/libraries/np/np_utility/np_utility.h"
 #include "core/libraries/np/np_web_api/np_web_api.h"
 #include "core/libraries/np/np_web_api2/np_web_api2.h"
 
@@ -286,10 +288,14 @@ int posix_pthread_create_name_np(PthreadT* thread, const PthreadAttrT* attr,
 int posix_pthread_join(PthreadT thread, void** ret) {
     return g_host.thread_join(thread, ret);
 }
+void posix_pthread_exit(void* status) {
+    g_host.thread_exit(status);
+    std::abort(); // not reached
+}
 
 } // namespace Libraries::Kernel
 
-// ---- User and system service, debugger, Bloodborne helpers -------------------------------------
+// ---- User and system service, debugger, memory ---------------------------------------------------
 
 namespace Libraries::UserService {
 s32 PS4_SYSV_ABI sceUserServiceGetInitialUser(int* user_id) {
@@ -318,29 +324,11 @@ s32 GetCurrentPid() {
 }
 } // namespace Core::Debugger
 
-namespace Core::Bloodborne {
-namespace {
-std::mutex placement_mutex;
-std::optional<std::string> placement;
-} // namespace
-std::optional<std::string> GetSeamlessHostPlacementHeader() {
-    std::scoped_lock lock{placement_mutex};
-    return placement;
+namespace Core {
+bool MemoryManager::IsValidMapping(VAddr virtual_addr, u64 size) {
+    return g_host.memory_is_mapped && g_host.memory_is_mapped(virtual_addr, size) != 0;
 }
-bool SetSeamlessHostPlacementHeader(std::string_view value) {
-    if (value.empty() || value.size() > 4096) {
-        return false;
-    }
-    std::scoped_lock lock{placement_mutex};
-    placement = std::string{value};
-    return true;
-}
-void ClearSeamlessHostPlacementHeader() {
-    std::scoped_lock lock{placement_mutex};
-    placement.reset();
-}
-void TraceMatching2LeaveRoom(std::uintptr_t, std::uint64_t) {}
-} // namespace Core::Bloodborne
+} // namespace Core
 
 // ---- Notifications (log only for now) ------------------------------------------------------------
 
@@ -360,6 +348,8 @@ KindDisplay DisplayOf(Kind kind) {
         return {"Friend", {0.9f, 0.4f, 0.4f, 1.0f}};
     case Kind::Online:
         return {"Online", {0.4f, 0.8f, 0.9f, 1.0f}};
+    case Kind::Warning:
+        return {"Warning", {0.95f, 0.6f, 0.2f, 1.0f}};
     default:
         return {"Info", {0.8f, 0.8f, 0.8f, 1.0f}};
     }
@@ -485,7 +475,8 @@ extern "C" __attribute__((visibility("default"))) uintptr_t bbnet_resolve(const 
 }
 
 extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost* host) {
-    if (!host || host->abi != BBNET_ABI_VERSION || !host->thread_spawn || !host->thread_join) {
+    if (!host || host->abi != BBNET_ABI_VERSION || !host->thread_spawn || !host->thread_join ||
+        !host->thread_exit || !host->memory_is_mapped) {
         std::printf("Online: the runtime and the online module are from different versions\n");
         return -1;
     }
@@ -493,6 +484,9 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     Configure(host->app0, host->serial, host->title, host->app_ver);
     Core::Loader::SymbolsResolver resolver;
     Core::Loader::SymbolsResolver* sym = &resolver;
+    // shadPS4's libkernel does this before any socket exists: net ids come from the module's
+    // own handle table, and the P2P transport learns its UDP port, UPnP and public address.
+    Libraries::Net::InstallKernelIntegration();
     Libraries::Net::RegisterLib(sym);
     Libraries::NetCtl::RegisterLib(sym);
     Libraries::Http::RegisterLib(sym);
@@ -508,6 +502,7 @@ extern "C" __attribute__((visibility("default"))) int bbnet_init(const BbNetHost
     Libraries::Np::NpScore::RegisterLib(sym);
     Libraries::Np::NpSignaling::RegisterLib(sym);
     Libraries::Np::NpTus::RegisterLib(sym);
+    Libraries::Np::NpUtility::RegisterLib(sym);
     Libraries::Np::NpWebApi::RegisterLib(sym);
     Libraries::Np::NpWebApi2::RegisterLib(sym);
     std::printf("Online: %zu network and PSN functions\n", g_symbols.size());

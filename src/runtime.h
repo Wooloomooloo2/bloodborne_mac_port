@@ -78,6 +78,7 @@ uintptr_t runtime_net_resolve(const char *name);
 /* Guest threads for host code (the online module's NP threads); 0 or a positive errno value. */
 int32_t runtime_thread_spawn(void **thread, void *(ABI *entry)(void *), void *argument, uint64_t stack, const char *name);
 int32_t runtime_thread_join_spawned(void *thread, void **result);
+void runtime_thread_exit_spawned(void *result) __attribute__((noreturn));
 void runtime_file_report(void);
 void runtime_file_configure(const char *app0, const char *user);
 int runtime_file_mount(const char *guest, const char *host);

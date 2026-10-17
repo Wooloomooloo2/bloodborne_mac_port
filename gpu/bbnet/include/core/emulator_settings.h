@@ -86,6 +86,11 @@ public:
     std::string GetShadNetServer() { return Text("BB_SHADNET_SERVER", "127.0.0.1:31313"); }
     std::string GetShadNetWebApiServer() { return Text("BB_SHADNET_WEBAPI", "http://127.0.0.1:31315"); }
     bool IsUPnPEnabled() { static const auto value = Flag("BB_UPNP", true); return value; }
+    /// shadPS4's disable_https: the game's HTTPS requests go out as plain HTTP (BB_DISABLE_HTTPS).
+    bool IsForcedHttpsDisabled() { static const auto value = Flag("BB_DISABLE_HTTPS", false); return value; }
+    /// shadPS4's p2p_port: the UDP port the P2P transport binds, 3658 (the PS4's) unless
+    /// BB_P2P_PORT (0: any free port; a busy port falls back to a free one, see net_p2p.cpp).
+    int GetP2PPort() { static const auto value = int(Number("BB_P2P_PORT", 3658)); return value; }
 
 private:
     std::atomic<bool> shadnet_session_disabled{false};

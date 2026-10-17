@@ -2,6 +2,8 @@
 #pragma once
 #include "common/types.h"
 #include "core/libraries/kernel/orbis_error.h"
+
+#define CURRENT_FIRMWARE_VERSION 0x14008001 // shadPS4's (libhttp's user agent)
 namespace Libraries::Kernel {
 int* PS4_SYSV_ABI __Error();
 s32 ErrnoToSceKernelError(s32 e);

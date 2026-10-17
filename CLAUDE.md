@@ -172,9 +172,8 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 Upstream bbport's online module (`gpu/bbnet` → `out/gpu/libbbnet.dylib`, `src/runtime_net.c`,
 `scripts/online.py`) is in, loaded only with `BB_ONLINE=1` (or `online=1` in bbport.ini; keys in
 `scripts/launch_settings.sh`). macOS specifics: x86-64 static protobuf 21.12 / OpenSSL 3.5 /
-miniupnpc / nlohmann_json / **epoll-shim** (epoll + eventfd on kqueue; built with
-`EPOLL_SHIM_DISABLE_WRAPPER_MACROS`, its fds closed with `epoll_shim_close`) from
-`bootstrap_deps.sh`; `deps/host/bin/protoc` is the arm64 protoc. ld64 has no `-Bsymbolic`:
+miniupnpc / nlohmann_json from `bootstrap_deps.sh`; `deps/host/bin/protoc` is the arm64 protoc.
+ld64 has no `-Bsymbolic`:
 `gpu/bbnet/bbnet.exports` lists the two exported symbols, hidden visibility hides the rest,
 two-level namespace binds the module's own symbols to itself. httplib takes HTTPS anchors from the
 keychain (Security.framework). `tests/test_online.c` checks the import routing.
@@ -183,7 +182,22 @@ bloodstains, ghosts (all HTTP 200). Two fixes were needed beyond upstream bbport
 (shadps4-emu/shadNet) signs out clients that report no version or a fork-style one, so the client
 sends `SetClientVersion` ("shadPS4 v0.20.0", `BB_SHADNET_CLIENT_VERSION`) and logs notification 19
 (ClientRejected); and a refused first login (the server's post-rejection cooldown → LoginError 5)
-is retried with backoff (NpHandler::Initialize). Summons/bells untested (no second player).
+is retried with backoff (NpHandler::Initialize).
+
+**2026-10-17, P2P framing:** co-op with a Windows-port player failed (bell offers sent every
+500 ms for 30 s, never answered: `SIGNALING_ERROR_TIMEOUT`). Upstream bbport's module is the
+shadp2p tree, whose UDP frame is `[src vport][dst vport] + payload`; mainline shadPS4 v0.20.0 and
+the Windows port (Supermedo/bloodborne_pc vendors it) use `core/net/p2p_codec.cpp`'s FramingCodec:
+`[0xFF][0x80|kind][src vport][dst vport][optional 4-byte communication id] + payload`, with P2P
+crypto, so neither side could parse the other. `gpu/bbnet/shadps4` is now mainline v0.20.0's
+`src/core/libraries/{net,network,np}`, `src/core/net` and `src/shadnet` (529ceb32), LF line
+endings, unchanged except where marked `bbport` (the version string, RecvN's EINTR retry, the
+login retry); its host networking has a native kqueue/pipe path, so epoll-shim is gone.
+`BbNetHost` ABI 2 adds `thread_exit` (sceNetThreadExit) and `memory_is_mapped`. The module must
+call `Libraries::Net::InstallKernelIntegration()` itself (mainline does it from libkernel) or no
+socket can be created. `BB_P2P_PORT` / `p2p_port=` picks the UDP port (3658 by default, mainline's).
+`tests/test_p2p_codec.cpp` (`out/gpu/bbnet-codec-test`) pins the frame layout. Co-op itself is
+still untested from this port (needs a second player).
 
 ## Gotchas learned
 

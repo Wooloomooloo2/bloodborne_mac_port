@@ -6,7 +6,6 @@
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <fstream>
@@ -19,14 +18,15 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <fmt/format.h>
 #include <nlohmann/json.hpp>
+#include <zlib.h>
 #include "common/elf_info.h"
 #include "common/logging/log.h"
 #include "common/path_util.h"
-#include "core/bloodborne_re.h"
-#include "core/debugger.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
+#include "core/libraries/kernel/kernel.h"
 #include "core/libraries/kernel/orbis_error.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/libs.h"
@@ -57,7 +57,8 @@ struct HttpSettings {
     u64 response_header_max = 0; // Max response-header bytes accepted; 0 = default
     bool auto_redirect = true;
     bool inflate_gzip = true;                     // Auto-decompress response body if gzipped
-    bool accept_encoding_gzip = true;             // Send "Accept-Encoding: gzip" request header
+    bool accept_encoding_gzip = false;            // Send "Accept-Encoding: gzip" request header.
+    bool cache_redirected_connection = true;      // sceHttpCacheRedirectedConnectionEnabled.
     u32 ssl_flags = ORBIS_HTTPS_FLAG_SDK_DEFAULT; // SSL flag mask. Bitmask of OrbisHttpsFlags.
     bool nonblock = false; // false = blocking (default), true = nonblock (EAGAIN)
     // (0 = no proxy, 1 = manual host:port, 2 = automatic/PAC).
@@ -101,6 +102,14 @@ struct HttpConnection {
     std::vector<std::pair<std::string, std::string>> headers;
 };
 
+// redirect target
+struct ResolvedRedirect {
+    std::string scheme;
+    std::string host;
+    u16 port;
+    std::string path;
+};
+
 struct HttpResponse {
     int status_code = 0;
     u64 content_length = 0;
@@ -133,7 +142,7 @@ struct HttpState {
     bool inited = false;
     int next_ctx_id = 0;
     int next_obj_id = 0;
-    bool default_accept_encoding_gzip = true; // Library-wide default for new templates
+    bool default_accept_encoding_gzip = false;
     std::unordered_set<int> active_contexts;
     // Contexts where sceHttpsLoadCert was called. We can't actually parse the
     // PS4 cert blobs, but we use this as a signal that
@@ -144,6 +153,8 @@ struct HttpState {
     std::unordered_map<int, HttpConnection> connections;
     std::unordered_map<int, std::shared_ptr<HttpRequest>> requests;
     std::unordered_map<int, std::shared_ptr<Epoll>> epolls;
+    // 301-redirect cache
+    std::unordered_map<int, std::unordered_map<std::string, ResolvedRedirect>> redirect_cache_301;
     std::atomic<bool> shutting_down{false};
 };
 
@@ -203,6 +214,7 @@ static bool ResolveEpollBinding(int id, int*& epoll_id_out, void**& user_arg_out
 }
 
 static bool HeaderNameMatches(std::string_view a, std::string_view b);
+static bool IsCredentialHeader(std::string_view name);
 static std::string HttpStatusLabel(int sc);
 
 // JSON shape: flat object mapping endpoint -> replacement URL. Example:
@@ -210,16 +222,14 @@ static std::string HttpStatusLabel(int sc);
 //     "api.something.dev":                    "http://localhost:8080",
 //     "discovery.something.com:5300":         "http://localhost:8080",
 //     "https://api.example.com:443":          "http://localhost:8081",
-//     "http://game.example.com:18671/summon": "http://localhost:31315",
 //     "*":                                    "http://localhost:8080"
 //   }
 //
 // Keys are tried in order of specificity, most-specific first:
-//   1. "scheme://host:port/path" - matches that endpoint and path prefix
-//   2. "scheme://host:port"      - matches that exact endpoint
-//   3. "host:port"               - matches host+port on any scheme
-//   4. "host"                    - matches host on any scheme/port (most common)
-//   5. "*"                       - catch-all fallback
+//   1. "scheme://host:port" - matches that exact endpoint
+//   2. "host:port"          - matches host+port on any scheme
+//   3. "host"               - matches host on any scheme/port (most common)
+//   4. "*"                  - catch-all fallback
 //
 // Replacement value is a URL with scheme + host + optional port. When port is
 // omitted the default for the scheme is used (80 for http, 443 for https).
@@ -234,8 +244,7 @@ struct HostOverrideTarget {
 std::unordered_map<std::string, HostOverrideTarget> ParseHostOverridesJson(
     const std::string& json_text);
 
-bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& is_secure,
-                       std::string_view path = {});
+bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& is_secure);
 
 // Populate a response object with the shape a transport-level failure produces:
 // no status line, no headers, no body. Used by the no-internet path.
@@ -356,14 +365,12 @@ static const HostOverrideState& GetHostOverrideState() {
     return s;
 }
 
-bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& is_secure,
-                       std::string_view path) {
+bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& is_secure) {
     const auto& state = GetHostOverrideState();
     if (state.entries.empty()) {
         return false;
     }
     // Look up most-specific match first. Keys can be:
-    //   "scheme://host:port/path" - matches that endpoint and path prefix
     //   "scheme://host:port"  - matches that exact endpoint
     //   "host:port"           - matches host+port on any scheme
     //   "host"                - matches host on any scheme/port
@@ -371,44 +378,7 @@ bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& 
     const std::string full_key = scheme + "://" + host + ":" + std::to_string(port);
     const std::string host_port_key = host + ":" + std::to_string(port);
 
-    auto find_path_prefix = [&](const std::string& endpoint) {
-        auto best = state.entries.end();
-        std::size_t best_prefix_size = 0;
-        if (path.empty()) {
-            return best;
-        }
-        for (auto candidate = state.entries.begin(); candidate != state.entries.end();
-             ++candidate) {
-            const std::string& key = candidate->first;
-            if (key.size() <= endpoint.size() || !key.starts_with(endpoint) ||
-                key[endpoint.size()] != '/') {
-                continue;
-            }
-            const std::string_view prefix{key.data() + endpoint.size(),
-                                          key.size() - endpoint.size()};
-            if (!path.starts_with(prefix)) {
-                continue;
-            }
-            const bool boundary_match =
-                path.size() == prefix.size() || prefix.ends_with('/') || path[prefix.size()] == '/';
-            if (boundary_match && prefix.size() > best_prefix_size) {
-                best = candidate;
-                best_prefix_size = prefix.size();
-            }
-        }
-        return best;
-    };
-
-    auto it = find_path_prefix(full_key);
-    if (it == state.entries.end()) {
-        it = find_path_prefix(host_port_key);
-    }
-    if (it == state.entries.end()) {
-        it = find_path_prefix(host);
-    }
-    if (it == state.entries.end()) {
-        it = state.entries.find(full_key);
-    }
+    auto it = state.entries.find(full_key);
     if (it == state.entries.end()) {
         it = state.entries.find(host_port_key);
     }
@@ -464,6 +434,7 @@ struct SendRequestPlan {
     // True if the request's owning ctx had sceHttpsLoadCert called. In that
     // case we bypass TLS verification because we can't load the game's CAs.
     bool ctx_has_loaded_certs = false;
+    int ctx_id = 0;
 };
 
 // Extract the path-and-query portion from a full URL
@@ -596,6 +567,9 @@ static void LogSendRequestSettings(const HttpRequest& req, int reqId, u64 body_s
             return;
         }
         for (const auto& [name, value] : h) {
+            if (IsCredentialHeader(name)) {
+                continue;
+            }
             LOG_INFO(Lib_Http, "  header[{}] {}: {}", origin, name, value);
         }
     };
@@ -663,6 +637,12 @@ static s32 TranslateHttplibError(httplib::Error err) {
 
 constexpr int MaxRedirects = 5;
 
+// Key for HttpState::redirect_cache_301, identifying a requested URL (not a redirect target).
+static std::string Make301CacheKey(const std::string& scheme, const std::string& host, u16 port,
+                                   const std::string& path) {
+    return scheme + "://" + host + ":" + std::to_string(port) + path;
+}
+
 bool IsFollowableRedirect(int status, s32 method) {
     const bool status_in_set = (status >= 300 && status <= 303) || (status == 307);
     if (!status_in_set) {
@@ -674,174 +654,6 @@ bool IsFollowableRedirect(int status, s32 method) {
     return true;
 }
 
-bool EnvFlagEnabled(const char* name) {
-    const char* enabled = std::getenv(name);
-    return enabled != nullptr && enabled[0] != '\0' && std::string_view{enabled} != "0";
-}
-
-bool IsBloodborneSummonPath(std::string_view path) {
-    return path.find("/summon_messenger/") != std::string_view::npos;
-}
-
-constexpr std::string_view BloodborneHostPlacementHeader = "X-ShadPS4-Bloodborne-Host-Placement";
-
-bool IsBloodborneSummonRequestPath(std::string_view path) {
-    return path.find("/summon_messenger/request") != std::string_view::npos;
-}
-
-bool IsBloodborneSummonSearchPath(std::string_view path) {
-    return path.find("/summon_messenger/get") != std::string_view::npos;
-}
-
-bool IsBloodborneSummonCreatePath(std::string_view path) {
-    return path.find("/summon_messenger/create") != std::string_view::npos;
-}
-
-std::optional<std::string_view> FindResponseHeader(std::string_view headers,
-                                                   std::string_view name) {
-    size_t line_start = 0;
-    while (line_start < headers.size()) {
-        const size_t line_end = headers.find("\r\n", line_start);
-        const std::string_view line = headers.substr(line_start, line_end == std::string_view::npos
-                                                                     ? headers.size() - line_start
-                                                                     : line_end - line_start);
-        const size_t colon = line.find(':');
-        if (colon != std::string_view::npos && HeaderNameMatches(line.substr(0, colon), name)) {
-            size_t value_start = colon + 1;
-            while (value_start < line.size() &&
-                   (line[value_start] == ' ' || line[value_start] == '\t')) {
-                ++value_start;
-            }
-            return line.substr(value_start);
-        }
-        if (line_end == std::string_view::npos) {
-            break;
-        }
-        line_start = line_end + 2;
-    }
-    return std::nullopt;
-}
-
-bool ShouldCaptureBloodborneSummon(const SendRequestPlan& plan) {
-    return EnvFlagEnabled("SHADPS4_CAPTURE_BLOODBORNE_SUMMON") && IsBloodborneSummonPath(plan.path);
-}
-
-void CaptureBloodborneSummon(const SendRequestPlan& plan, const HttpResponse& response,
-                             s32 request_error) {
-    if (!ShouldCaptureBloodborneSummon(plan)) {
-        return;
-    }
-
-    static std::atomic<u64> next_capture_id{1};
-    const u64 capture_id = next_capture_id.fetch_add(1, std::memory_order_relaxed);
-    const auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::system_clock::now().time_since_epoch())
-                               .count();
-    const auto capture_dir =
-        Common::FS::GetUserPath(Common::FS::PathType::CapturesDir) / "bloodborne-summon";
-    std::error_code error;
-    std::filesystem::create_directories(capture_dir, error);
-    if (error) {
-        LOG_ERROR(Lib_Http, "Could not create Bloodborne summon capture directory {}: {}",
-                  Common::FS::PathToUTF8String(capture_dir), error.message());
-        return;
-    }
-
-    const std::string stem = "summon-" + std::to_string(timestamp) + "-p" +
-                             std::to_string(Core::Debugger::GetCurrentPid()) + '-' +
-                             std::to_string(capture_id);
-    const auto request_path = capture_dir / (stem + "-request.bin");
-    const auto response_path = capture_dir / (stem + "-response.bin");
-    const auto metadata_path = capture_dir / (stem + ".txt");
-
-    std::ofstream request_file(request_path, std::ios::binary);
-    std::ofstream response_file(response_path, std::ios::binary);
-    std::ofstream metadata_file(metadata_path);
-    if (!request_file || !response_file || !metadata_file) {
-        LOG_ERROR(Lib_Http, "Could not open Bloodborne summon capture files under {}",
-                  Common::FS::PathToUTF8String(capture_dir));
-        return;
-    }
-
-    request_file.write(reinterpret_cast<const char*>(plan.body.data()),
-                       static_cast<std::streamsize>(plan.body.size()));
-    response_file.write(reinterpret_cast<const char*>(response.body.data()),
-                        static_cast<std::streamsize>(response.body.size()));
-    metadata_file << "method=" << HttpMethodName(plan.method) << '\n'
-                  << "url=" << plan.scheme << "://" << plan.host << ':' << plan.port << plan.path
-                  << '\n'
-                  << "request_bytes=" << plan.body.size() << '\n'
-                  << "status=" << response.status_code << '\n'
-                  << "response_bytes=" << response.body.size() << '\n'
-                  << "request_error=" << request_error << '\n';
-    for (const auto& [name, value] : plan.headers) {
-        if (HeaderNameMatches(name, BloodborneHostPlacementHeader)) {
-            metadata_file << "host_placement_request=" << value << '\n';
-        }
-    }
-    if (const auto placement =
-            FindResponseHeader(response.all_headers_blob, BloodborneHostPlacementHeader)) {
-        metadata_file << "host_placement_response=" << *placement << '\n';
-    }
-
-    LOG_INFO(Lib_Http, "Captured Bloodborne summon exchange {} under {}", capture_id,
-             Common::FS::PathToUTF8String(capture_dir));
-}
-
-void RewriteHostHeader(SendRequestPlan& plan) {
-    std::string host_value = plan.host;
-    const bool default_port =
-        (plan.scheme == "https" && plan.port == 443) || (plan.scheme == "http" && plan.port == 80);
-    if (!default_port) {
-        host_value += ":" + std::to_string(plan.port);
-    }
-    for (auto& [k, v] : plan.headers) {
-        if (HeaderNameMatches(k, "Host")) {
-            v = host_value;
-        }
-    }
-}
-
-bool ApplyBloodborneSeamlessRoute(SendRequestPlan& plan) {
-    if (!EnvFlagEnabled("SHADPS4_BLOODBORNE_SEAMLESS_COOP") ||
-        !EmulatorSettings.IsShadNetEnabled() || !IsBloodborneSummonPath(plan.path)) {
-        return false;
-    }
-
-    const std::string base_url = EmulatorSettings.GetShadNetWebApiServer();
-    const HostOverrideTarget target = ParseHostOverrideTarget(base_url);
-    if (target.host.empty()) {
-        LOG_WARNING(Lib_Http,
-                    "Bloodborne seamless route requested, but shadNet WebAPI server is empty");
-        return false;
-    }
-
-    const std::string old_scheme = plan.scheme;
-    const std::string old_host = plan.host;
-    const u16 old_port = plan.port;
-
-    if (!target.scheme.empty()) {
-        plan.scheme = target.scheme;
-    }
-    plan.host = target.host;
-    if (target.port != 0) {
-        plan.port = target.port;
-    } else if (plan.scheme != old_scheme) {
-        plan.port = (plan.scheme == "https") ? 443 : 80;
-    }
-    RewriteHostHeader(plan);
-    plan.headers.emplace_back("X-ShadPS4-Bloodborne-Seamless", "1");
-    if (IsBloodborneSummonRequestPath(plan.path) || IsBloodborneSummonSearchPath(plan.path)) {
-        if (const auto placement = Core::Bloodborne::GetSeamlessHostPlacementHeader()) {
-            plan.headers.emplace_back(BloodborneHostPlacementHeader, *placement);
-        }
-    }
-
-    LOG_INFO(Lib_Http, "Bloodborne seamless route active: {}://{}:{}{} -> {}://{}:{}{}", old_scheme,
-             old_host, old_port, plan.path, plan.scheme, plan.host, plan.port, plan.path);
-    return true;
-}
-
 // 303 changes the new method to GET unless original was HEAD
 // Every other followable status preserves the original method.
 s32 MethodAfterRedirect(int status, s32 original_method) {
@@ -850,13 +662,6 @@ s32 MethodAfterRedirect(int status, s32 original_method) {
     }
     return original_method;
 }
-
-struct ResolvedRedirect {
-    std::string scheme;
-    std::string host;
-    u16 port;
-    std::string path;
-};
 
 // Resolve a Location value relative to the current request's authority.
 // Handles absolute URLs and absolute-path-relative forms
@@ -917,6 +722,48 @@ std::optional<ResolvedRedirect> ResolveRedirectLocation(const std::string& curre
     return std::nullopt;
 }
 
+// Inflate a strictly GZIP-formatted body (header + deflate stream + trailer).
+static std::optional<std::vector<u8>> InflateGzipBody(const std::string& compressed) {
+    if (compressed.empty()) {
+        return std::vector<u8>{};
+    }
+    z_stream strm{};
+    if (inflateInit2(&strm, 15 + 16) != Z_OK) {
+        return std::nullopt;
+    }
+    strm.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(compressed.data()));
+    strm.avail_in = static_cast<uInt>(compressed.size());
+
+    std::vector<u8> out;
+    out.resize(std::max<size_t>(compressed.size() * 3, 4096));
+    size_t produced = 0;
+    int ret = Z_OK;
+    while (true) {
+        if (produced == out.size()) {
+            out.resize(out.size() * 2);
+        }
+        strm.next_out = reinterpret_cast<Bytef*>(out.data() + produced);
+        strm.avail_out = static_cast<uInt>(out.size() - produced);
+        const uInt avail_out_before = strm.avail_out;
+        ret = inflate(&strm, Z_NO_FLUSH);
+        produced += (avail_out_before - strm.avail_out);
+        if (ret == Z_STREAM_END) {
+            break;
+        }
+        if (ret != Z_OK) {
+            inflateEnd(&strm);
+            return std::nullopt;
+        }
+        if (strm.avail_in == 0 && strm.avail_out > 0) {
+            inflateEnd(&strm);
+            return std::nullopt;
+        }
+    }
+    inflateEnd(&strm);
+    out.resize(produced);
+    return out;
+}
+
 static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_res,
                               u32& out_event_bits) {
     out_event_bits = 0;
@@ -944,6 +791,48 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
     };
 
     for (int depth = 0; depth <= MaxRedirects; ++depth) {
+        // Replay a cached 301 target.
+        if (depth < MaxRedirects && plan.settings.auto_redirect &&
+            plan.settings.cache_redirected_connection) {
+            std::optional<ResolvedRedirect> cached;
+            {
+                std::lock_guard<std::mutex> lock(g_state.m_mutex);
+                if (auto ctx_it = g_state.redirect_cache_301.find(plan.ctx_id);
+                    ctx_it != g_state.redirect_cache_301.end()) {
+                    const std::string key =
+                        Make301CacheKey(plan.scheme, plan.host, plan.port, plan.path);
+                    if (auto it = ctx_it->second.find(key); it != ctx_it->second.end()) {
+                        cached = it->second;
+                    }
+                }
+            }
+            if (cached) {
+                const bool host_changed =
+                    (cached->host != plan.host) || (cached->port != plan.port);
+                LOG_INFO(Lib_Http, "redirect: depth={} cached 301 {}://{}:{}{} -> {}://{}:{}{}",
+                         depth, plan.scheme, plan.host, plan.port, plan.path, cached->scheme,
+                         cached->host, cached->port, cached->path);
+                plan.scheme = std::move(cached->scheme);
+                plan.host = std::move(cached->host);
+                plan.port = cached->port;
+                plan.path = std::move(cached->path);
+                if (host_changed) {
+                    std::string host_value = plan.host;
+                    const bool default_port = (plan.scheme == "https" && plan.port == 443) ||
+                                              (plan.scheme == "http" && plan.port == 80);
+                    if (!default_port) {
+                        host_value += ":" + std::to_string(plan.port);
+                    }
+                    for (auto& [k, v] : plan.headers) {
+                        if (HeaderNameMatches(k, "Host")) {
+                            v = host_value;
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         if (plan.scheme == "https" && !ORBIS_HTTP_HAS_HTTPS) {
             LOG_ERROR(Lib_Http, "HTTPS request but cpp-httplib lacks OpenSSL support");
             SynthesizeTransportFailureResponse(out_res);
@@ -962,16 +851,22 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
 
         // We always handle redirects manually per PS4 rules
         cli.set_follow_location(false);
+        cli.set_decompress(false);
 
-#ifdef CPPHTTPLIB_ZLIB_SUPPORT
-        cli.set_decompress(plan.settings.inflate_gzip);
-#endif
+        bool game_set_accept_encoding = false;
+        for (const auto& [k, v] : plan.headers) {
+            if (HeaderNameMatches(k, "Accept-Encoding")) {
+                game_set_accept_encoding = true;
+                break;
+            }
+        }
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         if (plan.scheme == "https") {
+            const bool config_disabled_verify = EmulatorSettings.IsForcedHttpsDisabled();
             const bool game_disabled_verify =
                 (plan.settings.ssl_flags & ORBIS_HTTPS_FLAG_SERVER_VERIFY) == 0;
-            bool verify_server = !game_disabled_verify;
+            bool verify_server = !config_disabled_verify && !game_disabled_verify;
             if (verify_server && plan.ctx_has_loaded_certs) {
                 verify_server = false;
                 LOG_INFO(Lib_Http,
@@ -980,7 +875,10 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
                          plan.scheme, plan.host);
             }
             cli.enable_server_certificate_verification(verify_server);
-            if (game_disabled_verify) {
+            if (config_disabled_verify) {
+                LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled by configuration",
+                         plan.scheme, plan.host);
+            } else if (game_disabled_verify) {
                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled (ssl_flags={:#x})",
                          plan.scheme, plan.host, plan.settings.ssl_flags);
             }
@@ -991,17 +889,8 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
         for (const auto& [k, v] : plan.headers) {
             headers.emplace(k, v);
         }
-        if (plan.settings.accept_encoding_gzip) {
-            bool already_set = false;
-            for (const auto& [k, v] : plan.headers) {
-                if (HeaderNameMatches(k, "Accept-Encoding")) {
-                    already_set = true;
-                    break;
-                }
-            }
-            if (!already_set) {
-                headers.emplace("Accept-Encoding", "gzip");
-            }
+        if (plan.settings.accept_encoding_gzip && !game_set_accept_encoding) {
+            headers.emplace("Accept-Encoding", "gzip");
         }
 
         const char* body_ptr =
@@ -1049,10 +938,33 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
 
         // Populate response (overwrites any prior-iteration 3xx).
         out_res.status_code = result->status;
-        out_res.body.assign(result->body.begin(), result->body.end());
-        out_res.content_length = result->body.size();
         out_res.content_length_result = 0;
         out_res.read_cursor = 0;
+
+        // Inflate only when the response is actually GZIP-encoded and the flag is enabled
+        std::string content_encoding;
+        for (const auto& [k, v] : result->headers) {
+            if (HeaderNameMatches(k, "Content-Encoding")) {
+                content_encoding = v;
+                break;
+            }
+        }
+        bool inflated = false;
+        if (plan.settings.inflate_gzip && HeaderNameMatches(content_encoding, "gzip")) {
+            if (auto inflated_body = InflateGzipBody(result->body)) {
+                out_res.body = std::move(*inflated_body);
+                inflated = true;
+            } else {
+                LOG_ERROR(Lib_Http,
+                          "{}://{}{}: Content-Encoding: gzip but body failed to inflate; "
+                          "returning raw bytes",
+                          plan.scheme, plan.host, plan.path);
+            }
+        }
+        if (!inflated) {
+            out_res.body.assign(result->body.begin(), result->body.end());
+        }
+        out_res.content_length = out_res.body.size();
         std::string reason;
         {
             const std::string label = HttpStatusLabel(result->status);
@@ -1105,6 +1017,15 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
         const s32 prev_method = plan.method;
         const s32 next_method = MethodAfterRedirect(prev_status, prev_method);
         const bool host_changed = (resolved->host != plan.host) || (resolved->port != plan.port);
+
+        if (prev_status == 301 && plan.settings.cache_redirected_connection) {
+            const std::string cache_key =
+                Make301CacheKey(plan.scheme, plan.host, plan.port, plan.path);
+            ResolvedRedirect cache_value{resolved->scheme, resolved->host, resolved->port,
+                                         resolved->path};
+            std::lock_guard<std::mutex> lock(g_state.m_mutex);
+            g_state.redirect_cache_301[plan.ctx_id][cache_key] = std::move(cache_value);
+        }
 
         plan.scheme = std::move(resolved->scheme);
         plan.host = std::move(resolved->host);
@@ -1166,6 +1087,26 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
         }
     }
     return true;
+}
+
+static bool IsCredentialHeader(std::string_view name) {
+    return HeaderNameMatches(name, "Authorization") ||
+           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
+}
+
+static std::string GetLibhttpSystemVersionString() {
+    constexpr u32 sw_hex = CURRENT_FIRMWARE_VERSION;
+    const u32 major = ((sw_hex >> 0x18) & 0xf) + ((sw_hex >> 0x1c) * 10);
+    const u32 minor = ((sw_hex >> 0x10) & 0xf) + (((sw_hex >> 0x14) & 0xf) * 10);
+    return fmt::format("{}.{:02}", major, minor);
+}
+
+static std::string BuildLibhttpUserAgent(std::string_view app_user_agent) {
+    const std::string libhttp_tag = fmt::format("libhttp/{}", GetLibhttpSystemVersionString());
+    if (app_user_agent.empty()) {
+        return fmt::format("{} (PlayStation 4)", libhttp_tag);
+    }
+    return fmt::format("{} {} (PlayStation 4)", app_user_agent, libhttp_tag);
 }
 
 // Resolve the headers vector for a template/connection/request id. Returns
@@ -1342,7 +1283,21 @@ int PS4_SYSV_ABI sceHttpAuthCacheImport() {
 }
 
 int PS4_SYSV_ABI sceHttpCacheRedirectedConnectionEnabled(int id, int isEnable) {
-    LOG_ERROR(Lib_Http, "(STUBBED) called id={}, isEnable={}", id, isEnable);
+    LOG_INFO(Lib_Http, "called id={}, isEnable={}", id, isEnable);
+    std::lock_guard<std::mutex> lock(g_state.m_mutex);
+    if (!g_state.inited) {
+        LOG_ERROR(Lib_Http, "Not initialized");
+        return ORBIS_HTTP_ERROR_BEFORE_INIT;
+    }
+    const char* level = "";
+    HttpSettings* s = ResolveSettings(id, level);
+    if (!s) {
+        LOG_ERROR(Lib_Http, "Invalid Id");
+        return ORBIS_HTTP_ERROR_INVALID_ID;
+    }
+    s->cache_redirected_connection = (isEnable != 0);
+    LOG_INFO(Lib_Http, "cache_redirected_connection={} at {} level (id={})",
+             s->cache_redirected_connection, level, id);
     return ORBIS_OK;
 }
 
@@ -1460,8 +1415,7 @@ int PS4_SYSV_ABI sceHttpCreateConnectionWithURL(int tmplId, const char* url, boo
     scheme_str = is_secure ? "https" : "http";
     u16 port = parsed.port;
     std::string host_str = parsed.hostname;
-    ApplyHostOverride(scheme_str, host_str, port, is_secure,
-                      parsed.path ? std::string_view{parsed.path} : std::string_view{"/"});
+    ApplyHostOverride(scheme_str, host_str, port, is_secure);
 
     std::lock_guard<std::mutex> lock(g_state.m_mutex);
     if (!g_state.inited) {
@@ -1581,7 +1535,7 @@ int PS4_SYSV_ABI sceHttpCreateTemplate(int libhttpCtxId, const char* userAgent, 
     const int tmpl_id = ++g_state.next_obj_id;
     HttpTemplate tmpl;
     tmpl.ctx_id = libhttpCtxId;
-    tmpl.user_agent = userAgent ? userAgent : "";
+    tmpl.user_agent = BuildLibhttpUserAgent(userAgent ? userAgent : "");
     tmpl.http_version = httpVer;
     tmpl.auto_proxy_conf = isAutoProxyConf;
     tmpl.settings.accept_encoding_gzip = g_state.default_accept_encoding_gzip;
@@ -1696,7 +1650,24 @@ int PS4_SYSV_ABI sceHttpInit(int libnetMemId, int libsslCtxId, u64 poolSize) {
 }
 
 int PS4_SYSV_ABI sceHttpRedirectCacheFlush(int libhttpCtxId) {
-    LOG_ERROR(Lib_Http, "(STUBBED) called libhttpCtxId={}", libhttpCtxId);
+    LOG_INFO(Lib_Http, "called libhttpCtxId={}", libhttpCtxId);
+    std::lock_guard<std::mutex> lock(g_state.m_mutex);
+    if (!g_state.inited) {
+        LOG_ERROR(Lib_Http, "Not initialized");
+        return ORBIS_HTTP_ERROR_BEFORE_INIT;
+    }
+    if (!g_state.active_contexts.contains(libhttpCtxId)) {
+        LOG_ERROR(Lib_Http, "Invalid libhttpCtxId={}", libhttpCtxId);
+        return ORBIS_HTTP_ERROR_INVALID_ID;
+    }
+    size_t cached_count = 0;
+    if (auto it = g_state.redirect_cache_301.find(libhttpCtxId);
+        it != g_state.redirect_cache_301.end()) {
+        cached_count = it->second.size();
+    }
+    g_state.redirect_cache_301.erase(libhttpCtxId);
+    LOG_INFO(Lib_Http, "flushed {} cached 301 redirect(s) for ctxId={}", cached_count,
+             libhttpCtxId);
     return ORBIS_OK;
 }
 
@@ -1743,6 +1714,7 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         }
         plan.path = ExtractPathFromUrl(req.url);
         plan.settings = req.settings;
+        std::string tmpl_user_agent;
         if (auto conn_it = g_state.connections.find(req.conn_id);
             conn_it != g_state.connections.end()) {
             plan.scheme = conn_it->second.scheme;
@@ -1752,10 +1724,12 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
             if (auto tmpl_it = g_state.templates.find(conn_it->second.tmpl_id);
                 tmpl_it != g_state.templates.end()) {
                 plan.headers = tmpl_it->second.headers;
+                tmpl_user_agent = tmpl_it->second.user_agent;
                 // Check if the owning context loaded custom CAs - if so the
                 // worker will bypass TLS verification.
                 plan.ctx_has_loaded_certs =
                     g_state.contexts_with_loaded_certs.contains(tmpl_it->second.ctx_id);
+                plan.ctx_id = tmpl_it->second.ctx_id;
             }
             for (const auto& h : conn_it->second.headers) {
                 plan.headers.push_back(h);
@@ -1763,6 +1737,13 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         }
         for (const auto& h : req.headers) {
             plan.headers.push_back(h);
+        }
+        // The template's User-Agent is used unless a header explicitly overrides it
+        if (std::none_of(plan.headers.begin(), plan.headers.end(),
+                         [](const auto& h) { return HeaderNameMatches(h.first, "User-Agent"); })) {
+            plan.headers.emplace_back("User-Agent", !tmpl_user_agent.empty()
+                                                        ? tmpl_user_agent
+                                                        : BuildLibhttpUserAgent(""));
         }
         // Pull Content-Type out of headers
         for (const auto& [k, v] : plan.headers) {
@@ -1776,8 +1757,6 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
                              static_cast<const u8*>(postData) + size);
         }
     }
-
-    ApplyBloodborneSeamlessRoute(plan);
 
     const bool online = EmulatorSettings.IsConnectedToNetwork();
     LOG_INFO(Lib_Http, "reqId={} dispatched to async worker [{} {} {}://{}:{}{}]", reqId,
@@ -1795,19 +1774,6 @@ int PS4_SYSV_ABI sceHttpSendRequest(int reqId, const void* postData, u64 size) {
         } else {
             worker_errno = RunRealHttpRequest(plan, local_res, success_event_bits);
         }
-
-        if (worker_errno == 0 && IsBloodborneSummonPath(plan.path)) {
-            if (const auto placement =
-                    FindResponseHeader(local_res.all_headers_blob, BloodborneHostPlacementHeader);
-                placement.has_value() &&
-                !Core::Bloodborne::SetSeamlessHostPlacementHeader(*placement)) {
-                LOG_WARNING(Lib_Http, "Ignored invalid Bloodborne host-placement header");
-            } else if (!placement.has_value() && IsBloodborneSummonCreatePath(plan.path)) {
-                Core::Bloodborne::ClearSeamlessHostPlacementHeader();
-            }
-        }
-
-        CaptureBloodborneSummon(plan, local_res, worker_errno);
 
         std::lock_guard<std::mutex> lock(g_state.m_mutex);
         if (g_state.shutting_down.load() || req_ptr->deleted ||
@@ -2166,6 +2132,7 @@ int PS4_SYSV_ABI sceHttpTerm(int libhttpCtxId) {
         return ORBIS_HTTP_ERROR_INVALID_ID;
     }
     g_state.contexts_with_loaded_certs.erase(libhttpCtxId);
+    g_state.redirect_cache_301.erase(libhttpCtxId);
     if (g_state.active_contexts.empty()) {
         // Last context torn down - wipe all dependent objects.
         LOG_INFO(Lib_Http, "last context terminated, clearing state");
@@ -2194,6 +2161,7 @@ int PS4_SYSV_ABI sceHttpTerm(int libhttpCtxId) {
         g_state.templates.clear();
         g_state.epolls.clear();
         g_state.contexts_with_loaded_certs.clear();
+        g_state.redirect_cache_301.clear();
         g_state.inited = false;
     } else {
         LOG_INFO(Lib_Http, "ctxId={} terminated, {} contexts still active", libhttpCtxId,
@@ -2628,6 +2596,10 @@ int PS4_SYSV_ABI sceHttpsDisableOptionPrivate(int id, u32 sslFlags) {
 
 int PS4_SYSV_ABI sceHttpsEnableOption(int id, u32 sslFlags) {
     LOG_INFO(Lib_Http, "called id={}, sslFlags={:#x}", id, sslFlags);
+    if (EmulatorSettings.IsForcedHttpsDisabled()) {
+        LOG_INFO(Lib_Http, "HTTPS is forced disabled, disabling options for id={}", id);
+        return sceHttpsDisableOption(id, sslFlags);
+    }
     std::lock_guard<std::mutex> lock(g_state.m_mutex);
     if (!g_state.inited) {
         LOG_ERROR(Lib_Http, "Not initialized");
@@ -2651,6 +2623,9 @@ int PS4_SYSV_ABI sceHttpsEnableOption(int id, u32 sslFlags) {
 
 int PS4_SYSV_ABI sceHttpsEnableOptionPrivate(int id, u32 sslFlags) {
     LOG_INFO(Lib_Http, "called id={}, sslFlags={:#x}", id, sslFlags);
+    if (EmulatorSettings.IsForcedHttpsDisabled()) {
+        return sceHttpsDisableOptionPrivate(id, sslFlags);
+    }
     // Same as sceHttpsEnableOption but accepts the wider Private
     // bit-mask (ORBIS_HTTPS_FLAG_PRIVATE_VALID).
     std::lock_guard<std::mutex> lock(g_state.m_mutex);
@@ -2855,8 +2830,11 @@ int PS4_SYSV_ABI sceHttpSetInflateGZIPEnabled(int id, int isEnable) {
 // Http Header setting functions
 //***********************************
 int PS4_SYSV_ABI sceHttpAddRequestHeader(int id, const char* name, const char* value, s32 mode) {
-    LOG_INFO(Lib_Http, "called id={}, name={}, value={}, mode={}", id, name ? name : "(null)",
-             value ? value : "(null)", mode);
+    const bool is_credential_header = name && IsCredentialHeader(name);
+    if (!is_credential_header) {
+        LOG_INFO(Lib_Http, "called id={}, name={}, value={}, mode={}", id, name ? name : "(null)",
+                 value ? value : "(null)", mode);
+    }
     std::lock_guard<std::mutex> lock(g_state.m_mutex);
     if (!g_state.inited) {
         LOG_ERROR(Lib_Http, "Not initialized");
@@ -2883,8 +2861,10 @@ int PS4_SYSV_ABI sceHttpAddRequestHeader(int id, const char* name, const char* v
             headers->end());
     }
     headers->emplace_back(name, value);
-    LOG_INFO(Lib_Http, "added header at {} id={}: {}: {} (mode={}, total now {})", level, id, name,
-             value, mode, headers->size());
+    if (!is_credential_header) {
+        LOG_INFO(Lib_Http, "added header at {} id={}: {}: {} (mode={}, total now {})", level, id,
+                 name, value, mode, headers->size());
+    }
     return ORBIS_OK;
 }
 

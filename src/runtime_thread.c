@@ -429,6 +429,7 @@ int32_t runtime_thread_spawn(void **out,void *(ABI *entry)(void *),void *argumen
 int32_t runtime_thread_join_spawned(void *thread,void **result) {
     return posix(thread_join((GuestThread *)thread,result));
 }
+void runtime_thread_exit_spawned(void *result) { thread_exit(result); }
 
 uintptr_t runtime_thread_resolve(const char *name) {
     static const struct { const char *nid; void *fn; } table[]={

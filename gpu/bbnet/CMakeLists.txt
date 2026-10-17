@@ -1,13 +1,16 @@
 # bbport online module: libbbnet (.so on Linux, .dylib on macOS), the PS4 network and PSN
-# libraries with the shadNet client (shadp2p, a shadPS4 fork, GPL-2.0), loaded by the runtime
-# only for online play (src/runtime_net.c). Its headers (include/) extend the port's shim for
-# these libraries alone; everything in it is hidden and bound to itself except bbnet.h's two
-# calls, so its copies of shadPS4's kernel shims and symbol table never meet libbbgpu's
-# (Linux: -Bsymbolic and --exclude-libs; macOS: an export list, and ld64's two-level namespace
-# already binds a library's own symbols to itself).
+# libraries with the shadNet client, loaded by the runtime only for online play
+# (src/runtime_net.c). shadps4/ is shadPS4 v0.20.0's (529ceb32, GPL-2.0) src/core/libraries/net,
+# network and np, src/core/net (the P2P transport: one UDP socket, FramingCodec, P2P crypto,
+# the TCP-over-UDP streams) and src/shadnet, unchanged except where marked "bbport"; its
+# host networking has a kqueue path, so macOS needs no epoll shim. Its headers (include/)
+# extend the port's shim for these libraries alone; everything in it is hidden and bound to
+# itself except bbnet.h's two calls, so its copies of shadPS4's kernel shims and symbol table
+# never meet libbbgpu's (Linux: -Bsymbolic and --exclude-libs; macOS: an export list, and
+# ld64's two-level namespace already binds a library's own symbols to itself).
 # Needs protobuf, nlohmann_json, OpenSSL, zlib and miniupnpc (shell.nix; macOS: deps/x86_64 from
-# scripts/macos/bootstrap_deps.sh, plus epoll-shim for epoll and eventfd on kqueue); without
-# them the port builds without it and plays offline (gpu/CMakeLists.txt: BB_NET).
+# scripts/macos/bootstrap_deps.sh); without them the port builds without it and plays offline
+# (gpu/CMakeLists.txt: BB_NET).
 
 set(SHADNET_PROTO_OUT "${CMAKE_CURRENT_BINARY_DIR}/shadnet_proto_gen")
 file(MAKE_DIRECTORY "${SHADNET_PROTO_OUT}")
@@ -23,8 +26,9 @@ add_custom_command(
     COMMAND "${BBNET_PROTOC}" "--proto_path=${CMAKE_CURRENT_SOURCE_DIR}/shadps4/shadnet"
             "--cpp_out=${SHADNET_PROTO_OUT}" "${CMAKE_CURRENT_SOURCE_DIR}/shadps4/shadnet/shadnet.proto"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shadps4/shadnet/shadnet.proto")
-file(GLOB_RECURSE BBNET_SOURCES CONFIGURE_DEPENDS shadps4/core/libraries/network/*.cpp
-    shadps4/core/libraries/np/*.cpp shadps4/shadnet/*.cpp)
+file(GLOB_RECURSE BBNET_SOURCES CONFIGURE_DEPENDS shadps4/core/libraries/net/*.cpp
+    shadps4/core/libraries/network/*.cpp shadps4/core/libraries/np/*.cpp shadps4/core/net/*.cpp
+    shadps4/shadnet/*.cpp)
 # Trophies and the system dialogs stay in the C runtime; their shadPS4 versions need the
 # emulator's UI layers.
 list(FILTER BBNET_SOURCES EXCLUDE REGEX
@@ -48,10 +52,10 @@ if (APPLE)
     set_target_properties(bbnet PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path"
         LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" # beside libbbgpu.dylib, where the runtime looks
         INTERPROCEDURAL_OPTIMIZATION OFF) # third-party network code: LTO buys nothing here
-    # epoll, eventfd (sys/epoll.h, sys/eventfd.h) on kqueue; miniupnpc is a static library.
-    # httplib takes the HTTPS anchors from the keychain (Security.framework) on macOS.
-    target_link_libraries(bbnet PRIVATE epoll-shim::epoll-shim "-framework Security" "-framework CoreFoundation")
-    target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB EPOLL_SHIM_DISABLE_WRAPPER_MACROS)
+    # miniupnpc is a static library. httplib takes the HTTPS anchors from the keychain
+    # (Security.framework) on macOS.
+    target_link_libraries(bbnet PRIVATE "-framework Security" "-framework CoreFoundation")
+    target_compile_definitions(bbnet PRIVATE MINIUPNP_STATICLIB)
 else()
     target_link_options(bbnet PRIVATE -Wl,-Bsymbolic -Wl,--exclude-libs,ALL)
     set_target_properties(bbnet PROPERTIES BUILD_RPATH "\$ORIGIN" INSTALL_RPATH "\$ORIGIN"
@@ -62,3 +66,13 @@ target_link_libraries(bbnet PRIVATE bbgpu nlohmann_json::nlohmann_json protobuf:
     OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB "${MINIUPNPC_LIBRARY}" Vulkan::Headers fmt::fmt
     Boost::headers magic_enum::magic_enum)
 target_include_directories(bbnet PRIVATE "${MINIUPNPC_INCLUDE}")
+
+# The P2P wire format, byte for byte (tests/test_p2p_codec.cpp; build_macos.sh --test). The
+# codec sources are compiled again here: the module exports nothing but bbnet.h's two calls.
+add_executable(bbnet-codec-test EXCLUDE_FROM_ALL ../../tests/test_p2p_codec.cpp
+    shadps4/core/net/p2p_codec.cpp shadps4/core/net/p2p_crypto.cpp shadps4/core/net/p2p_tcp.cpp
+    shadps4/core/net/p2p_transport.cpp shadps4/core/net/host_net.cpp)
+target_include_directories(bbnet-codec-test PRIVATE shadps4 ../shadps4)
+target_link_libraries(bbnet-codec-test PRIVATE OpenSSL::Crypto)
+set_target_properties(bbnet-codec-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)

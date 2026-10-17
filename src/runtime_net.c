@@ -82,7 +82,8 @@ static BbNetResolveFn module_resolve(void) {
     const BbNetHost host={
         .abi=BBNET_ABI_VERSION, .app0=game_folder, .serial=game_serial, .title=game_title,
         .app_ver=game_version, .thread_spawn=runtime_thread_spawn,
-        .thread_join=runtime_thread_join_spawned,
+        .thread_join=runtime_thread_join_spawned, .thread_exit=runtime_thread_exit_spawned,
+        .memory_is_mapped=runtime_memory_is_mapped,
     };
     if (!init || !found || init(&host)!=0) {
         printf("Online: %s did not start: offline play\n",path);

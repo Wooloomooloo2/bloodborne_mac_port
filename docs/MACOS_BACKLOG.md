@@ -633,6 +633,18 @@ Each item: what was done for now, what the refinement is, and where it lives.
   `OrbisImeOption` PASSWORD (bit 4) masks the text as dots (`bbgpu_text_input_begin` gained the
   flag; `BbGpuTextBegin.flags`). Game input is held neutral while the box is open, so Backspace
   (the touchpad) does not reach the game.
+- **Co-op with Windows-port and mainline shadPS4 players never connected; module replaced
+  2026-10-17 (online-shadnet).** A Beckoning Bell created its room and resolved the peer, but
+  NpSignaling's offers (every 500 ms for 30 s) were never answered (`SIGNALING_ERROR_TIMEOUT`).
+  Upstream bbport's module is the shadp2p tree, which frames P2P datagrams as
+  `[src vport][dst vport] + payload`; mainline shadPS4 v0.20.0 and the Windows port use
+  `core/net/p2p_codec.cpp`'s FramingCodec (`[0xFF][flags|kind][vports][communication id]`, P2P
+  crypto), so the two could not parse each other. `gpu/bbnet/shadps4` is now mainline v0.20.0's
+  network tree (its P2P transport included; macOS uses its kqueue path, epoll-shim is gone),
+  `tests/test_p2p_codec.cpp` pins the frame bytes, `p2p_port=` / `BB_P2P_PORT` picks the UDP port
+  (3658 by default). *Open:* a real co-op session with a second player (sign-in, messages and
+  bloodstains verified on the new tree); UPnP on the user's router; stream (TCP-over-UDP) traffic
+  if the game uses it beyond signaling and datagrams.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or

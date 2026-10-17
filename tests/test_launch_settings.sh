@@ -42,4 +42,19 @@ check_online $'online=1\nshadnet_server=example.org:31313\nshadnet_npid=hunter\n
 check_online $'online=0\nshadnet_npid=hunter\n' "- - hunter -"
 check_online $'fps_cap=60\n' "- - - -"
 check_online $'online=1\nshadnet_npid=hunter\n' "0 - other -" BB_ONLINE=0 BB_SHADNET_NPID=other
-echo "PASS: launch settings (fps_cap, fullscreen, online)"
+# The co-op UDP port (p2p_port -> BB_P2P_PORT): digits only, the environment wins.
+check_p2p() { # ini text, expected BB_P2P_PORT (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_P2P_PORT "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s" "${BB_P2P_PORT:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: p2p_port launch setting for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+check_p2p $'online=1\np2p_port=3658\n' "3658"
+check_p2p $'p2p_port=0\n' "0"
+check_p2p $'p2p_port=abc\n' "-"
+check_p2p $'p2p_port=3658\n' "55692" BB_P2P_PORT=55692
+echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port)"
