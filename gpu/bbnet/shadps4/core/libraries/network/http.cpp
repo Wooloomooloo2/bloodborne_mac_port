@@ -882,11 +882,15 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
             const bool game_disabled_verify =
                 (plan.settings.ssl_flags & ORBIS_HTTPS_FLAG_SERVER_VERIFY) == 0;
             bool verify_server = !config_disabled_verify && !game_disabled_verify;
+            // bbport: the game loads Sony's CAs with sceHttpsLoadCert for servers this port
+            // redirects to the community server anyway, so those CAs cannot verify the
+            // redirected host. Upstream turned verification off here; we keep it on against
+            // the system roots (the keychain on macOS) so the redirected traffic cannot be
+            // intercepted. BB_DISABLE_HTTPS=1 remains the explicit way to turn it off.
             if (verify_server && plan.ctx_has_loaded_certs) {
-                verify_server = false;
                 LOG_INFO(Lib_Http,
                          "{}://{}: ctx loaded custom CAs (libSceSsl integration absent) -> "
-                         "bypassing cert verification",
+                         "verifying against the system roots instead",
                          plan.scheme, plan.host);
             }
             cli.enable_server_certificate_verification(verify_server);
@@ -1106,7 +1110,8 @@ static bool HeaderNameMatches(std::string_view a, std::string_view b) {
 
 static bool IsCredentialHeader(std::string_view name) {
     return HeaderNameMatches(name, "Authorization") ||
-           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie");
+           HeaderNameMatches(name, "Proxy-Authorization") || HeaderNameMatches(name, "Cookie") ||
+           HeaderNameMatches(name, "X-BB-Token"); // bbport: The Hunter's Dream account token
 }
 
 static std::string GetLibhttpSystemVersionString() {

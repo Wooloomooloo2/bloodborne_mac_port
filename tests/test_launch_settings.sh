@@ -73,4 +73,32 @@ check_pool $'online=1\nonline_pool=huntersdream\nthd_online_id=hunter\nthd_token
 check_pool $'online_pool=shadnet\nthd_online_id=hunter\n' "- hunter 0"
 check_pool $'online_pool=other\n' "- - 0"
 check_pool $'online_pool=huntersdream\n' "shadnet - 0" BB_NET_BACKEND=shadnet
-echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port, online_pool)"
+# Secrets from the keychain: a fake `security` stands in (the real one is the user's).
+fake=$(mktemp -d); trap 'rm -rf "$ini" "$fake"' EXIT
+cat > "$fake/security" <<'FAKE'
+#!/bin/bash
+# find-generic-password -s SERVICE -a ACCOUNT -w
+case "$3/$5" in
+    bbport-shadnet/hunter) echo 'pw-from-keychain' ;;
+    bbport-huntersdream/dreamer) echo 'tok-from-keychain' ;;
+    *) exit 44 ;;
+esac
+FAKE
+chmod +x "$fake/security"
+check_secret() { # ini text, expected "PASSWORD TOKEN" (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_SHADNET_PASSWORD -u BB_THD_TOKEN BB_KEYCHAIN_TOOL="$fake/security" "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1" 2>/dev/null; printf "%s %s" "${BB_SHADNET_PASSWORD:--}" "${BB_THD_TOKEN:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: keychain launch settings for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\n' "pw-from-keychain -"
+check_secret $'shadnet_npid=hunter\n' "pw-from-keychain -"                      # no line: the keychain is tried
+check_secret $'shadnet_npid=hunter\nshadnet_password=inline\n' "inline -"       # the file's value wins over the keychain
+check_secret $'shadnet_npid=nobody\nshadnet_password=keychain\n' "- -"          # nothing stored: unset, not "keychain"
+check_secret $'thd_online_id=dreamer\nthd_token=keychain\n' "- tok-from-keychain"
+check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\n' "env -" BB_SHADNET_PASSWORD=env
+echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port, online_pool, keychain secrets)"

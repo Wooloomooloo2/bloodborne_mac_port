@@ -662,6 +662,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
   Still open on that pool: about one in six `sceHttp` calls to thehuntersdream.com:18671 fails
   with cpp-httplib error 8 (SSL connection failed), intermittently, including sign-ins; the
   backend's own httplib client (keep-alive) never failed in the same runs.
+- **Online play: the review's security points (PR 9, 2026-10-17).** Done on the branch: HTTPS
+  verification stays on where the game loaded Sony's CAs (http.cpp; upstream bypassed it);
+  secrets from the login keychain (`shadnet_password=keychain`, `thd_token=keychain`,
+  `online.py keychain` / `signin --keychain`), owner-only bbport.ini when a secret is in clear and
+  a launch warning otherwise; dependencies pinned to commits / the MoltenVK tarball to a SHA-256;
+  epoll-shim out of the bootstrap; the Discord device name no longer carries the hostname;
+  README section on what is exposed. Not fixable here: shadNet's protocol is plain TCP (the
+  server has only an "Unsecured" listener) and its WebAPI plain HTTP. For the maintainer: the
+  client identity strings, GPL-3 of `gpu/bbnet/thd`, `BB_NET` default and bundling the module.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or

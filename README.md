@@ -396,6 +396,33 @@ The server shows summon signs only to clients it knows: `run.sh` presents the bu
 `bbport 1.9.1` (the Windows port's client field) unless `BB_CLIENT_VERSION` says otherwise. With
 the backend's default name the sign is accepted but never offered to a host.
 
+### What online play exposes, and what protects it
+
+- **Credentials.** The shadNet password and The Hunter's Dream token can stay out of `bbport.ini`:
+  `python3 scripts/online.py keychain shadnet --npid NAME --ini <bbport.ini>` puts the password
+  in the login keychain (item `bbport-shadnet`) and writes `shadnet_password=keychain`;
+  `scripts/online.py signin --keychain` does the same for the token (`bbport-huntersdream`,
+  `thd_token=keychain`). `run.sh` reads them with `security find-generic-password` at launch (a
+  keychain prompt may appear once). A secret written in clear makes the file owner-only
+  (`chmod 600`); `run.sh` warns when one is readable by other users. Neither is ever logged
+  (the game's `X-BB-Token` header is filtered from the HTTP log).
+- **In transit.** The game's own traffic and The Hunter's Dream backend go over HTTPS and the
+  server certificate is checked against the system roots, also where the game loaded Sony's
+  CAs (upstream shadPS4 turned verification off there; `BB_DISABLE_HTTPS=1` is the explicit
+  opt-out). **The shadNet protocol itself is plain TCP** (its server offers no TLS listener: the
+  password goes to `srv.shadps4.net:31313` unencrypted) and its WebAPI is plain HTTP, so use a
+  password that is only for shadNet. The Hunter's Dream pool has no such exposure.
+- **The network.** Co-op opens one UDP port (`p2p_port`, 3658) and asks the router to forward it
+  through UPnP while the game runs (removed on exit); peers reach it directly or through the
+  server's relay. What arrives is parsed by the game's own network code, as on a PS4. `upnp=0`
+  keeps the router untouched.
+- **Identity.** The module reports itself to shadNet as `shadPS4 v0.20.0` (the server signs out
+  other names) and to The Hunter's Dream as `bbport 1.9.1` (`BB_CLIENT_VERSION`); the Discord
+  device sign-in names the device "bbport on macOS", not the Mac's hostname. Your online id,
+  position and play log go to the community server as the game sends them.
+- **Dependencies** are fetched by tag and checked against a pinned commit (or SHA-256 for the
+  MoltenVK tarball) by `bootstrap_deps.sh`; nothing downloaded is executed.
+
 ### From Terminal
 
 ```sh

@@ -19,11 +19,13 @@ does (a code to approve on the website) and prints the two bbport.ini lines, or 
 --ini FILE.
 """
 import argparse
+import getpass
 import json
 import os
 from pathlib import Path
-import platform
 import socket
+import stat
+import subprocess
 import sys
 import time
 import urllib.error
@@ -142,7 +144,7 @@ def thd_sign_in(community, on_code):
     Windows port's launcher). on_code(page, code) shows it. Returns (online id, token)."""
     auth = community_address(community)
     start = thd_call(auth + '/auth/device/start',
-                     {'DeviceName': f'bbport on {platform.node() or "Mac"}'})
+                     {'DeviceName': 'bbport on macOS'})  # no hostname: it names the Mac on the account page
     device, user_code = start.get('DeviceCode', ''), start.get('UserCode', '')
     if not device or not user_code:
         raise ValueError('no code in the reply')
@@ -166,15 +168,34 @@ def thd_sign_in(community, on_code):
     raise ValueError('the code expired; try again')
 
 
-def write_ini_account(ini, online_id, token):
-    """online_pool, thd_online_id and thd_token in bbport.ini (other lines kept)."""
+SECRET_KEYS = ('shadnet_password', 'thd_token')
+
+
+def write_ini_keys(ini, values):
+    """Replaces these keys in bbport.ini (other lines kept). A file that holds a secret in clear
+    is made readable by its owner only; one that says `keychain` gets no secret written."""
     ini = Path(ini)
     lines = ini.read_text(encoding='utf-8').splitlines() if ini.exists() else []
-    keep = [line for line in lines
-            if not line.startswith(('online_pool=', 'thd_online_id=', 'thd_token='))]
-    keep += ['online_pool=huntersdream', f'thd_online_id={online_id}', f'thd_token={token}']
+    keep = [line for line in lines if not line.startswith(tuple(f'{k}=' for k in values))]
+    keep += [f'{k}={v}' for k, v in values.items()]
     ini.parent.mkdir(parents=True, exist_ok=True)
     ini.write_text('\n'.join(keep) + '\n', encoding='utf-8')
+    if any(line.startswith(tuple(f'{k}=' for k in SECRET_KEYS)) and not line.endswith('=keychain')
+           for line in keep):
+        ini.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+
+def write_ini_account(ini, online_id, token):
+    """online_pool, thd_online_id and thd_token in bbport.ini (`keychain` as the token when it is
+    stored there)."""
+    write_ini_keys(ini, {'online_pool': 'huntersdream', 'thd_online_id': online_id, 'thd_token': token})
+
+
+def keychain_store(service, account, secret):
+    """The login keychain item launch_settings.sh reads (`security find-generic-password -w`)."""
+    subprocess.run(['security', 'add-generic-password', '-U', '-s', service, '-a', account,
+                    '-l', f'{service} ({account})', '-w', secret], check=True,
+                   stdout=subprocess.DEVNULL)
 
 
 def check(server, webapi, community):
@@ -210,6 +231,12 @@ def main():
     thd.add_argument('--user', required=True)
     signin = sub.add_parser('signin')
     signin.add_argument('--ini', help='write the account into this bbport.ini')
+    signin.add_argument('--keychain', action='store_true',
+                        help='keep the token in the login keychain (bbport.ini then says thd_token=keychain)')
+    keychain = sub.add_parser('keychain', help='store a secret in the login keychain instead of bbport.ini')
+    keychain.add_argument('what', choices=['shadnet'], help='shadnet: the shadNet account password')
+    keychain.add_argument('--npid', required=True, help='the shadNet account name')
+    keychain.add_argument('--ini', help='also write shadnet_npid and shadnet_password=keychain here')
     sub.add_parser('check')
     a = parser.parse_args()
     server = os.environ.get('BB_SHADNET_SERVER') or SHADNET_SERVER
@@ -228,12 +255,25 @@ def main():
             online_id, token = thd_sign_in(community, on_code)
         except ValueError as error:
             sys.exit(f"The Hunter's Dream sign-in failed: {error}")
+        if a.keychain:
+            keychain_store('bbport-huntersdream', online_id, token)
+            token = 'keychain'
+            print(f"Token stored in the login keychain (bbport-huntersdream, {online_id})", file=sys.stderr)
         if a.ini:
             write_ini_account(a.ini, online_id, token)
             print(f"Signed in as {online_id}; online_pool, thd_online_id and thd_token written to {a.ini}",
                   file=sys.stderr)
         else:
             print(f'online_pool=huntersdream\nthd_online_id={online_id}\nthd_token={token}')
+    elif a.command == 'keychain':
+        secret = getpass.getpass(f'shadNet password for {a.npid}: ')
+        if not secret:
+            sys.exit('no password entered')
+        keychain_store('bbport-shadnet', a.npid, secret)
+        print(f'Password stored in the login keychain (bbport-shadnet, {a.npid})', file=sys.stderr)
+        if a.ini:
+            write_ini_keys(a.ini, {'shadnet_npid': a.npid, 'shadnet_password': 'keychain'})
+            print(f'shadnet_npid and shadnet_password=keychain written to {a.ini}', file=sys.stderr)
     else:
         for name, address, ok, detail in check(server, webapi, community):
             print(f'{name}: {address}: {"reachable" if ok else "not reachable"} {detail}'.rstrip())

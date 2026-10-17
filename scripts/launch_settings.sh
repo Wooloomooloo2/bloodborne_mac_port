@@ -8,7 +8,10 @@
 #   shadnet_server=host:port the shadNet server (BB_SHADNET_SERVER; default srv.shadps4.net:31313)
 #   shadnet_webapi=url       its WebAPI (BB_SHADNET_WEBAPI; default http://<server host>:31315)
 #   shadnet_npid=name        the shadNet account (BB_SHADNET_NPID) ...
-#   shadnet_password=secret  ... and its password (BB_SHADNET_PASSWORD; the file is the player's own)
+#   shadnet_password=secret  ... and its password (BB_SHADNET_PASSWORD; the file is the player's own),
+#                            or shadnet_password=keychain (or no such line) to take it from the login
+#                            keychain: item service bbport-shadnet, account = the npid
+#                            (`python3 scripts/online.py keychain shadnet --npid NAME --ini bbport.ini`)
 #   community_server=url     the game server (BB_COMMUNITY_SERVER; default https://thehuntersdream.com)
 #   upnp=0                   no UPnP port mapping (BB_UPNP=0; on by default)
 #   p2p_port=3658            the UDP port for co-op traffic (BB_P2P_PORT; 3658, the PS4's, by
@@ -16,7 +19,9 @@
 #   online_pool=huntersdream bells and summons through The Hunter's Dream (BB_NET_BACKEND=thd)
 #                            instead of a shadNet server (online_pool=shadnet, the default) ...
 #   thd_online_id=name       ... with the Discord-linked account (BB_THD_ONLINE_ID) ...
-#   thd_token=secret         ... and its token (BB_THD_TOKEN; `scripts/online.py signin` writes both)
+#   thd_token=secret         ... and its token (BB_THD_TOKEN; `scripts/online.py signin` writes both),
+#                            or thd_token=keychain: item service bbport-huntersdream, account = the
+#                            online id (`scripts/online.py signin --keychain` stores it there)
 #   metal_hud=1              Apple's Metal Performance HUD (MTL_HUD_ENABLED=1)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
@@ -40,6 +45,24 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^thd_online_id=(.+)$ ]]; then thd_id=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
     done < "$1"
+    # Secrets kept in the login keychain instead of the file (`security find-generic-password`;
+    # BB_KEYCHAIN_TOOL names another command, for tests). A lookup that finds nothing leaves the
+    # value empty; an explicit "keychain" that finds nothing is reported.
+    local tool=${BB_KEYCHAIN_TOOL:-security}
+    if [[ -n $npid && -z ${BB_SHADNET_PASSWORD:-} && ( -z $password || $password == keychain ) ]]; then
+        local want=$password
+        password=$("$tool" find-generic-password -s bbport-shadnet -a "$npid" -w 2>/dev/null) || password=''
+        if [[ $want == keychain && -z $password ]]; then
+            echo "Online: no keychain item bbport-shadnet for $npid (python3 scripts/online.py keychain shadnet --npid $npid)" >&2
+        fi
+    fi
+    if [[ -n $thd_id && -z ${BB_THD_TOKEN:-} && ( -z $thd_token || $thd_token == keychain ) ]]; then
+        local want_token=$thd_token
+        thd_token=$("$tool" find-generic-password -s bbport-huntersdream -a "$thd_id" -w 2>/dev/null) || thd_token=''
+        if [[ $want_token == keychain && -z $thd_token ]]; then
+            echo "Online: no keychain item bbport-huntersdream for $thd_id (python3 scripts/online.py signin --keychain)" >&2
+        fi
+    fi
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
     if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
     if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1; fi
