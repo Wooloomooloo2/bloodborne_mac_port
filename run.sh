@@ -148,6 +148,25 @@ else
     if (( macos )); then bash build_macos.sh; else bash build.sh; fi
     probe=out/bb-probe
 fi
+# Online play (BB_ONLINE=1, or online=1 in bbport.ini; the online module gpu/bbnet): the game's
+# own server goes to the community server, summon signs to the shadNet WebAPI (scripts/online.py).
+# The shadNet account comes from BB_SHADNET_NPID / BB_SHADNET_PASSWORD (or bbport.ini).
+if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
+    export BB_SHADNET_SERVER=${BB_SHADNET_SERVER:-srv.shadps4.net:31313}
+    # HTTPS needs CA certificates: the module's OpenSSL looks only in its own prefix (macOS:
+    # deps/x86_64/ssl, a link to the system bundle), so the system's bundle is named here too.
+    if [[ ! -r ${SSL_CERT_FILE:-} ]]; then
+        for bundle in "${NIX_SSL_CERT_FILE:-}" /etc/ssl/cert.pem /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/ca-bundle.pem; do
+            [[ -n $bundle && -r $bundle ]] && { export SSL_CERT_FILE=$bundle; break; }
+        done
+    fi
+    [[ -n ${BB_SHADNET_WEBAPI:-} ]] || export BB_SHADNET_WEBAPI=http://${BB_SHADNET_SERVER%:*}:31315
+    SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py overrides --user "${BB_USER_DIR:-$data/user}") || true
+    export SHADPS4_HTTP_HOST_OVERRIDES_JSON
+    if [[ -z ${BB_SHADNET_NPID:-} ]]; then
+        echo 'Online: no shadNet account (BB_SHADNET_NPID / BB_SHADNET_PASSWORD, or shadnet_npid= / shadnet_password= in bbport.ini): the game cannot sign in' >&2
+    fi
+fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then
     "$probe" "${probe_args[@]}" &

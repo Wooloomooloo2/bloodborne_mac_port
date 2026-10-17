@@ -27,4 +27,19 @@ check $'fullscreen=1\n' "- 0" BB_FULLSCREEN=0
 rm -f "$ini"
 /bin/bash -c 'source scripts/launch_settings.sh; bb_launch_settings /nonexistent/bbport.ini' ||
     { echo "FAIL: launch settings with a missing file"; exit 1; }
-echo "PASS: launch settings (fps_cap, fullscreen)"
+# Online keys (the environment wins; the password never reaches the command line here).
+check_online() { # ini text, expected "ONLINE SERVER NPID UPNP" (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_ONLINE -u BB_SHADNET_SERVER -u BB_SHADNET_NPID -u BB_UPNP "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s %s %s %s" "${BB_ONLINE:--}" "${BB_SHADNET_SERVER:--}" "${BB_SHADNET_NPID:--}" "${BB_UPNP:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: online launch settings for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+check_online $'online=1\nshadnet_server=example.org:31313\nshadnet_npid=hunter\nupnp=0\n' "1 example.org:31313 hunter 0"
+check_online $'online=0\nshadnet_npid=hunter\n' "- - hunter -"
+check_online $'fps_cap=60\n' "- - - -"
+check_online $'online=1\nshadnet_npid=hunter\n' "0 - other -" BB_ONLINE=0 BB_SHADNET_NPID=other
+echo "PASS: launch settings (fps_cap, fullscreen, online)"

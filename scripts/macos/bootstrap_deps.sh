@@ -40,6 +40,12 @@ ROBIN_MAP_TAG=v1.4.0
 VMA_TAG=v3.3.0
 XBYAK_TAG=v7.43
 FFMPEG_TAG=n7.1.5
+# Online play (gpu/bbnet, libbbnet.dylib; x86-64 only: the module runs in the game process).
+PROTOBUF_TAG=v21.12          # the last protobuf without abseil; protoc comes with it
+OPENSSL_TAG=openssl-3.5.9
+MINIUPNP_TAG=miniupnpc_2_3_3
+JSON_TAG=v3.12.0
+EPOLL_SHIM_TAG=v0.0.20240608 # epoll and eventfd on kqueue (shadPS4's network code)
 
 if [[ ${BB_DEPS_CLEAN:-} == 1 ]]; then rm -rf "$BUILD" "$PREFIX"; fi
 mkdir -p "$SRC" "$BUILD" "$PREFIX"
@@ -69,6 +75,13 @@ fetch() { # name url tag
     if [[ ! -d $dir ]]; then
         echo "== fetch $1 $3"
         git clone -q --depth 1 --branch "$3" --recurse-submodules --shallow-submodules "$2" "$dir"
+    fi
+}
+fetch_plain() { # name url tag: without submodules (OpenSSL's fuzz corpora, protobuf's test suites)
+    local dir=$SRC/$1
+    if [[ ! -d $dir ]]; then
+        echo "== fetch $1 $3"
+        git clone -q --depth 1 --branch "$3" "$2" "$dir"
     fi
 }
 stamp() { [[ -f $PREFIX/.built-$1 ]]; }
@@ -118,6 +131,49 @@ cmake_dep SPIRV-Cross . -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON \
     -DSPIRV_CROSS_ENABLE_CPP=OFF -DSPIRV_CROSS_ENABLE_REFLECT=OFF -DSPIRV_CROSS_ENABLE_C_API=OFF \
     -DSPIRV_CROSS_ENABLE_UTIL=OFF
 [[ $ARCH == x86_64 ]] && cmake_dep xbyak .
+
+# Online module libraries (x86-64 only): all static, linked into libbbnet.dylib. zlib is the
+# system's. protoc runs under Rosetta; deps/host/bin/protoc is the same protoc built arm64,
+# which gpu/bbnet uses when it is there.
+if [[ $ARCH == x86_64 ]]; then
+    fetch_plain protobuf https://github.com/protocolbuffers/protobuf.git $PROTOBUF_TAG
+    fetch_plain openssl https://github.com/openssl/openssl.git $OPENSSL_TAG
+    fetch_plain miniupnp https://github.com/miniupnp/miniupnp.git $MINIUPNP_TAG
+    fetch_plain json https://github.com/nlohmann/json.git $JSON_TAG
+    fetch_plain epoll-shim https://github.com/jiixyj/epoll-shim.git $EPOLL_SHIM_TAG
+    cmake_dep protobuf . -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+        -Dprotobuf_WITH_ZLIB=OFF -Dprotobuf_BUILD_PROTOC_BINARIES=ON
+    if ! stamp protoc-host; then
+        echo "== build protoc (arm64 host tool)"
+        cmake -S "$SRC/protobuf" -B "$BUILD/protoc-host" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
+            -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+            -Dprotobuf_BUILD_TESTS=OFF -Dprotobuf_BUILD_SHARED_LIBS=OFF -Dprotobuf_WITH_ZLIB=OFF \
+            -Wno-dev >"$BUILD/protoc-host.log" 2>&1 \
+            && ninja -C "$BUILD/protoc-host" protoc >>"$BUILD/protoc-host.log" 2>&1 \
+            || { tail -30 "$BUILD/protoc-host.log" >&2; echo "protoc-host failed (log: $BUILD/protoc-host.log)" >&2; exit 1; }
+        mkdir -p "$DEPS/host/bin"
+        cp -L "$BUILD/protoc-host/protoc" "$DEPS/host/bin/protoc"
+        done_stamp protoc-host
+    fi
+    if ! stamp OpenSSL; then
+        echo "== build OpenSSL (a few minutes)"
+        rm -rf "$BUILD/OpenSSL" && mkdir -p "$BUILD/OpenSSL"
+        (cd "$BUILD/OpenSSL" && perl "$SRC/openssl/Configure" darwin64-x86_64-cc --prefix="$PREFIX" \
+            --libdir=lib --openssldir="$PREFIX/ssl" no-shared no-tests no-docs no-apps \
+            -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET >"$BUILD/OpenSSL.log" 2>&1 \
+            && make -j"$JOBS" >>"$BUILD/OpenSSL.log" 2>&1 && make install_sw >>"$BUILD/OpenSSL.log" 2>&1) \
+            || { tail -30 "$BUILD/OpenSSL.log" >&2; echo "OpenSSL failed (log: $BUILD/OpenSSL.log)" >&2; exit 1; }
+        # HTTPS verification uses the system's certificate bundle (run.sh also sets SSL_CERT_FILE).
+        mkdir -p "$PREFIX/ssl"
+        [[ -e $PREFIX/ssl/cert.pem ]] || ln -s /etc/ssl/cert.pem "$PREFIX/ssl/cert.pem"
+        done_stamp OpenSSL
+    fi
+    cmake_dep miniupnp miniupnpc -DUPNPC_BUILD_SHARED=OFF -DUPNPC_BUILD_STATIC=ON \
+        -DUPNPC_BUILD_TESTS=OFF -DUPNPC_BUILD_SAMPLE=OFF
+    cmake_dep json . -DJSON_BuildTests=OFF
+    cmake_dep epoll-shim . -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF
+fi
 
 # Boost is used header-only; headers are architecture-independent.
 if [[ ! -e $PREFIX/include/boost ]]; then
@@ -173,3 +229,8 @@ echo "$ARCH dependencies ready in $PREFIX"
 for lib in libvulkan.1.dylib libSDL3.0.dylib libMoltenVK.dylib libavcodec.dylib; do
     printf '  %-22s %s\n' "$lib" "$(lipo -archs "$PREFIX/lib/$lib" 2>/dev/null || echo missing)"
 done
+if [[ $ARCH == x86_64 ]]; then
+    for lib in libprotobuf.a libssl.a libminiupnpc.a libepoll-shim.a; do
+        printf '  %-22s %s\n' "$lib" "$(lipo -archs "$PREFIX/lib/$lib" 2>/dev/null || echo missing)"
+    done
+fi
