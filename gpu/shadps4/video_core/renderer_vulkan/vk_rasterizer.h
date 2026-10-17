@@ -127,8 +127,11 @@ public:
     /// Stage A: guest memory the recording thread will write for work handed to it (storage
     /// buffers, DMA, WriteData, fences); constants overlapping it are bound there, not copied here.
     void NotePendingGpuWrite(VAddr address, u64 size);
-    /// Before a guest-visible write: fences deferred earlier are written first.
+    /// Before a guest-visible write: fences deferred earlier are written first. The wait kicks
+    /// the recorder (the recording chunk): on the GPU command thread not while the draw
+    /// recording thread runs (every caller drained already; kept local to the invariant).
     void WaitDeferredSignals() {
+        DrainDrawPipe();
         scheduler.WaitDeferredSignals();
     }
     /// Runs `signal` after the guest memory copies issued so far, without waiting here.

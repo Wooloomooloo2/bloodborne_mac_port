@@ -107,17 +107,23 @@ Liverpool::~Liverpool() {
 }
 
 void Liverpool::ProcessCommands() {
-    if (num_commands && rasterizer) {
-        rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands); // bbport: commands touch the caches
-    }
     // Process incoming commands with high priority
-    while (num_commands) {
+    while (num_commands.load(std::memory_order_acquire)) {
         Common::UniqueFunction<void> callback{};
         {
             std::scoped_lock lk{submit_mutex};
             callback = std::move(command_queue.front());
             command_queue.pop();
             --num_commands;
+        }
+        // bbport: commands touch the caches and record commands (a relayed guest fault's
+        // download, a flip's frame): not while the draw recording thread runs. The drain comes
+        // after the command was taken: a drain before the first check let a command queued
+        // between that check and the loop run on top of the recording thread, which was the
+        // recording-chunk race of the co-op session (docs/MACOS_BACKLOG.md). After the first
+        // command the drain is a no-op (nothing was handed over in between).
+        if (rasterizer) {
+            rasterizer->DrainDrawPipe(Vulkan::DrawPipe::ReasonCommands);
         }
         callback();
     }
