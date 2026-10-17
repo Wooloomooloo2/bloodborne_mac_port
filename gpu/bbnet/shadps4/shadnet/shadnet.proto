@@ -472,6 +472,18 @@ message MatchingUserInfo {
     repeated MatchingBinAttr user_bin_attrs = 4;
 }
 
+// bbport (from shadPS4 main): the client's version after signing in, and the server's rejection
+// (notification 19) when clientversions.cfg does not accept it; the server then disconnects.
+message SetClientVersionRequest {
+    string version = 1;
+}
+
+message NotifyClientRejected {
+    uint32 reason  = 1; // 1 = client version not accepted
+    string message = 2;
+    string version = 3;
+}
+
 message SetUserInfoRequest {
     uint32 server_id = 1;
     repeated MatchingBinAttr user_bin_attrs = 2;
