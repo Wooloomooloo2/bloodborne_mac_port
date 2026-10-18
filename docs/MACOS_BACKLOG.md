@@ -37,7 +37,17 @@ Each item: what was done for now, what the refinement is, and where it lives.
   not found yet (no backtrace from the host process). Now `Finish` closes the render encoder,
   commits, and keeps the pass: the next draw reopens it with load actions, as after compute or
   blit work inside a pass; a `Submit inside a render pass` warning (first 8) marks it in the log.
-  *Open:* which recorded command begins a pass the scheduler does not count.
+  *2026-10-18 (PR #11 review):* most likely a symptom of the recording-chunk race below:
+  `Finish` is reached only from `SubmitExecution`, after `EndRendering` and `SyncRecording`,
+  so `in_pass` can be true there only if another thread recorded a `BeginRenderPass` at the
+  same time, and the relayed fault's download calls `scheduler.Finish()` from stage A, the
+  thread that raced. The warning now carries the reporting thread's stack (which thread
+  submitted); since the pass stays open until the scheduler's next pass end, a still-open pass
+  at `Encoder::BeginRenderPass` (the stop would have moved there: `blit_helper.cpp`'s fullscreen
+  draw, the layer resolves and clears in vk_runtime.cpp) ends first with the same warning, and
+  an `EndRenderPass` without a pass warns and returns. The workaround stays as a safety net; a
+  raced chunk may also carry reordered records, so a log with any of these warnings is a bug
+  report, not a clean run. *Open:* only if the warning shows up again with the race fixed.
 - **Metal-native (M4 → M5): render pipelines declare a depth/stencil format the pass does not
   bind.** Fixed 2026-10-16 (M5 Task 3): `BoundDepthAttachment` (vk_depth_attachment.h) is the one
   rule for the pass's depth attachment and the pipeline key's formats; `MTL_DEBUG_LAYER=1` title +
@@ -426,9 +436,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   signalling thread (B via `RunInOrder`, else A drained); the opt-in texture bind helper binds
   without refreshing images. `ReportChunkRace` now names both threads and, on macOS, prints
   the other thread's stack at report time (the thread is suspended, its frame chain walked),
-  so a future report needs no guessing. Tests pass; an offline run with `BB_GPU_LOG=debug`
-  showed no report. The co-op reproduction (long session, phantoms) is the user's to confirm;
-  `BB_DRAW_PIPE=0` stays a fallback until then.
+  so a future report needs no guessing (a same-thread re-entry reports the caller it is inside,
+  not its own). Tests pass; an offline run with `BB_GPU_LOG=debug` showed no report. The drain
+  fix is in `metal-native` for 0.5.0 (32e7f2f); the report and the render-pass workaround above
+  follow in 0.5.1 (PR #11). The co-op reproduction (long session, phantoms) is the user's to
+  confirm; `BB_DRAW_PIPE=0` stays a fallback until then.
   *Same day, test runs:* the load-time corrupted command buffer (cloth-thread entry above) also
   killed the host twice in ~14 test loads: `SignalFence: Unreachable code!` (pm4_cmds.h:492)
   after "Gnm check: bad packet", and a SIGSEGV in `Shader::StageSpecialization` building a
