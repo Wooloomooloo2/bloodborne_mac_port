@@ -16,8 +16,9 @@
 #   upnp=0                   no UPnP port mapping (BB_UPNP=0; on by default)
 #   p2p_port=3658            the UDP port for co-op traffic (BB_P2P_PORT; 3658, the PS4's, by
 #                            default; 0 = any free port; a busy port falls back to a free one)
-#   online_pool=huntersdream bells and summons through The Hunter's Dream (BB_NET_BACKEND=thd)
-#                            instead of a shadNet server (online_pool=shadnet, the default) ...
+#   online_pool=huntersdream bells and summons through The Hunter's Dream (BB_NET_BACKEND=thd), the
+#                            default; online_pool=shadnet picks a shadNet server instead (also the
+#                            choice when no pool is named but only a shadNet account is) ...
 #   thd_online_id=name       ... with the Discord-linked account (BB_THD_ONLINE_ID) ...
 #   thd_token=secret         ... and its token (BB_THD_TOKEN; `scripts/online.py signin` writes both),
 #                            or thd_token=keychain: item service bbport-huntersdream, account = the
@@ -74,6 +75,11 @@ bb_launch_settings() { # ini file
     if [[ -n $community && -z ${BB_COMMUNITY_SERVER:-} ]]; then export BB_COMMUNITY_SERVER=$community; fi
     if [[ -n $upnp && -z ${BB_UPNP:-} ]]; then export BB_UPNP=$upnp; fi
     if [[ -n $p2p && -z ${BB_P2P_PORT:-} ]]; then export BB_P2P_PORT=$p2p; fi
+    # The pool: The Hunter's Dream unless the file says shadnet, or names a shadNet account and
+    # no Hunter's Dream one (a file from before the pool key).
+    if [[ -z $pool ]]; then
+        if [[ -n $npid && -z $thd_id ]]; then pool=shadnet; else pool=huntersdream; fi
+    fi
     if [[ $pool == huntersdream && -z ${BB_NET_BACKEND:-} ]]; then export BB_NET_BACKEND=thd; fi
     if [[ -n $thd_id && -z ${BB_THD_ONLINE_ID:-} ]]; then export BB_THD_ONLINE_ID=$thd_id; fi
     if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi

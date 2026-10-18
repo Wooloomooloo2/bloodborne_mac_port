@@ -6,8 +6,8 @@ co-op pool. Two pools exist:
 
 | Pool | Who is on it | Account | Needs |
 |---|---|---|---|
-| **The Hunter's Dream** (`online_pool=huntersdream`) | bbhost players and the Windows port (Supermedo/bloodborne_pc) | Discord-linked, free | nothing on the router: the pool's server relays and punches through NATs |
-| **shadNet** (`online_pool=shadnet`, the default) | shadPS4 players and the Windows port's shadNet setting | shadNet account from shadnet.shadps4.net | a router whose NAT lets UDP through (UPnP is asked for the port) |
+| **The Hunter's Dream** (`online_pool=huntersdream`, the default) | bbhost players and the Windows port (Supermedo/bloodborne_pc) | Discord-linked, free | nothing on the router: the pool's server relays and punches through NATs |
+| **shadNet** (`online_pool=shadnet`) | shadPS4 players and the Windows port's shadNet setting | shadNet account from shadnet.shadps4.net | a router whose NAT lets UDP through (UPnP is asked for the port) |
 
 Players only meet other players on the same pool, same game version (1.09) and, for bells,
 the same password set under **Network Settings** in the game.
@@ -61,8 +61,9 @@ keychain (the command prompts for it; nothing is echoed) and the account name in
 python3 scripts/online.py keychain shadnet --npid YourOnlineId --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
 ```
 
-That writes `shadnet_npid=YourOnlineId` and `shadnet_password=keychain`. Leave `online_pool`
-out (or set `online_pool=shadnet`). Mind that the shadNet protocol itself is unencrypted (see
+That writes `shadnet_npid=YourOnlineId` and `shadnet_password=keychain`. Set
+`online_pool=shadnet` (a file with only a shadNet account and no pool line is taken as shadNet
+too). Mind that the shadNet protocol itself is unencrypted (see
 *What online play exposes* in the README): use a password you use nowhere else.
 
 ## 4. Launch and check
@@ -114,7 +115,7 @@ mapping; `BB_DISABLE_HTTPS=1` turns certificate checks off (only for debugging).
 | bbport.ini | Environment | Meaning |
 |---|---|---|
 | `online=1` | `BB_ONLINE=1` | load the online module |
-| `online_pool=huntersdream` / `shadnet` | `BB_NET_BACKEND=thd` | which co-op pool (shadNet by default) |
+| `online_pool=huntersdream` / `shadnet` | `BB_NET_BACKEND=thd` | which co-op pool (The Hunter's Dream by default) |
 | `thd_online_id=`, `thd_token=` | `BB_THD_ONLINE_ID`, `BB_THD_TOKEN` | The Hunter's Dream account (`keychain` = from the login keychain) |
 | `shadnet_npid=`, `shadnet_password=` | `BB_SHADNET_NPID`, `BB_SHADNET_PASSWORD` | shadNet account (`keychain` as above) |
 | `shadnet_server=host:port` | `BB_SHADNET_SERVER` | another shadNet server (default `srv.shadps4.net:31313`) |

@@ -340,6 +340,8 @@ field gets exactly what was typed; the game's own length limit applies (the log 
 ### Online play (shadNet)
 
 Step-by-step setup, both pools and a troubleshooting table: [docs/ONLINE.md](docs/ONLINE.md).
+The Hunter's Dream is the default co-op pool (bbhost and Windows-port players, works through
+any router); shadNet is the alternative described below.
 
 Messages, bloodstains and ghosts come from the community game server (The Hunter's Dream);
 bells and summons go through a shadNet server (`srv.shadps4.net:31313` by default) with a
@@ -362,7 +364,7 @@ or with the same settings as environment variables in `launch.conf` (`BB_ONLINE=
 `BB_SHADNET_NPID`, `BB_SHADNET_PASSWORD`). Optional: `shadnet_server=host:port`,
 `shadnet_webapi=http://host:31315`, `community_server=https://...`, `upnp=0` (no UPnP port
 mapping), `p2p_port=3658` (the UDP port co-op traffic uses; the PS4's 3658 by default, `0` for
-any free port), `online_pool=huntersdream` (see below). An account is needed to sign in: without one the module loads but no shadNet user
+any free port), `online_pool=shadnet` or `huntersdream` (The Hunter's Dream by default; see below). An account is needed to sign in: without one the module loads but no shadNet user
 connects, and the game stays offline. `run.sh` writes `user/host_overrides.json` for each launch (the game's server
 `ss4.scej-network.jp` → the community server; summon signs → the shadNet WebAPI when it has the
 Bloodborne summon service), and the log starts with `Online: module ...` when the module is in
@@ -391,8 +393,9 @@ python3 scripts/online.py signin --ini ~/Library/Application\ Support/Bloodborne
 ```
 
 which writes `online_pool=huntersdream`, `thd_online_id=` and `thd_token=` (keep the token to
-yourself) and leaves the rest of the file alone; `online_pool=shadnet` (or removing the line)
-goes back to the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
+yourself) and leaves the rest of the file alone. The Hunter's Dream is the default pool: a file
+that names no pool uses it, unless it holds only a shadNet account; `online_pool=shadnet` picks
+the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
 That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
 The server shows summon signs only to clients it knows: `run.sh` presents the build as
 `bbport 1.9.1` (the Windows port's client field) unless `BB_CLIENT_VERSION` says otherwise. With
