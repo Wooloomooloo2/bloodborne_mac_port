@@ -13,9 +13,6 @@
 #include <execinfo.h>
 #include <pthread.h>
 #endif
-#ifdef _WIN32
-#include <windows.h>
-#endif
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/thread_act.h>
@@ -451,7 +448,6 @@ int OtherThreadFrames(pthread_t thread, void** frames, int capacity) {
 #endif
 
 std::string SymbolName(void* address) {
-#ifndef _WIN32
     Dl_info info{};
     if (dladdr(address, &info) && info.dli_sname) {
         return fmt::format("{}+{:#x}", info.dli_sname,
@@ -463,47 +459,42 @@ std::string SymbolName(void* address) {
                                               reinterpret_cast<uintptr_t>(info.dli_fbase),
                            info.dli_fname ? info.dli_fname : "lib");
     }
-#endif
     return fmt::format("{}", address);
 }
 
 std::string ThreadName(void* handle) {
     char name[64] = "?";
-#ifndef _WIN32
     pthread_getname_np((pthread_t)(uintptr_t)handle, name, sizeof(name));
-#endif
     return name[0] ? name : "?";
 }
 } // namespace
 
-#ifdef _WIN32
-void* Scheduler::CurrentThreadHandle() noexcept {
-    return reinterpret_cast<void*>(static_cast<uintptr_t>(GetCurrentThreadId()));
-}
-#endif
-
-void Scheduler::ReportChunkRace(const ChunkUser* other, const ChunkUser* self) {
+void Scheduler::ReportChunkRace(const ChunkUser* other, const ChunkUser* self,
+                                void* previous_caller) {
     static std::atomic<u32> reports{0};
     const u32 n = reports.fetch_add(1, std::memory_order_relaxed);
     if (n >= 8) {
         return;
     }
-    // The other side's record is its thread's: read once, it may leave its guard meanwhile.
-    void* const other_caller = other->caller;
-    void* const other_thread = other->thread;
-    if (other_thread == self->thread) {
+    if (other == self) {
+        // This thread's own record: its caller was already overwritten by the guard, the
+        // previous one is the use it is inside.
         std::fprintf(stderr,
                      "Scheduler: the recording chunk is used again by its own thread (#%u): %s "
                      "from %s, inside a use from %s\n",
                      n + 1, ThreadName(self->thread).c_str(), SymbolName(self->caller).c_str(),
-                     SymbolName(other_caller).c_str());
+                     SymbolName(previous_caller).c_str());
     } else {
+        // The other side's record is its thread's: read once, it may leave its guard meanwhile.
+        void* const other_caller = other->caller;
+        void* const other_thread = other->thread;
         std::fprintf(stderr,
                      "Scheduler: two threads use the recording chunk at once (#%u): %s from %s, "
                      "while %s entered from %s\n",
                      n + 1, ThreadName(self->thread).c_str(), SymbolName(self->caller).c_str(),
                      ThreadName(other_thread).c_str(), SymbolName(other_caller).c_str());
 #ifdef __APPLE__
+        // Symbolised after OtherThreadFrames resumed the thread (dladdr may take a lock).
         void* other_frames[32];
         const int other_count =
             OtherThreadFrames((pthread_t)(uintptr_t)other_thread, other_frames, 32);
@@ -516,11 +507,9 @@ void Scheduler::ReportChunkRace(const ChunkUser* other, const ChunkUser* self) {
 #endif
     }
     std::fprintf(stderr, "  %s (reporting):\n", ThreadName(self->thread).c_str());
-#ifndef _WIN32
     void* frames[32];
     const int count = backtrace(frames, 32);
     backtrace_symbols_fd(frames, count, 2);
-#endif
     std::fflush(stderr);
 }
 
