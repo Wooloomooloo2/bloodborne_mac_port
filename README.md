@@ -339,6 +339,8 @@ field gets exactly what was typed; the game's own length limit applies (the log 
 
 ### Online play (shadNet)
 
+Step-by-step setup, both pools and a troubleshooting table: [docs/ONLINE.md](docs/ONLINE.md).
+
 Messages, bloodstains and ghosts come from the community game server (The Hunter's Dream);
 bells and summons go through a shadNet server (`srv.shadps4.net:31313` by default) with a
 shadNet account. The network and PSN libraries are a separate module, `out/gpu/libbbnet.dylib`
