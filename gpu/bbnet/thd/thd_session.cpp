@@ -19,6 +19,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <thread>
 
 #ifdef _WIN32
@@ -186,12 +187,20 @@ struct HttpResult {
     std::string error;
 };
 
-// One keep-alive connection per thread and server: the poller asks four times a second.
+// The poller's connection, for PollerStop to cut a held poll short (bbport: long polling).
+std::mutex g_poll_client_mu;
+httplib::Client* g_poll_client = nullptr;
+thread_local bool t_is_poller = false;
+
+// One keep-alive connection per thread and server (the poller keeps one open across its polls,
+// as the server asks). The connect (and TLS) timeout is a few seconds whatever the call; the read
+// timeout is the caller's, so a poll the server holds open waits as long as it should.
 HttpResult Perform(const std::string& base, const std::string& path, const std::string* post,
                    int timeout_ms) {
     thread_local std::map<std::string, std::unique_ptr<httplib::Client>> clients;
     auto& cli = clients[base];
     const auto timeout = std::chrono::milliseconds(timeout_ms);
+    const auto connect_timeout = std::chrono::milliseconds(std::min(timeout_ms, 5000));
     auto open = [&] {
         cli = std::make_unique<httplib::Client>(base);
         cli->set_keep_alive(true);
@@ -199,6 +208,10 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         cli->enable_server_certificate_verification(Cfg().verify_tls);
 #endif
+        if (t_is_poller) {
+            std::lock_guard lk(g_poll_client_mu);
+            g_poll_client = cli.get();
+        }
     };
     const bool reused = cli != nullptr;
     if (!cli) open();
@@ -209,9 +222,9 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
         headers.emplace("X-BB-Token", token);
     }
     auto send = [&] {
-        cli->set_connection_timeout(timeout);
+        cli->set_connection_timeout(connect_timeout);
         cli->set_read_timeout(timeout);
-        cli->set_write_timeout(timeout);
+        cli->set_write_timeout(connect_timeout);
         return post ? cli->Post(path, headers, *post, "application/json") : cli->Get(path, headers);
     };
     HttpResult r;
@@ -224,6 +237,10 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
     }
     if (!res) {
         r.error = httplib::to_string(res.error());
+        if (t_is_poller) {
+            std::lock_guard lk(g_poll_client_mu);
+            g_poll_client = nullptr;
+        }
         cli.reset(); // a fresh connection next time
         return r;
     }
@@ -706,15 +723,43 @@ std::atomic<bool> g_pollrun{false};
 std::function<void(const Json&)> g_handler;
 long long g_cursor = 0;
 
+// Long polling, as The Hunter's Dream asks of clients (2026-10-18): every poll carries WaitMs
+// and the server holds it until an event arrives or the wait ends, answering with WaitMaxMs;
+// the next poll goes out at once after every answer (the server does the waiting). A server
+// that answers without WaitMaxMs has no long polling: back to a 250 ms pace, or it would be a
+// tight loop. One poll in flight per player; errors back off 1 s to 30 s with jitter; a refused
+// sign-in (401) polls once a minute. The read timeout stays above the wait.
+constexpr int kPollWaitMs = 25000;
+
+int Jitter(int ms) {
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> spread(-ms / 5, ms / 5);
+    return ms + spread(rng);
+}
+
 void PollerMain() {
     const std::string me = OnlineId();
-    int interval_ms = 250;
+    t_is_poller = true;
+    int wait_ms = kPollWaitMs; // long-poll from the first poll
+    int backoff_ms = 0;
+    int interval_ms = 0;
+    bool long_polling_logged = false;
     while (g_pollrun.load()) {
         Json body = {{"OnlineId", me}, {"Cursor", g_cursor}, {"Categories", Json::array({"matching2"})}};
+        if (wait_ms > 0) body["WaitMs"] = wait_ms;
         Json reply;
         std::string err;
-        if (NpPost("/np/events/poll", body, reply, err, 4000)) {
-            interval_ms = 250;
+        const int timeout_ms = wait_ms > 0 ? wait_ms + 5000 : 4000;
+        if (NpPost("/np/events/poll", body, reply, err, timeout_ms)) {
+            backoff_ms = 0;
+            // Every answer from a server that holds polls carries WaitMaxMs.
+            const int max_wait = static_cast<int>(IntOf(reply, "WaitMaxMs", 0));
+            wait_ms = max_wait > 0 ? std::min(kPollWaitMs, max_wait) : 0;
+            if (wait_ms > 0 && !long_polling_logged) {
+                Log("np: the server holds polls (WaitMaxMs %d): long polling with WaitMs %d", max_wait, wait_ms);
+                long_polling_logged = true;
+            }
+            interval_ms = wait_ms > 0 ? 0 : 250; // the server waited, or the old pace
             const long long next = IntOf(reply, "NextCursor", g_cursor);
             if (IntOf(reply, "HasEvent", 0) != 0) {
                 std::function<void(const Json&)> handler;
@@ -738,14 +783,18 @@ void PollerMain() {
                 continue; // drain without waiting while there are events
             }
             g_cursor = std::max(g_cursor, next);
+            if (interval_ms == 0) continue; // the server waited: poll again now
         } else if (Refused()) {
             interval_ms = 60000; // nothing arrives until this PC signs in again
         } else {
-            interval_ms = interval_ms < 4000 ? interval_ms * 2 : 4000; // the server is away
+            backoff_ms = backoff_ms ? std::min(backoff_ms * 2, 30000) : 1000; // the server is away
+            interval_ms = Jitter(backoff_ms);
         }
         std::unique_lock lk(g_pollmu);
         g_pollcv.wait_for(lk, std::chrono::milliseconds(interval_ms), [] { return !g_pollrun.load(); });
     }
+    std::lock_guard lk(g_poll_client_mu);
+    g_poll_client = nullptr;
 }
 
 std::atomic<bool> g_keeprun{false};
@@ -815,9 +864,15 @@ void PollerStop() {
         g_keeprun.store(false);
         g_keepcv.notify_all();
     }
-    std::lock_guard lk(g_pollmu);
-    g_pollrun.store(false);
-    g_pollcv.notify_all();
+    {
+        std::lock_guard lk(g_pollmu);
+        g_pollrun.store(false);
+        g_pollcv.notify_all();
+    }
+    // A poll the server is holding (up to 25 s) is cut short: the poller then sees g_pollrun
+    // and exits, so a restarted poller never overlaps it.
+    std::lock_guard lk(g_poll_client_mu);
+    if (g_poll_client) g_poll_client->stop();
 }
 
 // ---- game memory: 1.09's addresses (Binary Ninja, image base 0x400000) -------------------------------

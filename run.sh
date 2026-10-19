@@ -175,10 +175,11 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
         export BB_THD_SERVER=${BB_THD_SERVER:-$community:18671} BB_THD_AUTH=${BB_THD_AUTH:-$community}
         export BB_THD_RULESET=${BB_THD_RULESET:-vanilla} BB_P2P_PORT=${BB_P2P_PORT:-3658}
         # The client field the server tells clients apart by (User-Agent on the backend's calls and
-        # the game's): the server shows summon signs to the builds it knows. The Windows port's
-        # launcher sends "bbport <its version>"; as the backend's default ("BloodBorneButPc") a
-        # sign is accepted but no host is ever offered it (2026-10-17).
-        export BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-"bbport 1.9.2"}
+        # the game's, "name/version"). The operators ask every client for its own name and version
+        # (2026-10-18): this port's, from its latest tag (mac-v0.5.0 -> "bbport-mac 0.5.0"; without
+        # git, "dev"). BB_CLIENT_VERSION overrides it.
+        mac_version=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --abbrev=0 --match 'mac-v*' 2>/dev/null | sed 's/^mac-v//' || true)
+        export BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-"bbport-mac ${mac_version:-dev}"}
         unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
         if [[ -z ${BB_THD_TOKEN:-} || -z ${BB_THD_ONLINE_ID:-} ]]; then
             echo "Online: not signed in to The Hunter's Dream (run: python3 scripts/online.py signin --ini \"$data/bbport.ini\"): the game cannot sign in" >&2

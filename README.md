@@ -397,9 +397,11 @@ yourself) and leaves the rest of the file alone. The Hunter's Dream is the defau
 that names no pool uses it, unless it holds only a shadNet account; `online_pool=shadnet` picks
 the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
 That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
-The server shows summon signs only to clients it knows: `run.sh` presents the build as
-`bbport 1.9.2` (the Windows port's client field) unless `BB_CLIENT_VERSION` says otherwise. With
-the backend's default name the sign is accepted but never offered to a host.
+The server tells clients apart by their name and version and asks each port for its own:
+`run.sh` presents this build as `bbport-mac <version>` (the repository's latest `mac-v` tag)
+unless `BB_CLIENT_VERSION` says otherwise. The backend polls the server's event queue the way
+its operators ask (long polling: one request held open up to 25 s on one kept-alive
+connection, backing off on errors), and the game's play log goes out at the game's own pace.
 
 ### What online play exposes, and what protects it
 
@@ -422,7 +424,7 @@ the backend's default name the sign is accepted but never offered to a host.
   server's relay. What arrives is parsed by the game's own network code, as on a PS4. `upnp=0`
   keeps the router untouched.
 - **Identity.** The module reports itself to shadNet as `shadPS4 v0.20.0` (the server signs out
-  other names) and to The Hunter's Dream as `bbport 1.9.2` (`BB_CLIENT_VERSION`); the Discord
+  other names) and to The Hunter's Dream as `bbport-mac <version>` (`BB_CLIENT_VERSION`); the Discord
   device sign-in names the device "bbport on macOS", not the Mac's hostname. Your online id,
   position and play log go to the community server as the game sends them.
 - **Dependencies** are fetched by tag and checked against a pinned commit (or SHA-256 for the

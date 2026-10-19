@@ -662,6 +662,20 @@ Each item: what was done for now, what the refinement is, and where it lives.
   Still open on that pool: about one in six `sceHttp` calls to thehuntersdream.com:18671 fails
   with cpp-httplib error 8 (SSL connection failed), intermittently, including sign-ins; the
   backend's own httplib client (keep-alive) never failed in the same runs.
+  *2026-10-18, The Hunter's Dream operators' feedback (via the user):* the server now supports
+  long polling on `/np/events/poll` and asked clients to use it (99% of their load was empty
+  250 ms polls), to send play logs no more often than the game's default or 45-60 s, and to keep
+  a distinct `User-Agent` per client. Done: `PollerMain` sends `WaitMs` 25000 from the first
+  poll, keeps `min(25000, WaitMaxMs)` from each answer, drops back to the 250 ms pace when an
+  answer carries no `WaitMaxMs`, polls again at once after every answer, backs off 1 s to 30 s
+  with ±20 % jitter on errors, once a minute after a 401, on one kept-alive connection whose read
+  timeout is the wait + 5 s (connect/TLS stays at 5 s); `PollerStop` cuts a held poll short
+  (`httplib::Client::stop`) so a restarted poller never overlaps it. The play log needs nothing:
+  this port sends it at the game's pace (47 uploads in 67 min of coop9.log, median 70 s apart);
+  the 5 s rhythm they see from bbport is the Windows port's live-map bridge, not ported here.
+  Identity: `bbport-mac <latest mac-v tag>` (run.sh), as they asked, instead of the Windows
+  port's string. *Open:* whether a server-side allow-list needs the new name added (the first
+  sign on the new name tells), and the ss.info-driven tuning they plan.
 - **Online play: the review's security points (PR 9, 2026-10-17).** Done on the branch: HTTPS
   verification stays on where the game loaded Sony's CAs (http.cpp; upstream bypassed it);
   secrets from the login keychain (`shadnet_password=keychain`, `thd_token=keychain`,
