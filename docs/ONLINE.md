@@ -122,7 +122,7 @@ mapping; `BB_DISABLE_HTTPS=1` turns certificate checks off (only for debugging).
 | `community_server=url` | `BB_COMMUNITY_SERVER` | another game server (default `https://thehuntersdream.com`) |
 | `p2p_port=3658` | `BB_P2P_PORT` | the UDP port for co-op traffic (`0` = any free port) |
 | `upnp=0` | `BB_UPNP=0` | do not ask the router to forward the port |
-| | `BB_CLIENT_VERSION` | the client name shown to The Hunter's Dream (`bbport 1.9.1` by default) |
+| | `BB_CLIENT_VERSION` | the client name shown to The Hunter's Dream (`bbport 1.9.2` by default) |
 | | `BB_GPU_LOG=debug` | the network libraries' log |
 
 Values set in the environment (`launch.conf`, or on the command line) win over the file.
