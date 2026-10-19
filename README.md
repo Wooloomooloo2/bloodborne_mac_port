@@ -104,7 +104,8 @@ geometry corruption at 1440p (scenes above 1080p now use live resolution changes
 ### New in 0.4.0: the launcher
 
 `Bloodborne.app` now opens a launcher window (native SwiftUI) before the game, like a Steam
-launcher, with every setting on one screen (no scrolling, even on a 13" MacBook Air):
+launcher, with the game's settings on one screen and online play on a second tab (no
+scrolling, even on a 13" MacBook Air):
 
 - **Display:** output resolution, windowed or full screen, frame rate cap (30, 40, 60, 90, 120).
 - **Upscaler:** off, MetalFX or FSR 3.1, its quality level, and the resolution the game
@@ -114,6 +115,11 @@ launcher, with every setting on one screen (no scrolling, even on a 13" MacBook 
   and **skip intro videos** (straight to the title screen, no Sony and FromSoftware logos).
 - **Locations:** the game folder (checked before Play is enabled) and the save folder (it
   offers to copy your saves to a new folder; the originals stay where they were).
+- **Online** (second tab): play online on or off; the co-op pool, either **The Hunter's Dream**
+  with **Sign in with Discord** (the window shows the page and the code, then who you are
+  signed in as, with **Sign Out**) or a **shadNet server** with its address, account name and
+  password; UPnP port mapping and the co-op UDP port. Passwords and tokens go to your login
+  keychain, never into a file or the log. Setup guide: [docs/ONLINE.md](docs/ONLINE.md).
 - **Show launcher every time:** untick it to start the game directly next time; hold **⌥
   (Option)** while opening the app to get the window back.
 
@@ -352,7 +358,8 @@ code mainline shadPS4 and the Windows port run, so bells reach their players), b
 OpenSSL, miniupnpc, nlohmann_json) to `deps/x86_64`. Offline the module is never loaded, and a
 build without it plays offline exactly as before.
 
-Turn it on in `bbport.ini` (`~/Library/Application Support/Bloodborne/bbport.ini`):
+Turn it on in the launcher's **Online** tab (**Play online**, the pool, the account; it writes
+the keys below), or by hand in `bbport.ini` (`~/Library/Application Support/Bloodborne/bbport.ini`):
 
 ```ini
 online=1
@@ -385,8 +392,9 @@ leaves the players unable to reach each other, on either side. `BB_GPU_LOG=debug
 signaling exchange (`NpSignaling`, `Lib_Net`) if a bell is not answered.
 
 **The Hunter's Dream pool** gets through that: its session service relays and punches through
-NATs, with bbhost and Windows-port players on the same pool. Sign in once with Discord, as the
-Windows port's launcher does:
+NATs, with bbhost and Windows-port players on the same pool. Sign in once with Discord: in the
+launcher's **Online** tab, **Sign in with Discord** (the token goes to your keychain), or from
+Terminal, as the Windows port's launcher does:
 
 ```bash
 python3 scripts/online.py signin --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
@@ -406,6 +414,8 @@ connection, backing off on errors), and the game's play log goes out at the game
 ### What online play exposes, and what protects it
 
 - **Credentials.** The shadNet password and The Hunter's Dream token can stay out of `bbport.ini`:
+  the launcher's **Online** tab always keeps them in the login keychain (it never reads them
+  back, only stores, checks for and removes them), and from Terminal
   `python3 scripts/online.py keychain shadnet --npid NAME --ini <bbport.ini>` puts the password
   in the login keychain (item `bbport-shadnet`) and writes `shadnet_password=keychain`;
   `scripts/online.py signin --keychain` does the same for the token (`bbport-huntersdream`,
@@ -465,7 +475,7 @@ launcher.
 | `scripts/macos/make_app.sh` | Builds `Bloodborne.app`, a launcher without a Terminal window (local, not committed) |
 | `scripts/macos/package_app.sh` | Builds the self-contained `dist/Bloodborne.app` and its zip for releases (CI: `.github/workflows/macos-release.yml`) |
 | `Saves` | Shortcut to the save folder (created on first launch, not committed) |
-| `launcher/` | The macOS launcher window (Swift: `Model/` with tests, `App/`; built by `scripts/macos/build_launcher.sh`), plus the Linux port's GTK launcher (reference) |
+| `launcher/` | The macOS launcher window (Swift: `Model/` with tests, `App/`; built by `scripts/macos/build_launcher.sh`; the Online tab writes the keys `scripts/launch_settings.sh` reads), plus the Linux port's GTK launcher (reference) |
 | `tools/` | Developer utilities, including `pkg_extract` (fpkg unpacker) |
 | `docs/` | macOS plan and backlog, plus technical notes inherited from upstream |
 

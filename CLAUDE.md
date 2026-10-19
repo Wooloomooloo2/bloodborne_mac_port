@@ -141,8 +141,13 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 ## State as of 2026-10-16 (mac-v0.4.0)
 
 - **Launcher** (`launcher/App`, `launcher/Model`, Swift; `scripts/macos/build_launcher.sh --test`):
-  the main executable of both apps; two-column window sized for a 13" Air. Writes `bbport.ini` and
-  `launch.conf` (`BB_SHOW_LAUNCHER`, `BB_SAVE_DIR`); ⌥ at open shows it when hidden. Test runs:
+  the main executable of both apps; two tabs sized for a 13" Air: Settings (two columns) and
+  Online. Writes `bbport.ini` and `launch.conf` (`BB_SHOW_LAUNCHER`, `BB_SAVE_DIR`); ⌥ at open
+  shows it when hidden. The Online tab (`OnlineSettings`, `HuntersDream` in Model; `Keychain.swift`,
+  `SignIn.swift` in App) writes the keys `scripts/launch_settings.sh` reads (`online`,
+  `online_pool`, `shadnet_*`, `thd_*`, `upnp`, `p2p_port`); secrets go through `security` into the
+  login keychain (the ini says `keychain`), never read back; the Discord device sign-in polls the
+  community server's `/auth/device/*` as `scripts/online.py signin` does. Test runs:
   `open -n --env BB_DATA_DIR=$PWD/out/macdata --env BB_LAUNCH_CONF=$PWD/out/macdata/launch.conf Bloodborne.app`.
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 

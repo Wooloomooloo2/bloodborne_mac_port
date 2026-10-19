@@ -211,8 +211,169 @@ do {
     try? fm.removeItem(at: root)
 }
 
+// A keychain that remembers what was stored (the real one is the user's; launch_settings.sh
+// reads the same items with `security find-generic-password`).
+final class FakeSecrets: SecretStore {
+    var items: [String: String] = [:]
+    var failing = false
+    func has(service: String, account: String) -> Bool { items["\(service)/\(account)"] != nil }
+    func store(service: String, account: String, secret: String) throws {
+        if failing { throw HuntersDream.Failure(description: "keychain locked") }
+        items["\(service)/\(account)"] = secret
+    }
+    func remove(service: String, account: String) { items["\(service)/\(account)"] = nil }
+}
+
+// OnlineSettings: the keys scripts/launch_settings.sh reads, round trip, secrets.
+do {
+    let defaults = OnlineSettings(ini: IniFile())
+    check(defaults == OnlineSettings(), "empty ini = defaults")
+    check(!defaults.online && defaults.pool == .huntersdream && defaults.upnp && defaults.p2pPort == 3658, "default online settings")
+    check(defaults.shadnetServer == "" && defaults.shadnetNpid == "" && defaults.shadnetPassword == .none, "default shadNet: nothing")
+    check(defaults.thdOnlineId == "" && defaults.thdToken == .none && !defaults.hasSecretInFile, "default Hunter's Dream: nothing")
+
+    let read = OnlineSettings(ini: IniFile(text: "online=1\nonline_pool=shadnet\nshadnet_server=example.org:31313\nshadnet_npid=hunter\nshadnet_password=keychain\nthd_online_id=dreamer\nthd_token=abc123\nupnp=0\np2p_port=0\ncommunity_server=https://example.org\n"))
+    check(read.online && read.pool == .shadnet && read.shadnetServer == "example.org:31313" && read.shadnetNpid == "hunter", "read shadNet keys")
+    check(read.shadnetPassword == .keychain && read.thdOnlineId == "dreamer" && read.thdToken == .inFile("abc123"), "read secrets as stored")
+    check(!read.upnp && read.p2pPort == 0 && read.hasSecretInFile, "read upnp, port, a token in the file")
+    // The shell's rules: flags are exactly 0 or 1; a bad port or pool is ignored.
+    let odd = OnlineSettings(ini: IniFile(text: "online=yes\nupnp=2\np2p_port=70000\nonline_pool=psn\nshadnet_password=\n"))
+    check(!odd.online && odd.upnp && odd.p2pPort == 3658 && odd.pool == .huntersdream && odd.shadnetPassword == .none, "invalid values -> defaults")
+    check(OnlineSettings.port(from: "3658") == 3658 && OnlineSettings.port(from: "0") == 0 && OnlineSettings.port(from: "65535") == 65535, "ports")
+    check(OnlineSettings.port(from: "65536") == nil && OnlineSettings.port(from: "") == nil && OnlineSettings.port(from: "12a") == nil, "bad ports")
+    check(OnlineSettings.port(from: "-1") == nil && OnlineSettings.port(from: "123456") == nil && OnlineSettings.port(from: "٣") == nil, "digits only, five at most")
+    // The pool when the file names none (launch_settings.sh): shadNet only for a file that holds
+    // only a shadNet account.
+    check(OnlineSettings(ini: IniFile(text: "online=1\nshadnet_npid=hunter\n")).pool == .shadnet, "only a shadNet account: shadNet")
+    check(OnlineSettings(ini: IniFile(text: "shadnet_npid=hunter\nthd_online_id=dreamer\n")).pool == .huntersdream, "both accounts: The Hunter's Dream")
+    check(OnlineSettings(ini: IniFile(text: "online=1\n")).pool == .huntersdream, "no account: The Hunter's Dream")
+
+    // Round trip: every key written as the shell reads it; other keys and the order kept.
+    var file = IniFile(text: "# header\nupscaler=metalfx\ncommunity_server=https://example.org\nshadnet_webapi=http://example.org:31315\n")
+    var online = read
+    online.shadnetServer = "  "
+    online.apply(to: &file)
+    check(OnlineSettings(ini: file) == OnlineSettings(ini: IniFile(text: file.text)), "written and read back")
+    let back = OnlineSettings(ini: file)
+    check(back.online == read.online && back.pool == read.pool && back.shadnetNpid == read.shadnetNpid, "round trip accounts")
+    check(back.shadnetPassword == .keychain && back.thdToken == .inFile("abc123") && back.thdOnlineId == "dreamer", "round trip secrets unchanged")
+    check(back.upnp == read.upnp && back.p2pPort == read.p2pPort, "round trip upnp and port")
+    check(file["online"] == "1" && file["online_pool"] == "shadnet" && file["upnp"] == "0" && file["p2p_port"] == "0", "keys as the shell reads them")
+    check(file["shadnet_server"] == nil && file["shadnet_password"] == "keychain" && file["thd_token"] == "abc123", "blank server removed; secrets as read")
+    check(file["community_server"] == "https://example.org" && file["shadnet_webapi"] == "http://example.org:31315" && file["upscaler"] == "metalfx", "other keys kept")
+    check(file.text.hasPrefix("# header\n"), "header kept")
+    var cleared = online
+    cleared.shadnetNpid = ""
+    cleared.online = false
+    cleared.upnp = true
+    cleared.p2pPort = 65535
+    cleared.apply(to: &file)
+    check(file["shadnet_npid"] == nil && file["online"] == "0" && file["upnp"] == "1" && file["p2p_port"] == "65535", "cleared account; flags written explicitly")
+    // The shell reads what the launcher wrote (scripts/launch_settings.sh).
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("launcher-online-\(getpid()).ini")
+    try? file.write(to: url)
+    let bash = Process()
+    bash.executableURL = URL(fileURLWithPath: "/bin/bash")
+    bash.arguments = ["-c", "source scripts/launch_settings.sh && bb_launch_settings \"$1\" && printf '%s %s %s %s %s' \"${BB_ONLINE:--}\" \"${BB_NET_BACKEND:--}\" \"${BB_UPNP:--}\" \"${BB_P2P_PORT:--}\" \"${BB_THD_ONLINE_ID:--}\"", "_", url.path]
+    var environment = ProcessInfo.processInfo.environment
+    for key in ["BB_ONLINE", "BB_NET_BACKEND", "BB_UPNP", "BB_P2P_PORT", "BB_THD_ONLINE_ID", "BB_THD_TOKEN", "BB_SHADNET_NPID"] {
+        environment.removeValue(forKey: key)
+    }
+    environment["BB_KEYCHAIN_TOOL"] = "/usr/bin/false"
+    bash.environment = environment
+    let pipe = Pipe()
+    bash.standardOutput = pipe
+    try? bash.run()
+    bash.waitUntilExit()
+    let sourced = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    check(bash.terminationStatus == 0 && sourced == "- - 1 65535 dreamer", "launch_settings.sh reads the launcher's keys: \(sourced.debugDescription)")
+    try? FileManager.default.removeItem(at: url)
+
+    // Secrets: the password and the token go to the keychain, the file says `keychain`.
+    let secrets = FakeSecrets()
+    var account = OnlineSettings()
+    account.shadnetNpid = " hunter "
+    check(!account.shadnetPasswordStored(secrets: secrets) && !account.signedIn(secrets: secrets), "nothing stored yet")
+    do { try account.storeShadnetPassword("s3cret", secrets: secrets) } catch { check(false, "store password: \(error)") }
+    check(secrets.items["bbport-shadnet/hunter"] == "s3cret" && account.shadnetPassword == .keychain, "password under the trimmed account name")
+    check(account.shadnetPasswordStored(secrets: secrets), "password reported as stored")
+    account.shadnetNpid = "other"
+    check(!account.shadnetPasswordStored(secrets: secrets), "another account: no password")
+    check(OnlineSettings(ini: IniFile(text: "shadnet_npid=x\nshadnet_password=clear\n")).shadnetPasswordStored(secrets: secrets), "a password in the file counts")
+    secrets.failing = true
+    var failed = account
+    do { try failed.storeShadnetPassword("x", secrets: secrets); check(false, "a failing keychain must throw") } catch {}
+    check(failed == account, "a failed store changes nothing")
+    secrets.failing = false
+    account.pool = .shadnet
+    do { try account.signIn(onlineId: "dreamer", token: "tok", secrets: secrets) } catch { check(false, "sign in: \(error)") }
+    check(secrets.items["bbport-huntersdream/dreamer"] == "tok" && account.thdOnlineId == "dreamer" && account.thdToken == .keychain, "token in the keychain")
+    check(account.pool == .huntersdream && account.signedIn(secrets: secrets), "signed in on The Hunter's Dream")
+    var ini = IniFile()
+    account.apply(to: &ini)
+    check(ini["thd_online_id"] == "dreamer" && ini["thd_token"] == "keychain" && ini["online_pool"] == "huntersdream", "what online.py signin --keychain writes")
+    check(OnlineSettings(ini: IniFile(text: "thd_online_id=dreamer\nthd_token=keychain\n")).signedIn(secrets: secrets), "signed in from the file's `keychain`")
+    check(!OnlineSettings(ini: IniFile(text: "thd_online_id=gone\nthd_token=keychain\n")).signedIn(secrets: secrets), "`keychain` without an item: not signed in")
+    check(OnlineSettings(ini: IniFile(text: "thd_online_id=gone\nthd_token=abc\n")).signedIn(secrets: secrets), "a token in the file: signed in")
+    account.signOut(secrets: secrets)
+    check(secrets.items["bbport-huntersdream/dreamer"] == nil && account.thdOnlineId == "" && account.thdToken == .none, "signed out: item and keys gone")
+    check(!account.signedIn(secrets: secrets) && secrets.items["bbport-shadnet/hunter"] == "s3cret", "the shadNet password stays")
+    account.apply(to: &ini)
+    check(ini["thd_online_id"] == nil && ini["thd_token"] == nil, "signed out: no account keys")
+}
+
+// IniFile keeps an owner-only file owner-only (a secret in clear).
+do {
+    let fm = FileManager.default
+    let url = fm.temporaryDirectory.appendingPathComponent("launcher-perms-\(getpid())/bbport.ini")
+    var ini = IniFile(text: "thd_token=abc\n")
+    try? ini.write(to: url)
+    try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    ini["online"] = "1"
+    try? ini.write(to: url)
+    let mode = ((try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions] as? Int) ?? -1
+    check(mode == 0o600 && IniFile(contentsOf: url)["online"] == "1", "permissions kept across an atomic write: \(String(mode, radix: 8))")
+    try? fm.removeItem(at: url.deletingLastPathComponent())
+}
+
+// HuntersDream: the device sign-in protocol (scripts/online.py thd_sign_in).
+do {
+    check(HuntersDream.communityAddress(nil) == "https://thehuntersdream.com" && HuntersDream.communityAddress("  ") == "https://thehuntersdream.com", "default game server")
+    check(HuntersDream.communityAddress("https://example.org:20443/bb-eu/ss.info") == "https://example.org", "scheme and host only")
+    check(HuntersDream.communityAddress("example.org") == "https://example.org" && HuntersDream.communityAddress("http://x.test/") == "http://x.test", "scheme added or kept")
+    let community = "https://example.org"
+    let start = HuntersDream.startRequest(community: community)
+    check(start.url?.absoluteString == "https://example.org/auth/device/start" && start.httpMethod == "POST", "start request")
+    check(start.value(forHTTPHeaderField: "Content-Type") == "application/json", "JSON request")
+    let startBody = start.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+    check(startBody == ["DeviceName": "bbport on macOS"], "the device name, not the hostname")
+    let poll = HuntersDream.pollRequest(community: community, deviceCode: "dev-1")
+    let pollBody = poll.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
+    check(poll.url?.absoluteString == "https://example.org/auth/device/poll" && pollBody == ["DeviceCode": "dev-1"], "poll request")
+
+    func data(_ json: String) -> Data { Data(json.utf8) }
+    let started = try? HuntersDream.deviceStart(data(#"{"ResKind":0,"DeviceCode":"dev-1","UserCode":"ABCD-EFGH","VerificationUri":"https://example.org/link","Interval":3,"ExpiresIn":120}"#), community: community)
+    check(started == HuntersDream.DeviceStart(deviceCode: "dev-1", userCode: "ABCD-EFGH", page: URL(string: "https://example.org/link")!, interval: 3, expiresIn: 120), "start reply: \(String(describing: started))")
+    let bare = try? HuntersDream.deviceStart(data(#"{"ResKind":0,"DeviceCode":"d","UserCode":"C"}"#), community: community)
+    check(bare?.page.absoluteString == "https://example.org/link" && bare?.interval == 5 && bare?.expiresIn == 600, "start reply defaults")
+    func failure(_ body: () throws -> Any) -> String? {
+        do { _ = try body(); return nil } catch { return (error as? HuntersDream.Failure)?.description ?? "other error" }
+    }
+    check(failure { try HuntersDream.deviceStart(data(#"{"ResKind":0}"#), community: community) } == "no code in the reply", "start without a code")
+    check(failure { try HuntersDream.deviceStart(data(#"{"ResKind":3,"Message":"too many devices"}"#), community: community) } == "too many devices", "refused with a message")
+    check(failure { try HuntersDream.deviceStart(data(#"{"ResKind":1}"#), community: community) } == "refused", "refused without a message")
+    check(failure { try HuntersDream.deviceStart(data("<html>404</html>"), community: community) } == "https://example.org/auth/device/start has no account service", "not an account service")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0,"Status":"pending"}"#), community: community)) == .pending, "poll pending")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0}"#), community: community)) == .pending, "poll without a status: pending")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0,"Status":"slow_down"}"#), community: community)) == .slowDown, "poll slow_down")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0,"Status":"denied"}"#), community: community)) == .denied, "poll denied")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0,"Status":"expired"}"#), community: community)) == .expired, "poll expired")
+    check((try? HuntersDream.poll(data(#"{"ResKind":0,"Status":"approved","OnlineId":"dreamer","Token":"tok"}"#), community: community)) == .approved(onlineId: "dreamer", token: "tok"), "poll approved")
+    check(failure { try HuntersDream.poll(data(#"{"ResKind":0,"Status":"approved","OnlineId":"dreamer"}"#), community: community) } == "no token in the reply", "approved without a token")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, online, sign-in)")

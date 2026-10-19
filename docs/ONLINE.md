@@ -30,8 +30,10 @@ Without those libraries the build still succeeds and the port plays offline.
 
 ## 2. Turn online play on
 
-Settings live in `~/Library/Application Support/Bloodborne/bbport.ini` (the launcher and the
-in-game menu write the same file; close the launcher before editing it by hand). Add:
+Open `Bloodborne.app`, switch to its **Online** tab and turn **Play online** on. The launcher
+writes the settings below into `~/Library/Application Support/Bloodborne/bbport.ini` when you
+press Play or quit it (the in-game menu writes the same file; close the launcher before editing
+it by hand). Without the launcher, add the line yourself:
 
 ```ini
 online=1
@@ -41,21 +43,33 @@ online=1
 
 ### The Hunter's Dream (recommended: works through any router)
 
-Link a Discord account the way the Windows port's launcher does: the command prints a web
-address and a code; sign in with Discord there and enter the code.
+In the **Online** tab, with the pool set to **The Hunter's Dream**, press **Sign in with
+Discord…**. The window shows a web address and a code: open the page (**Open Page**), sign in
+with Discord there and enter the code. Within a few seconds the window says *Signed in as
+\<your name\>*; **Sign Out** forgets the account again. The token is kept in your login keychain
+(item `bbport-huntersdream`), and bbport.ini gets `online_pool=huntersdream`,
+`thd_online_id=<your name>` and `thd_token=keychain`.
+
+The same from Terminal, the way the Windows port's launcher does it (the command prints the
+address and the code and waits for the approval):
 
 ```sh
 python3 scripts/online.py signin --keychain --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
 ```
 
-It writes `online_pool=huntersdream`, `thd_online_id=<your name>` and `thd_token=keychain` into
-bbport.ini and keeps the token itself in your login keychain (item `bbport-huntersdream`). Without
-`--keychain` the token is written into the file, which then becomes readable by you alone.
+Without `--keychain` the token is written into the file, which then becomes readable by you
+alone.
 
 ### shadNet
 
-Register at [shadnet.shadps4.net](https://shadnet.shadps4.net), then store the password in the
-keychain (the command prompts for it; nothing is echoed) and the account name in bbport.ini:
+Register at [shadnet.shadps4.net](https://shadnet.shadps4.net). In the **Online** tab set the
+pool to **shadNet server** and fill in the account name and the password (and another server
+address, if not shadPS4's public one). The password goes to your login keychain (item
+`bbport-shadnet`, account = the name) when the settings are saved; the field then reads
+*Stored in your keychain* and stays empty. Mind that the shadNet protocol itself is unencrypted
+(see *What online play exposes* in the README): use a password you use nowhere else.
+
+From Terminal instead (the command prompts for the password; nothing is echoed):
 
 ```sh
 python3 scripts/online.py keychain shadnet --npid YourOnlineId --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
@@ -63,8 +77,13 @@ python3 scripts/online.py keychain shadnet --npid YourOnlineId --ini ~/Library/A
 
 That writes `shadnet_npid=YourOnlineId` and `shadnet_password=keychain`. Set
 `online_pool=shadnet` (a file with only a shadNet account and no pool line is taken as shadNet
-too). Mind that the shadNet protocol itself is unencrypted (see
-*What online play exposes* in the README): use a password you use nowhere else.
+too).
+
+### The connection
+
+The **Connection** group of the same tab has the UPnP switch (the module asks the router to
+forward the co-op port while the game runs) and the co-op UDP port (3658, the PS4's, by
+default; 0 picks any free port).
 
 ## 4. Launch and check
 
@@ -107,10 +126,14 @@ BB_GPU_LOG=debug BB_GAME_DIR=/path/to/CUSA03173 bash run.sh 2>&1 | tee ~/Library
 | `Handshake[...] SEND kind=1` repeating, then `DEAD (errorCode=0x80552711)` (shadNet pool) | your offers never get an answer: a router in the way | switch to The Hunter's Dream pool |
 | `SSL connection failed` now and then | a known intermittent failure of the game's own HTTPS calls | harmless for play; being investigated |
 
-`online=0` (or removing the line) returns the game to offline play; `upnp=0` stops the port
-mapping; `BB_DISABLE_HTTPS=1` turns certificate checks off (only for debugging).
+`online=0` (or removing the line, or **Play online** off in the launcher) returns the game to
+offline play; `upnp=0` stops the port mapping; `BB_DISABLE_HTTPS=1` turns certificate checks
+off (only for debugging).
 
 ## Settings reference
+
+The launcher's **Online** tab writes the first eight rows; the rest are for `bbport.ini` or
+`launch.conf` by hand.
 
 | bbport.ini | Environment | Meaning |
 |---|---|---|
