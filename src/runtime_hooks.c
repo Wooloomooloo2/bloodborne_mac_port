@@ -53,6 +53,17 @@ static Hook hooks[] = {
      {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x48, 0x83, 0xec, 0x38, 0x48, 0x89,
       0xf3},
      16, 0, 0, 0, 0},
+    /* The render thread's other job: its loop (0x21b69ea) runs the task at this+0x20 through
+     * its first virtual method, outside the frame job, and this one records the frame's draw
+     * list into the same immediate context (0x219d271 -> 0x21b2fb0). The overlap that still got
+     * through the lock (MACOS_BACKLOG 2026-10-17; caught again 2026-10-19 loading a save: the
+     * main thread in 0xebb960 under the lock, the render thread at 0x219d276 called from
+     * 0x21b6a58) came this way. (this, esi): no stack arguments.
+     * push rbp; mov rbp,rsp; push r15; push r14; push r12; push rbx; mov r14d,esi; mov r12,rdi */
+    {NULL, "GXRenderThread task", 0x219d220,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x53, 0x41, 0x89, 0xf6, 0x49,
+      0x89, 0xfc},
+     17, 0, 0, 0, 0},
 };
 #define HOOK_COUNT (sizeof(hooks) / sizeof(hooks[0]))
 
