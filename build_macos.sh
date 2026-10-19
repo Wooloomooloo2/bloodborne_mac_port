@@ -56,13 +56,17 @@ if ! ninja -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
     grep -v '^\[' out/gpu-build.log | tail -40 >&2
     echo 'GPU library build failed (full log: out/gpu-build.log)' >&2; exit 1
 fi
-# The online module, when CMake found its libraries (otherwise the port plays offline).
+# The online module, when CMake found its libraries (otherwise the port plays offline). A failed
+# module build is a warning, not a stop: the offline game is whole without it, so a stale module
+# is removed and the build goes on.
 if ninja -C out/gpu -t targets all 2>/dev/null | grep '^bbnet:' >/dev/null; then # no -q: pipefail
-    if ! ninja -C out/gpu bbnet > out/gpu-net-build.log 2>&1; then
+    if ninja -C out/gpu bbnet > out/gpu-net-build.log 2>&1; then
+        echo "Online module: $PWD/out/gpu/libbbnet.dylib"
+    else
         grep -v '^\[' out/gpu-net-build.log | tail -40 >&2
-        echo 'Online module build failed (full log: out/gpu-net-build.log)' >&2; exit 1
+        rm -f out/gpu/libbbnet.dylib
+        echo 'Online module: build failed (full log: out/gpu-net-build.log); the game plays offline without it' >&2
     fi
-    echo "Online module: $PWD/out/gpu/libbbnet.dylib"
 else
     echo 'Online module: not built (its libraries are missing: run bash scripts/macos/bootstrap_deps.sh)'
 fi
