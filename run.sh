@@ -130,8 +130,11 @@ elif [[ $live == 1 ]]; then
     echo "Output ${scaled_output}: live resolution changes (live_resolution=0: startup patch)"
 elif [[ -n ${scaled_output:-} ]]; then
     export BB_RENDER_RES=$scaled_render BB_OUTPUT_RES=$scaled_output BB_AUTO_RENDER_RES=1
-    export BB_DMEM_MB=${BB_DMEM_MB:-9152}
-    echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB} MiB (live_resolution=1: live changes)"
+    # More direct memory only with patches.py's heap patch (scenes larger than 1920x1080). At
+    # or below 1080p the retail 5056 MiB is enough, and 9152 made the GPU arena 10 GiB, past a
+    # 16 GB Mac's Metal working set (#22: 9 FPS, Metal 11.9 GB allocated at 720p).
+    if (( render_w * render_h > 1920 * 1080 )); then export BB_DMEM_MB=${BB_DMEM_MB:-9152}; fi
+    echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB:-5056} MiB (live_resolution=1: live changes)"
 fi
 "$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "${BB_PATCHES:-}" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"

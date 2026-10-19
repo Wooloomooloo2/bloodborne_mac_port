@@ -1353,3 +1353,17 @@ set, so images could reach ~8 GB beside it.
   Metal allocated 7.1 GB at start, 9.6 GB at most (6.7 GB of it resident buffers), image
   trigger 3.0 GiB, 0 images freed. Not measured on a real 16 GB Mac yet.
 
+
+## 16 GB Macs, part 2: no extra direct memory at or below 1080p (2026-10-19)
+
+Issue #22 (M5 16 GB, macOS 27, 0.5.2, 1280x720): 9 FPS, GPU 68 ms a frame (vertex 44 ms), Metal
+11.86 GB allocated. run.sh's startup-patch path (live resolution off, any scaled output: 720p, or
+an upscaler at 1080p and below) still raised direct memory to 9152 MiB, so the arena was 10 GiB.
+The raise came from upstream (644ec0f) for scenes above 1080p, together with patches.py's heap
+patch; on macOS those scenes always take the live path. Now only scenes larger than 1920x1080
+get it (the heap patch's condition). Native 1080p never took this path.
+
+- M4 Max, Cages save, 16 GB limits (`BB_GC_BUDGET_MB=11015 BB_MAX_BUFFER_GIB=9`), windowed, 60 cap:
+  720p startup patch: direct memory 5056 MiB, arena 6.0 GiB (reached 3.75), 60.0 FPS stand and
+  turn, 0 spikes, GPU process 4.6-5.0 GB, scene correct. 1080p native: arena 6.0 GiB, 60.0 FPS,
+  GPU process 5.5-5.9 GB.
