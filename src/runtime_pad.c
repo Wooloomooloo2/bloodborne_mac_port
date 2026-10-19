@@ -16,6 +16,8 @@
 #include <time.h>
 #include <SDL3/SDL.h>
 #include <sys/stat.h>
+#include <ctype.h>
+#include <unistd.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -92,6 +94,150 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
+/* ---- keyboard bindings from input.ini: one "output = key" per line ---- */
+enum { ST_NONE, ST_LUP, ST_LDOWN, ST_LLEFT, ST_LRIGHT, ST_RUP, ST_RDOWN, ST_RLEFT, ST_RRIGHT };
+typedef struct { SDL_Scancode key; uint32_t btn; int stick, touch, mouse; } KeyBind;
+static float mouse_sens = 1.0f, mouse_full = 12.0f, mouse_dz = 0.10f;
+static int mouse_inv_y;
+static const char *const mouse_names[5] = {"mouse left", "mouse middle", "mouse right", "mouse x1", "mouse x2"};
+/* Mouse from the window process: motion in pixels since the last sample, buttons held. */
+static void mouse_sample(float *mx, float *my, uint32_t *mb) {
+    static uint64_t last_us;
+    static float lx, ly;
+    static uint32_t lb;
+    const uint64_t t = now_us();
+    if (last_us && t - last_us < 3000u) { *mx = lx; *my = ly; *mb = lb; return; }
+    last_us = t;
+    int dx = 0, dy = 0;
+    uint32_t b = 0;
+    if (!bbgpu_split_mouse(&dx, &dy, &b)) { dx = dy = 0; b = 0; }
+    lx = (float)dx / 16.0f; ly = (float)dy / 16.0f; lb = b;
+    *mx = lx; *my = ly; *mb = lb;
+}
+/* Pixels of motion this sample -> a stick value, with the stick dead zone skipped. */
+static uint8_t mouse_stick(float px) {
+    float v = px * mouse_sens / mouse_full;
+    float a = v < 0.0f ? -v : v;
+    if (a > 1.0f) a = 1.0f;
+    a = mouse_dz + (1.0f - mouse_dz) * a;
+    float out = 128.0f + (v < 0.0f ? -a : a) * 127.0f;
+    return (uint8_t)(out < 0.0f ? 0.0f : out > 255.0f ? 255.0f : out + 0.5f);
+}
+#define MAX_BINDS 256
+static KeyBind binds[MAX_BINDS];
+static int nbinds, binds_loaded;
+static const struct { const char *name; uint32_t btn; int stick, touch; } bind_outputs[] = {
+    {"cross",BTN_CROSS,ST_NONE,-1}, {"circle",BTN_CIRCLE,ST_NONE,-1},
+    {"square",BTN_SQUARE,ST_NONE,-1}, {"triangle",BTN_TRIANGLE,ST_NONE,-1},
+    {"l1",BTN_L1,ST_NONE,-1}, {"r1",BTN_R1,ST_NONE,-1},
+    {"l2",BTN_L2,ST_NONE,-1}, {"r2",BTN_R2,ST_NONE,-1},
+    {"l3",BTN_L3,ST_NONE,-1}, {"r3",BTN_R3,ST_NONE,-1},
+    {"options",BTN_OPTIONS,ST_NONE,-1},
+    {"up",BTN_UP,ST_NONE,-1}, {"down",BTN_DOWN,ST_NONE,-1},
+    {"left",BTN_LEFT,ST_NONE,-1}, {"right",BTN_RIGHT,ST_NONE,-1},
+    {"touchpad_left",0,ST_NONE,0}, {"touchpad_right",0,ST_NONE,1},
+    {"lstick_up",0,ST_LUP,-1}, {"lstick_down",0,ST_LDOWN,-1},
+    {"lstick_left",0,ST_LLEFT,-1}, {"lstick_right",0,ST_LRIGHT,-1},
+    {"rstick_up",0,ST_RUP,-1}, {"rstick_down",0,ST_RDOWN,-1},
+    {"rstick_left",0,ST_RLEFT,-1}, {"rstick_right",0,ST_RRIGHT,-1},
+};
+static const char default_input_ini[] =
+    "# Keyboard bindings, one per line: output = key\n"
+    "# Keys use SDL names (case-insensitive); '_' stands for a space: left_shift, keypad_enter.\n"
+    "# An output may have several lines. Outputs: cross circle square triangle l1 r1 l2 r2 l3 r3\n"
+    "# options up down left right (d-pad) touchpad_left touchpad_right\n"
+    "# lstick_up/down/left/right rstick_up/down/left/right. Restart the game to apply changes.\n"
+    "cross = space\n" "cross = return\n" "cross = keypad_enter\n"
+    "circle = left_shift\n" "circle = escape\n"
+    "square = e\n" "triangle = q\n"
+    "l1 = 1\n" "r1 = 3\n" "l2 = r\n" "r2 = f\n" "l3 = z\n" "r3 = c\n"
+    "options = f1\n" "options = o\n"
+    "up = i\n" "down = k\n" "left = j\n" "right = l\n"
+    "up = up\n" "down = down\n" "left = left\n" "right = right\n"
+    "touchpad_left = tab\n" "touchpad_right = backspace\n"
+    "lstick_up = w\n" "lstick_down = s\n" "lstick_left = a\n" "lstick_right = d\n"
+    "rstick_up = up\n" "rstick_down = down\n" "rstick_left = left\n" "rstick_right = right\n"
+    "# Mouse: moving it drives the right stick (camera). F6 captures or releases the mouse.\n"
+    "# sensitivity multiplies; full_px = pixels per frame for full stick; deadzone = stick minimum.\n"
+    "mouse_sensitivity = 1.0\n" "mouse_invert_y = 0\n" "mouse_full_px = 12\n" "mouse_deadzone = 0.10\n"
+    "# Mouse buttons as inputs: mouse_left mouse_right mouse_middle mouse_x1 mouse_x2\n"
+    "r1 = mouse_left\n" "r2 = mouse_right\n" "r3 = mouse_middle\n";
+
+static char *trim_ws(char *s) {
+    while (*s && isspace((unsigned char)*s)) ++s;
+    char *e = s + strlen(s);
+    while (e > s && isspace((unsigned char)e[-1])) *--e = 0;
+    return s;
+}
+static void parse_binds(char *text, const char *origin) {
+    const size_t n = sizeof(bind_outputs) / sizeof(*bind_outputs);
+    nbinds = 0;
+    for (char *line = strtok(text, "\n"); line; line = strtok(NULL, "\n")) {
+        line = trim_ws(line);
+        if (!*line || *line == '#') continue;
+        char *eq = strchr(line, '=');
+        if (!eq) continue;
+        *eq = 0;
+        char *out = trim_ws(line), *in = trim_ws(eq + 1);
+        for (char *p = out; *p; ++p) *p = (char)tolower((unsigned char)*p);
+        for (char *p = in; *p; ++p) if (*p == '_') *p = ' ';
+        if (!strncmp(out, "mouse_", 6)) { /* mouse settings, not a binding */
+            const float v = (float)atof(in);
+            if (!strcmp(out, "mouse_sensitivity")) mouse_sens = v;
+            else if (!strcmp(out, "mouse_invert_y")) mouse_inv_y = v != 0.0f;
+            else if (!strcmp(out, "mouse_full_px")) mouse_full = v > 1.0f ? v : 1.0f;
+            else if (!strcmp(out, "mouse_deadzone")) mouse_dz = v < 0.0f ? 0.0f : v > 0.5f ? 0.5f : v;
+            else printf("Runtime: %s: ignoring '%s'\n", origin, out);
+            continue;
+        }
+        size_t o = 0;
+        while (o < n && strcmp(out, bind_outputs[o].name)) ++o;
+        int mouse = -1;
+        for (int m = 0; m < 5; ++m) if (!SDL_strcasecmp(in, mouse_names[m])) mouse = m;
+        SDL_Scancode sc = mouse >= 0 ? SDL_SCANCODE_UNKNOWN
+                                     : (*in ? SDL_GetScancodeFromName(in) : SDL_SCANCODE_UNKNOWN);
+        if (o == n || (mouse < 0 && (sc == SDL_SCANCODE_UNKNOWN || (int)sc >= 512))) {
+            printf("Runtime: %s: ignoring '%s = %s'\n", origin, out, in);
+            continue;
+        }
+        if (nbinds < MAX_BINDS)
+            binds[nbinds++] = (KeyBind){sc, bind_outputs[o].btn, bind_outputs[o].stick, bind_outputs[o].touch, mouse};
+    }
+    printf("Runtime: %d keyboard bindings from %s\n", nbinds, origin);
+}
+static char binds_path[1024];
+static uint32_t binds_seq;
+static void load_binds_once(void) {
+    const uint32_t seq = bbgpu_split_controls_seq();
+    if (binds_loaded && seq == binds_seq) return;
+    binds_seq = seq;
+    if (!binds_loaded) {
+        binds_loaded = 1;
+        const char *env = getenv("BB_INPUT_INI"), *home = getenv("HOME");
+        if (env && *env) snprintf(binds_path, sizeof binds_path, "%s", env);
+        else if (access("input.ini", R_OK) == 0) snprintf(binds_path, sizeof binds_path, "input.ini");
+        else if (home) snprintf(binds_path, sizeof binds_path, "%s/Library/Application Support/Bloodborne/input.ini", home);
+    }
+    char *text = NULL;
+    FILE *f = binds_path[0] ? fopen(binds_path, "rb") : NULL;
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        rewind(f);
+        if (len > 0 && len < 65536 && (text = malloc((size_t)len + 1))) {
+            size_t got = fread(text, 1, (size_t)len, f);
+            text[got] = 0;
+        }
+        fclose(f);
+    } else if (binds_path[0]) {
+        FILE *w = fopen(binds_path, "wb");
+        if (w) { fputs(default_input_ini, w); fclose(w); }
+    }
+    mouse_sens = 1.0f; mouse_full = 12.0f; mouse_dz = 0.10f; mouse_inv_y = 0; /* absent lines revert */
+    if (!text) text = strdup(default_input_ini);
+    if (text) { parse_binds(text, binds_path[0] ? binds_path : "defaults"); free(text); }
+}
+
 static void sample_host(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -137,27 +283,27 @@ static void sample_host(PadData *d) {
         return;
     }
     if (!k) return;
-    static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
-        {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_KP_ENTER,BTN_CROSS},
-        {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_ESCAPE,BTN_CIRCLE},
-        {SDL_SCANCODE_E,BTN_SQUARE}, {SDL_SCANCODE_Q,BTN_TRIANGLE},
-        {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
-        {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2},
-        {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
-        {SDL_SCANCODE_F1,BTN_OPTIONS}, {SDL_SCANCODE_O,BTN_OPTIONS},
-        {SDL_SCANCODE_UP,BTN_UP}, {SDL_SCANCODE_DOWN,BTN_DOWN},
-        {SDL_SCANCODE_LEFT,BTN_LEFT}, {SDL_SCANCODE_RIGHT,BTN_RIGHT},
-        {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
-    };
-    for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
-    if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
-    if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
+    load_binds_once();
+    float mx = 0.0f, my = 0.0f;
+    uint32_t mb = 0;
+    mouse_sample(&mx, &my, &mb);
+    int ls[4] = {0,0,0,0}, rs[4] = {0,0,0,0}; /* up, down, left, right */
+    for (int i = 0; i < nbinds; ++i) {
+        const KeyBind *b = &binds[i];
+        if (b->mouse >= 0 ? !((mb >> b->mouse) & 1u) : !k[b->key]) continue;
+        d->buttons |= b->btn;
+        if (b->touch >= 0) touch_click(d, b->touch);
+        if (b->stick >= ST_LUP && b->stick <= ST_LRIGHT) ls[b->stick - ST_LUP] = 1;
+        else if (b->stick >= ST_RUP) rs[b->stick - ST_RUP] = 1;
+    }
     if (d->buttons & BTN_L2) d->l2=255;
     if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
-    d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    d->left_x=(uint8_t)(128-(ls[2]?128:0)+(ls[3]?127:0));
+    d->left_y=(uint8_t)(128-(ls[0]?128:0)+(ls[1]?127:0));
+    d->right_x=(uint8_t)(128-(rs[2]?128:0)+(rs[3]?127:0));
+    d->right_y=(uint8_t)(128-(rs[0]?128:0)+(rs[1]?127:0));
+    if (mx != 0.0f) d->right_x = mouse_stick(mx);
+    if (my != 0.0f) d->right_y = mouse_stick(mouse_inv_y ? -my : my);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

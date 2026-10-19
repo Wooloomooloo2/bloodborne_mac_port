@@ -2,6 +2,8 @@
 // bbport: SDL3 window for the Vulkan swapchain (X11, Wayland or Metal on macOS).
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
+#include <cmath>
 #include <SDL3/SDL.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -9,6 +11,18 @@
 #include "bbport_overlay.h"
 
 namespace Frontend {
+
+// bbport mouse: motion in 1/16 pixels and held buttons, collected on the window thread and
+// published to the game by the KeyBridge thread (bbgpu.cpp). F6 captures or releases the mouse.
+static std::atomic<int> s_mouse_dx{0}, s_mouse_dy{0};
+static std::atomic<uint32_t> s_mouse_buttons{0};
+static bool s_mouse_enabled = true, s_mouse_captured = false;
+
+void BbMouseTake(int& dx, int& dy, uint32_t& buttons) {
+    dx = s_mouse_dx.exchange(0);
+    dy = s_mouse_dy.exchange(0);
+    buttons = s_mouse_buttons.load();
+}
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
@@ -179,6 +193,28 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_EXPOSED:
             UpdateVisible();
             break;
+        case SDL_EVENT_MOUSE_MOTION:
+            if (s_mouse_captured) {
+                s_mouse_dx.fetch_add(int(std::lround(event.motion.xrel * 16.0f)));
+                s_mouse_dy.fetch_add(int(std::lround(event.motion.yrel * 16.0f)));
+            }
+            break;
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP:
+            if (event.button.button >= 1 && event.button.button <= 5) {
+                const uint32_t bit = 1u << (event.button.button - 1);
+                if (event.type == SDL_EVENT_MOUSE_BUTTON_UP) {
+                    s_mouse_buttons.fetch_and(~bit);
+                } else if (s_mouse_captured) {
+                    s_mouse_buttons.fetch_or(bit);
+                }
+            }
+            break;
+        case SDL_EVENT_KEY_DOWN:
+            if (event.key.key == SDLK_F6 && !event.key.repeat) {
+                s_mouse_enabled = !s_mouse_enabled;
+            }
+            break;
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             // bbport: say which, so an unexpected close can be traced.
@@ -190,6 +226,17 @@ bool WindowSDL::PollEvents() {
             break;
         default:
             break;
+        }
+    }
+    {
+        // Capture the mouse only while the window is focused and no menu or text box is open.
+        const bool focused = (SDL_GetWindowFlags(window) & SDL_WINDOW_INPUT_FOCUS) != 0;
+        const bool want = s_mouse_enabled && focused && !text_active && !BbOverlay::CapturesInput();
+        if (want != s_mouse_captured) {
+            SDL_SetWindowRelativeMouseMode(window, want);
+            s_mouse_captured = want;
+            if (!want) s_mouse_buttons.store(0);
+            std::printf("Window: mouse %s\n", want ? "captured (F6 releases)" : "released (F6 captures)");
         }
     }
     return is_open;
