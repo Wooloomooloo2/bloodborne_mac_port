@@ -9,6 +9,7 @@ final class LauncherModel: ObservableObject {
     private let env = ProcessInfo.processInfo.environment
     private var confFile = IniFile()
     private var settingsFile = IniFile()
+    private var gameProcess: Process?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -17,6 +18,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var checkingGame = false
     @Published private(set) var saveProblem: String?
     @Published private(set) var running = false
+    @Published private(set) var stopping = false
     @Published private(set) var exitMessage: String?
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
@@ -178,7 +180,8 @@ final class LauncherModel: ObservableObject {
         }
         let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
         do {
-            _ = try GameRunner.start(plan, log: logURL) { [weak self] status in self?.finished(status) }
+            gameProcess = try GameRunner.start(plan, log: logURL) { [weak self] status in self?.finished(status) }
+            stopping = false
             running = true
             exitMessage = nil
             onStarted?()
@@ -188,12 +191,23 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    /// Stop only this launcher's child. The native renderer watches its parent and exits too.
+    func stop() {
+        guard running, !stopping, let process = gameProcess, process.isRunning else { return }
+        stopping = true
+        process.terminate()
+    }
+
     private func finished(_ status: Int32) {
+        let wasStopped = stopping
+        gameProcess = nil
         running = false
+        stopping = false
         load()
-        if status == 0 {
+        if status == 0 || wasStopped {
             exitMessage = nil
             crashReport = nil
+            showingCrashReport = false
         } else {
             let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
             let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development build"
@@ -204,7 +218,7 @@ final class LauncherModel: ObservableObject {
             exitMessage = report.summary
             showingCrashReport = true
         }
-        onExit?(status)
+        onExit?(wasStopped ? 0 : status)
     }
 
     /// The settings most likely to matter in a crash report.

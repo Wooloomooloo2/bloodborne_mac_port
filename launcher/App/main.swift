@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: LauncherModel!
     private var window: NSWindow?
     private var direct = false
+    private var quitAfterStop = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let layout = Layout.detect(bundleURL: Bundle.main.bundleURL,
@@ -21,8 +22,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model = LauncherModel(layout: layout)
         model.onStarted = { [weak self] in
-            self?.window?.orderOut(nil)
-            NSApp.setActivationPolicy(.accessory) // the game's window has the Dock icon
+            guard let self else { return }
+            if self.direct {
+                // Respect direct launch: only the game's window has a Dock icon.
+                self.window?.orderOut(nil)
+                NSApp.setActivationPolicy(.accessory)
+            } else {
+                // Keep the launcher available behind the game, including its Stop button.
+                self.showWindow(activate: false)
+            }
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
@@ -35,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func gameEnded(_ status: Int32) {
+        if quitAfterStop {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
         if direct && status == 0 {
             NSApp.terminate(nil)
             return
@@ -43,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showWindow()
     }
 
-    private func showWindow() {
+    private func showWindow(activate: Bool = true) {
         NSApp.setActivationPolicy(.regular)
         if window == nil {
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: LauncherView.size),
@@ -54,8 +66,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.center()
             self.window = window
         }
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        if activate {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+        } else {
+            window?.orderBack(nil)
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        direct = false
+        showWindow()
+        return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard model != nil && model.running else { return .terminateNow }
+        quitAfterStop = true
+        model.stop()
+        return .terminateLater
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

@@ -15,9 +15,11 @@ struct LauncherView: View {
                 general.tabItem { Text("General") }
                 advanced.tabItem { Text("Advanced") }
             }
+            .disabled(model.running)
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                    .disabled(model.running)
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -27,12 +29,23 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
-                Button(action: model.play) {
-                    Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                if model.running {
+                    Text(model.stopping ? "Stopping…" : "Game running")
+                        .foregroundStyle(.secondary)
+                    Button(action: model.stop) {
+                        Label("Stop", systemImage: "stop.fill").frame(minWidth: 80)
+                    }
+                    .controlSize(.large)
+                    .disabled(model.stopping)
+                    .help("Close the running game. Use the game's Exit Game menu first to finish saving.")
+                } else {
+                    Button(action: model.play) {
+                        Text("Play").frame(minWidth: 80)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
+                    .disabled(!model.canPlay)
                 }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-                .disabled(!model.canPlay)
             }
             .padding()
         }

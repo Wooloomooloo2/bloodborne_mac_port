@@ -1446,3 +1446,31 @@ validation passes Python -B in both checkout and packaged layouts; importing pre
 must not create __pycache__ inside the signed app. The combined build passed strict
 signature verification after launcher folder validation. Launcher model tests cover both
 checker commands. No renderer defaults, lifecycle or resolution changes in this split.
+
+2026-10-20 — launcher Stop (split from PR #26): retain this launcher's Process;
+Play becomes Stop/Stopping and settings are disabled while playing. Intentional Stop/Quit
+does not produce a crash sheet. For sessions started through the launcher window, keep
+it available behind the game with both launcher and game Dock icons. Direct launch
+("Show launcher every time" off, without the Option override) keeps the window hidden
+and the launcher an accessory app, so only the game has a Dock icon. Reopen explicitly
+reveals the launcher and leaves direct mode. Quit waits for its child to finish. This
+touches the same gameEnded/showWindow lifecycle as update PR #23; rebase after #23 merges.
+
+PR #31 review follow-up: onStarted now preserves the direct path's orderOut/accessory
+behaviour instead of unconditionally showing a launcher window. Startup selection,
+Option override and the existing direct-path exit/error handling are unchanged.
+
+An additional stop test exposed SDL's SIGTERM handler in the windowless game: it only
+queues an SDL quit event, which the guest does not consume. run.sh now exports
+SDL_NO_SIGNAL_HANDLERS=1. The native host keeps its own termination handling. Without a
+mod view, run.sh execs bb-probe; with one, its existing trap forwards SIGTERM, waits for
+the child, then removes only its private merged view. tests/test_launcher_stop.py drives
+the production GameRunner.start and Process.terminate against run.sh with a real x86 SDL
+probe, both directly and with an actual mods.py merged view, using synthetic assets only.
+Preparation is stubbed; this is process-lifetime coverage, not a full gameplay test.
+The previous combined build also passed game Stop/restart/Quit with copied saves, and the
+SDL signal fix passed a restored-game stop with both guest and renderer confirmed gone.
+
+Split validation: both production-Process termination tests pass on macOS with x86 SDL,
+including removal of the merged view and unchanged synthetic source/mod files. Launcher
+build/model tests pass. No private save data is used by these regression tests.
