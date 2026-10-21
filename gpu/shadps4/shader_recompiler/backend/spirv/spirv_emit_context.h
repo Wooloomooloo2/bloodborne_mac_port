@@ -16,6 +16,11 @@ namespace Shader::Backend::SPIRV {
 
 using Sirit::Id;
 
+/// BB_SPIRV_PRECISE as a number, and whether positions are Invariant
+/// (emit_spirv_floating_point.cpp).
+int PreciseMode();
+bool InvariantPosition();
+
 struct VectorIds {
     [[nodiscard]] Id& operator[](u32 index) {
         return ids[index - 1];

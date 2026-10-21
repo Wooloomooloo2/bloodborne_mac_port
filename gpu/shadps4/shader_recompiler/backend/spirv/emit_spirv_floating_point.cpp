@@ -13,18 +13,38 @@ namespace Shader::Backend::SPIRV {
 // positions, so depth prepasses and later passes agree. SPIRV-Cross turns each precise add,
 // multiply and FMA into a call to an [[clang::optnone]] helper, which the Metal compiler cannot
 // optimize: on every fragment and compute shader that cost the city scene 19.6 -> 12.1 ms of
-// GPU time per frame. BB_SPIRV_PRECISE=all restores it everywhere (with a fresh shader cache).
-// BB_SPIRV_PRECISE=none: nowhere (experiments; with a fresh shader cache).
-static int PreciseMode() {
+// GPU time per frame. Default (BB_SPIRV_PRECISE=vertex): NoContraction in every non-fragment,
+// non-compute stage. BB_SPIRV_PRECISE=invariant (opt-in): positions are declared Invariant
+// instead, compiled with preserveInvariance (renderer_metal/mtl_shader.mm BuildLibrary), so
+// Metal keeps positions matching across shaders without turning every vertex-stage add and
+// multiply into a helper call: +12% FPS at native 1080p on an M3 Pro (FINDINGS 2026-10-19).
+// Stages whose positions do not leave through a vertex function keep NoContraction:
+// tessellation evaluation (MoltenVK dropped Invariant on post-tessellation vertex functions) and
+// the geometry stage and its export stage, which the Metal renderer runs as compute kernels.
+// Not the default: dropping NoContraction from vertex shaders broke geometry on MoltenVK
+// (FINDINGS 2026-10-13), so it needs checking in more areas first. =all: everywhere; =none:
+// nowhere (experiments). The mode is part of the shader cache version
+// (vk_pipeline_serialization.cpp), so switching it rebuilds the cache.
+int PreciseMode() {
     static const int mode = [] {
         const char* env = std::getenv("BB_SPIRV_PRECISE");
-        return !env ? 0 : !std::strcmp(env, "all") ? 1 : !std::strcmp(env, "none") ? 2 : 0;
+        return !env                           ? 0
+               : !std::strcmp(env, "invariant") ? 3
+               : !std::strcmp(env, "all")       ? 1
+               : !std::strcmp(env, "none")      ? 2
+                                                : 0;
     }();
     return mode;
 }
 
+bool InvariantPosition() {
+    return PreciseMode() == 3;
+}
+
 Id Decorate(EmitContext& ctx, IR::Inst* inst, Id op) {
-    if (PreciseMode() == 2) {
+    const bool keeps_precise = ctx.sw_stage == SwStage::TessellationEval ||
+                               ctx.sw_stage == SwStage::Geometry || ctx.hw_stage == HwStage::Export;
+    if (PreciseMode() == 2 || (PreciseMode() == 3 && !keeps_precise)) {
         return op;
     }
     if (PreciseMode() == 1 ||

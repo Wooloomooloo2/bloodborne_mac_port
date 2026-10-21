@@ -193,6 +193,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   in `0xebb960` (hooked) while the render thread's frame job (hooked) had used the context 44.6
   us earlier, so either a third direct user of the immediate context exists or the frame job's
   recording outlives the hooked call.
+  **Closed 2026-10-19 (2cb8681, PR #20): a third direct user,** the render thread's draw-list
+  task `0x219d220` (black loading screen entry below).
 - **Fixed 2026-10-14: `MapNumberConversion` UNREACHABLE (data_fmt 0, SnormNz) killed the GPU
   host during a level load** (1 in ~60 loads). A descriptor with that format reads as zeros on
   the GPU; it now logs once ("SnormNz descriptor with data format …") and converts nothing.
@@ -337,6 +339,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   the Option B suspect above. *Next:* the overlay's Capture Frame at a broken spot, then again
   after reloading the area (asked on #18): diff the two pass lists (draw missing vs present with
   bad data). Then a long-walk repro from a save (Hemwick lamp), and Option B.
+  *2026-10-19:* the `…263b246` chain in both logs is the render thread's draw-list task
+  `0x219d220`, now under the context lock (2cb8681): re-check whether geometry still disappears.
 - **Black loading screen that never finishes (#18, 2026-10-18).** About 1 launch in 10 on an M3
   Pro stops at a black screen with the loading icon; a relaunch works. No log of a stuck run
   yet (asked for one). *Candidate fixed 2026-10-19:* `sceGnmDingDong` waited for the previous
@@ -489,6 +493,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   writes its memory through a buffer, which marks the image GPU-dirty, and each use detiles it
   from the arena again (`BB_LOG_UPLOAD_MB=5`). Keep the image in sync with the buffer write
   instead (a buffer-to-image copy at the write, or tile the writer's output). FINDINGS 2026-10-18.
+  *2026-10-19 (b0d4557):* the writer is compute shader `0x3d5ebf4e` (a 12 MB storage buffer at
+  the image's base; `BB_LOG_UPLOAD_MB` names writers); the image is never rendered to. The
+  refresh's 9 MB CPU hash is skipped for such images (command thread 0.6–0.8 → 0.2 ms on slow
+  frames on an M3 Pro); the GPU side (~0.12 ms per frame, detile + copy) remains.
 - ~~**Metal-native: GPU ~12% slower than 0.4.0 in the city (11.2 vs 9.9 ms/frame; 2026-10-17).**~~
   Level in the Task 11 matrix (97.7 vs 97.5 FPS at 1080p; ahead in all 16 scene/config pairs,
   +12-18% at 1440p native/TAA; FINDINGS 2026-10-18).
@@ -575,6 +583,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   Hunter's Dream 82 → ~93–103; Upper Cathedral Ward 65 → ~72–80), plus fewer tile store/load
   round trips (grows with resolution); at a 60 cap the same FPS for less GPU energy. Plain Metal,
   any macOS we support (15+); not Metal 4 (that needs macOS 26: a separate decision after this).
+  *2026-10-19 (M3 Pro, native Metal, `BB_PASS_STATS=1`, 1080p, Iosefka's Clinic, ~1600 draws):*
+  ~170 passes per frame: ~92 attachment changes, ~31 splits by copy-shader copies (same
+  attachments reopened; deferred to the pass end since 27a21db, "Versioned copy-shader table"
+  below), ~25 ended by dispatches (rarely reopening the same attachments).
 - **Shader compilation (done 2026-10-13: background pipeline creation, `shader_compile=wait|skip`;
   `balanced`, the default since 2026-10-13 evening, waits up to `BB_COMPILE_BUDGET_MS` (6) per
   frame and then skips).** A true ahead-of-time precompile is not possible: a pipeline's
@@ -637,6 +649,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Versioned copy-shader table.** ~24 copies per frame rewrite one table between draws inside a
   pass, ending it. *Refinement:* give each draw group its own version of the table (copies built
   ahead of the submission) so the pass stays open; bound ~1 ms GPU at 1440p.
+  **Done differently (27a21db, PR #20):** nothing reads the rewritten entries between such a copy
+  and the end of its pass (frame event trace, 030bd20), so in-pass copies are queued and run in
+  order right after the pass (Scheduler pass-end hook; a command whose bindings or
+  vertex/index/indirect/direct-memory reads touch their ranges runs them first).
+  `BB_DEFER_COPIES=0` or toggle bit 63: off. M3 Pro 1080p +12.8% (clinic), +13% (Hunter's
+  Dream); M4 Max FINDINGS 2026-10-20.
 
 - **MetalFX with asynchronous submits.** *Now:* MetalFX encodes on MoltenVK's queue right after
   a synchronous `vkQueueSubmit` (commit order). *Refinement:* order it with an MTLSharedEvent
@@ -663,6 +681,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   today. `gpu/shim/window.cpp` (host owns the window): `SDL_HideCursor` while the game window has
   focus and the overlay is closed; show it for the `⌘,` overlay, on focus loss and at quit. First
   step of mouse look below (relative mode captures it anyway).
+  *2026-10-19 (PR #20):* mouse look hides it while captured (after a click in the window); the
+  uncaptured cursor still shows.
 - **Mouse and keyboard support (user, 2026-10-18: "a couple of requests").** Today there is only
   a keyboard fallback in `src/runtime_pad.c`, used when no gamepad is connected: fixed keys
   mapped onto the DualShock 4 (WASD left stick, arrow keys the right stick *and* the d-pad, Space
@@ -672,6 +692,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
     invert Y and smoothing; the stick is a rate, so motion per frame → deflection needs a curve
     (and a dead-zone offset) to feel like a direct camera. Upstream bbport 0.5/0.6 has "mouse
     look" (Strategy item 5) — check it before designing our own.
+    *Done in PR #20* (`gpu/shim/bbport_mouse.cpp`, `runtime_pad.c` `add_mouse`): a click
+    captures, Cmd / focus loss / the ⌘, menu release; speed over the last 33 ms → right stick
+    with a dead-zone offset and a radial curve; `mouse_look`, `mouse_sensitivity`,
+    `mouse_invert_y` in the Display tab. Buttons as wired: left R1, right L2, middle R3, X1 R2,
+    X2 L1 (the wheel is not mapped). Cmd+W, easy to hit while running with W, no longer quits
+    (`window.cpp`).
   - **Mouse buttons:** left R1 (attack), right L1 (or R2), middle/wheel click R3 (lock on),
     wheel up/down for the item/weapon d-pad slots.
   - **Keyboard:** fix the arrow-key overlap (arrows are both camera and d-pad), analog-ish walk

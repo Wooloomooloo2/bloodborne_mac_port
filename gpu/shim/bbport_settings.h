@@ -71,6 +71,10 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
+    std::atomic<bool> mouse_look{true};
+    std::atomic<float> mouse_sensitivity{1.0f};
+    std::atomic<bool> mouse_invert_y{false};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     /// Applied at start (patches.py); the menu shows when a restart is needed.
     std::atomic<bool> effects[EffectCount]{};

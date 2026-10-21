@@ -1446,3 +1446,36 @@ validation passes Python -B in both checkout and packaged layouts; importing pre
 must not create __pycache__ inside the signed app. The combined build passed strict
 signature verification after launcher folder validation. Launcher model tests cover both
 checker commands. No renderer defaults, lifecycle or resolution changes in this split.
+
+## PR #20 on an M3 Pro, against 0.5.1 (2026-10-19)
+
+MacBook Pro M3 Pro (11 CPU / 14 GPU cores), 18 GB, macOS 15.7.5. A copy of a player's save at
+the lamp in Iosefka's Clinic: camera still, 1594-1595 draws per frame in every window of every
+configuration, no compiles while measuring; native 1080p, upscaler off, all effects, 60 cap (not
+reached). Each configuration with its own warmed shader cache, 60 s measured after a 20 s
+settle, process CPU from OS CPU-time deltas. Stock = the 0.5.1 release's GPU library; the game
+process carries the load lock (2cb8681) in every configuration. "All" = the PR on 0.5.1 with
+`BB_SPIRV_PRECISE=invariant` and the PR's arena sizing (dropped since; 0.5.2 sizes the arena).
+Stock and all ran twice (31.4/31.3 and 38.1/37.9 FPS), the others once (±0.6%).
+
+| | 0.5.1 | all | change |
+|---|---|---|---|
+| FPS | 31.3 | **38.0** | **+21.2%** |
+| GPU busy, ms per frame | 31.9 | 26.3 | -17.5% |
+| CPU per frame, both processes | 102.7 ms | 80.8 ms | -21.3% |
+| GPU command thread per draw | 17.7 us | 5.2 us | -71% |
+
+Each one switched off alone (all others on):
+
+| Change | FPS without | gain | also |
+|---|---|---|---|
+| Copy-shader copies deferred to the pass end (27a21db) | 33.7 | **+12.8%** | GPU 29.7 → 26.3 ms |
+| `BB_SPIRV_PRECISE=invariant` (opt-in, PR #20) | 33.9 | **+12.0%** | GPU 29.5 → 26.3 ms |
+| Draw-pipe sleeping wait (44300ab) | 38.6 | -1.5% | CPU 95.7 → 80.8 ms per frame, GPU process 58.8 → 44.5 |
+| Arena sized from guest memory (dropped) | 37.7 | +0.6% (noise) | GPU memory -2.4 GiB |
+
+Invariant positions on this Mac: no flicker, z-fighting or missing geometry seen in the clinic
+or Hunter's Dream screenshots; the player, who has played with it on since 2026-10-17, reported
+no artifacts (one check, 2026-10-17). Deferred copies: 0 conflicts in both scenes, ~170 copies deferred per frame in the
+clinic; screenshots 0.7 s apart switching it on and off differ less (1.88 mean per channel)
+than same-setting screenshots 1.4 s apart (3.10).

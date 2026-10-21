@@ -12,10 +12,19 @@
 #include "video_core/renderer_metal/mtl_pso_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
+namespace Shader::Backend::SPIRV {
+int PreciseMode();
+}
+
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // bbport: Metal shader profile (native Metal)
-static constexpr u32 ShaderMetaVersion = 9u; // bbport: no NoContraction in FS/CS
+static constexpr u32 ShaderMetaVersionBase = 9u; // bbport: no NoContraction in FS/CS
+// bbport: cached SPIR-V depends on BB_SPIRV_PRECISE, which the keys do not record (the default
+// mode, 0, keeps version 9 and its caches).
+static u32 ShaderMetaVersion() {
+    return ShaderMetaVersionBase | (u32(Shader::Backend::SPIRV::PreciseMode()) << 8);
+}
 // bbport: 7 Metal vertex attributes; 8 depth/stencil formats only while the pass binds the
 // depth buffer (Metal-native M5; a game's stored cache is rebuilt once).
 static constexpr u32 PipelineKeyVersion = 8u;
@@ -75,7 +84,7 @@ void RegisterShaderMeta(const Shader::Info& info,
     Serialization::Archive ar;
     Serialization::Writer meta{ar};
 
-    meta.Write(Serialization::ShaderMetaVersion);
+    meta.Write(Serialization::ShaderMetaVersion());
     meta.Write(Serialization::ShaderBinaryVersion);
 
     meta.Write(perm_hash);
@@ -105,7 +114,7 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
 
     u32 meta_version{};
     meta.Read(meta_version);
-    if (meta_version != Serialization::ShaderMetaVersion) {
+    if (meta_version != Serialization::ShaderMetaVersion()) {
         return false;
     }
 

@@ -5,7 +5,9 @@
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ *   IJKL d-pad (I up, K down, J left, L right).
+ * Mouse (split mode, after a click in the window): the camera (right stick), left button R1,
+ * right L2, middle R3, side buttons R2 and L1. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -15,7 +17,11 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
+#include "host/bbgpu_shared.h"
+#endif
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -92,7 +98,7 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
-static void sample_host(PadData *d) {
+static void sample_devices(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
     d->orientation[3]=1.0f;
@@ -158,6 +164,45 @@ static void sample_host(PadData *d) {
     d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
     d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
     d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+}
+
+/* Mouse look: the host window publishes the mouse's speed while it holds the cursor
+ * (gpu/shim/bbport_mouse.cpp). The speed sets the right stick's deflection, full at
+ * MOUSE_FULL_SPEED points/s (the sensitivity is applied by the host), and never below
+ * MOUSE_MIN_DEFLECTION so slow moves still clear the game's stick dead zone. The stick is only
+ * taken over while the mouse moves; gamepad and keyboard keep it otherwise. */
+#define MOUSE_FULL_SPEED 650.0
+#define MOUSE_MIN_DEFLECTION 24.0
+/* The GPU process's shared control block: gpu_process.c registers its accessor when it starts.
+ * Without one (the unit tests link the runtime without gpu_process.c) there is no mouse. */
+static void *(*pad_shared)(void);
+void runtime_pad_set_shared(void *(*shared)(void)) { pad_shared=shared; }
+static void add_mouse(PadData *d) {
+#ifdef __APPLE__
+    const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
+    if (!s || !__atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE) || bbgpu_overlay_captures_input()) return;
+    const uint32_t b=__atomic_load_n(&s->mouse_buttons,__ATOMIC_RELAXED);
+    if (b & SDL_BUTTON_LMASK) d->buttons|=BTN_R1;
+    if (b & SDL_BUTTON_RMASK) { d->buttons|=BTN_L2; d->l2=255; }
+    if (b & SDL_BUTTON_MMASK) d->buttons|=BTN_R3;
+    if (b & SDL_BUTTON_X1MASK) { d->buttons|=BTN_R2; d->r2=255; }
+    if (b & SDL_BUTTON_X2MASK) d->buttons|=BTN_L1;
+    const double vx=__atomic_load_n(&s->mouse_vx,__ATOMIC_RELAXED);
+    const double vy=__atomic_load_n(&s->mouse_vy,__ATOMIC_RELAXED);
+    const double speed=sqrt(vx*vx+vy*vy);
+    if (speed<1.0) return;
+    const double fraction=speed>=MOUSE_FULL_SPEED ? 1.0 : speed/MOUSE_FULL_SPEED;
+    const double deflection=MOUSE_MIN_DEFLECTION+(127.0-MOUSE_MIN_DEFLECTION)*fraction;
+    d->right_x=(uint8_t)lround(128.0+vx/speed*deflection);
+    d->right_y=(uint8_t)lround(128.0+vy/speed*deflection);
+#else
+    (void)d;
+#endif
+}
+
+static void sample_host(PadData *d) {
+    sample_devices(d);
+    add_mouse(d);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

@@ -26,7 +26,8 @@ bool OwnedKey(const std::string& key) {
         "upscaler", "preset", "sharpen", "sharpness", "jitter", "reactive", "object_motion",
         "reactive_scale", "reactive_threshold", "reactive_max", "debug_view", "show_fps",
         "model_lod", "output_res",
-        "live_resolution", "shader_compile", "renderer"};
+        "live_resolution", "shader_compile", "renderer",
+        "mouse_look", "mouse_sensitivity", "mouse_invert_y"};
     for (const char* k : owned) {
         if (key == k) {
             return true;
@@ -75,6 +76,12 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.debug_view = std::clamp(i, 0, DebugViewCount - 1);
     } else if (key == "show_fps") {
         v.show_fps = i != 0;
+    } else if (key == "mouse_look") {
+        v.mouse_look = i != 0;
+    } else if (key == "mouse_sensitivity") {
+        v.mouse_sensitivity = Clamp(f, 0.1f, 5.0f);
+    } else if (key == "mouse_invert_y") {
+        v.mouse_invert_y = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
     } else if (key == "live_resolution") {
@@ -256,12 +263,14 @@ void Save() {
                  "# bbport settings (in-game menu: " BBPORT_MENU_KEYS " / L3+R3)\n"
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
-                 "debug_view=%d\nshow_fps=%d\n",
+                 "debug_view=%d\nshow_fps=%d\nmouse_look=%d\nmouse_sensitivity=%.2f\n"
+                 "mouse_invert_y=%d\n",
                  UpscalerName(saved_upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
-                 v.debug_view.load(), int(v.show_fps.load()));
+                 v.debug_view.load(), int(v.show_fps.load()), int(v.mouse_look.load()),
+                 v.mouse_sensitivity.load(), int(v.mouse_invert_y.load()));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
