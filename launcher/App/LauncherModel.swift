@@ -86,8 +86,22 @@ final class LauncherModel: ObservableObject {
                 if self.config.gameDir == folder {
                     self.gameProblem = problem
                     self.checkingGame = false
+                    if problem == nil {
+                        self.applyGameIcon(from: folder)
+                    }
                 }
             }
+        }
+    }
+
+    private func applyGameIcon(from folder: URL) {
+        let iconURL = folder.appendingPathComponent("sce_sys/icon0.png")
+        guard FileManager.default.fileExists(atPath: iconURL.path),
+              let iconImage = NSImage(contentsOf: iconURL) else { return }
+        NSApplication.shared.applicationIconImage = iconImage
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            NSWorkspace.shared.setIcon(iconImage, forFile: bundleURL.path, options: [])
         }
     }
 
