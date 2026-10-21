@@ -42,11 +42,28 @@ struct CrashReport: Equatable {
     let report: String
     let system: SystemInfo
 
-    /// `log`: the session's game.log; `settings`: one-line summaries; `home`: shortened to ~.
-    init(status: Int32, log: String, logName: String, system: SystemInfo, settings: [String], home: String) {
+    /// Warnings and errors listed before the cause (the most recent, each text once).
+    static let recentProblems = 12
+
+    /// `log`: the session's text log (SessionLog: time and severity on each line; an older plain
+    /// log works too); `settings`: one-line summaries; `home`: shortened to ~; `started`/`ended`:
+    /// the session's start and end, when known.
+    init(status: Int32, log: String, logName: String, system: SystemInfo, settings: [String], home: String,
+         started: Date? = nil, ended: Date? = nil, timeZone: TimeZone = .current) {
         self.status = status
         self.system = system
-        let lines = log.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var parsed = log.split(separator: "\n", omittingEmptySubsequences: false).map { SessionLog.parse(String($0)) }
+        if parsed.last?.message == "" { parsed.removeLast() }
+        let lines = parsed.map(\.message)
+        // Severity as written, else as the launcher would classify the line (older logs).
+        var severities: [LogSeverity] = []
+        var previous: LogEntry?
+        for line in parsed {
+            let classified = SessionLog.classify(line.message, previous: previous)
+            let severity = line.severity ?? classified.severity
+            severities.append(severity)
+            previous = LogEntry(time: line.time ?? Date(), severity: severity, source: classified.source, message: line.message)
+        }
         // The first Crash: line is the cause (later ones follow from it, e.g. the GPU process
         // crashing, then bb-probe losing it); else the last STOP:/ERROR: line.
         var causeIndex = lines.firstIndex { $0.hasPrefix("Crash: ") }
@@ -70,23 +87,70 @@ struct CrashReport: Equatable {
             summary = "The game stopped with status \(status)."
         }
 
-        // Log excerpt: around the cause, else the end of the log.
-        let window: ArraySlice<String>
-        if let index = causeIndex {
-            window = lines[max(0, index - Self.contextLines)..<min(lines.count, index + Self.contextLines)]
-        } else {
-            window = lines.suffix(Self.contextLines * 2)
-        }
-        let excerpt = window.map { line -> String in
+        let time = DateFormatter()
+        time.locale = Locale(identifier: "en_US_POSIX")
+        time.timeZone = timeZone
+        time.dateFormat = "HH:mm:ss.SSS"
+        func show(_ i: Int) -> String {
+            let line = lines[i]
             let short = line.count > Self.maxLineLength ? String(line.prefix(Self.maxLineLength)) + " …" : line
-            return Self.redact(short, home: home)
-        }.joined(separator: "\n")
+            guard let at = parsed[i].time else { return Self.redact(short, home: home) } // older log
+            let label = severities[i].label.padding(toLength: 6, withPad: " ", startingAt: 0)
+            return Self.redact("\(time.string(from: at)) \(label) \(short)", home: home)
+        }
+
+        // Log excerpt: around the cause, else the end of the log.
+        let window: Range<Int>
+        if let index = causeIndex {
+            window = max(0, index - Self.contextLines)..<min(lines.count, index + Self.contextLines)
+        } else {
+            window = max(0, lines.count - Self.contextLines * 2)..<lines.count
+        }
+        let excerpt = window.map(show).joined(separator: "\n")
+
+        // The most recent warnings and errors before the cause (or the end), each text once.
+        var problems: [(index: Int, count: Int)] = []
+        var seen: [String: Int] = [:] // text -> position in `problems`
+        for i in (0..<(causeIndex ?? lines.count)).reversed() where severities[i] <= .warning {
+            let key = lines[i].trimmingCharacters(in: .whitespaces)
+            if let at = seen[key] {
+                problems[at].count += 1
+            } else if problems.count < Self.recentProblems {
+                seen[key] = problems.count
+                problems.append((i, 1))
+            }
+        }
+        problems.reverse()
 
         var text = "**Bloodborne for Mac \(system.appVersion): crash report**\n\n"
         text += "- Mac: \(system.line)\n"
         if !settings.isEmpty { text += "- Settings: \(settings.joined(separator: ", "))\n" }
+        if let started {
+            let day = DateFormatter()
+            day.locale = Locale(identifier: "en_US_POSIX")
+            day.timeZone = timeZone
+            day.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZZ"
+            text += "- Session: started \(day.string(from: started))"
+            if let ended {
+                let seconds = max(0, Int(ended.timeIntervalSince(started)))
+                text += ", ran \(seconds / 60) min \(seconds % 60) s"
+            }
+            text += "\n"
+        }
         text += "- Exit status: \(status)\n"
-        text += "- Cause: \(cause ?? "(no cause line in the log)")\n\n"
+        text += "- Cause: \(cause ?? "(no cause line in the log)")"
+        if let index = causeIndex, let at = parsed[index].time { text += " (at \(time.string(from: at)))" }
+        text += "\n"
+        let counts = [LogSeverity.critical, .error, .warning].compactMap { severity -> String? in
+            let n = severities.filter { $0 == severity }.count
+            return n == 0 ? nil : "\(n) \(severity.keyword)\(n == 1 ? "" : severity == .critical ? "" : "s")"
+        }
+        text += "- Log: \(logName), \(lines.count) lines" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", ")) + "\n\n"
+        if !problems.isEmpty {
+            text += "<details><summary>Warnings and errors before \(causeIndex != nil ? "the cause" : "the end") (\(problems.count) most recent)</summary>\n\n```\n"
+            text += problems.map { show($0.index) + ($0.count > 1 ? "  (×\($0.count))" : "") }.joined(separator: "\n")
+            text += "\n```\n</details>\n\n"
+        }
         text += "<details><summary>\(logName) (\(window.count) lines\(causeIndex != nil ? " around the cause" : ", the end of the log"))</summary>\n\n"
         text += "```\n\(excerpt)\n```\n</details>\n"
         report = text
@@ -113,6 +177,7 @@ struct CrashReport: Equatable {
 
     /// The user's home folder and any other /Users/<name> become ~, so reports don't carry names.
     static func redact(_ text: String, home: String) -> String {
+        guard text.contains("/Users/") else { return text } // most lines (the session log redacts every line)
         var result = home.isEmpty ? text : text.replacingOccurrences(of: home, with: "~")
         result = result.replacingOccurrences(of: #"/Users/[^/\s:]+"#, with: "~", options: .regularExpression)
         return result

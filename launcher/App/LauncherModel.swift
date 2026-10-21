@@ -21,6 +21,9 @@ final class LauncherModel: ObservableObject {
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
     @Published var showingCrashReport = false
+    /// The running or last session's text log (SessionLog).
+    @Published private(set) var sessionLog: URL?
+    private var sessionStart: Date?
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -32,7 +35,13 @@ final class LauncherModel: ObservableObject {
 
     var confURL: URL { layout.launchConfURL(env: env) }
     var settingsURL: URL { URL(fileURLWithPath: env["BB_CONFIG"] ?? dataDir.appendingPathComponent("bbport.ini").path) }
-    var logURL: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())).appendingPathComponent("game.log") }
+    var logsFolder: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())) }
+    /// This launch's session log, else the newest one (game.log links to it).
+    var logURL: URL { sessionLog ?? logsFolder.appendingPathComponent(SessionLog.latestName).resolvingSymlinksInPath() }
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return info["CFBundleVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "development build"
+    }
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
@@ -178,7 +187,12 @@ final class LauncherModel: ObservableObject {
         }
         let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
         do {
-            _ = try GameRunner.start(plan, log: logURL) { [weak self] status in self?.finished(status) }
+            let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
+            log.note("Bloodborne for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
+                     + "\(settingsSummary.joined(separator: ", ")); game folder \(game.path)")
+            _ = try GameRunner.start(plan, log: log) { [weak self] status in self?.finished(status) }
+            sessionLog = log.text
+            sessionStart = log.start
             running = true
             exitMessage = nil
             onStarted?()
@@ -196,10 +210,9 @@ final class LauncherModel: ObservableObject {
             crashReport = nil
         } else {
             let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
-            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development build"
             let report = CrashReport(status: status, log: log, logName: logURL.lastPathComponent,
-                                     system: .current(appVersion: version), settings: settingsSummary,
-                                     home: NSHomeDirectory())
+                                     system: .current(appVersion: appVersion), settings: settingsSummary,
+                                     home: NSHomeDirectory(), started: sessionStart, ended: Date())
             crashReport = report
             exitMessage = report.summary
             showingCrashReport = true

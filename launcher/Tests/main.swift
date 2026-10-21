@@ -283,8 +283,95 @@ do {
     check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
 }
 
+// SessionLog: severity from the game's own line shapes (taken from a real game.log).
+do {
+    func c(_ line: String, after: LogEntry? = nil) -> String {
+        let r = SessionLog.classify(line, previous: after)
+        return "\(r.severity.label) \(r.source)"
+    }
+    check(c("Crash: the GPU process crashed (signal 11 in Foo)") == "CRIT crash", "Crash: is critical")
+    check(c("STOP: unsupported TLS module id") == "ERROR stop", "STOP: is an error")
+    check(c("ERROR: no eboot") == "ERROR game" && c("Runtime ERROR: bad map") == "ERROR runtime" && c("AUDIT ERROR: x") == "ERROR audit", "ERROR prefixes")
+    check(c("GPU [Render.Vulkan] <Warning> vk_pipeline_serialization.cpp:369 LoadPipelineStage: skipping") == "WARN gpu.render.vulkan", "GPU warning")
+    check(c("GPU [Render] <Error> x.cpp:1 F: y") == "ERROR gpu.render" && c("GPU [Lib] <Critical> z") == "CRIT gpu.lib", "GPU error, critical")
+    check(c("GPU [Render] <Debug> a") == "DEBUG gpu.render" && c("GPU [Render] <Info> a") == "INFO gpu.render", "GPU debug, info")
+    check(c("== Stall during rendering at flush 3") == "WARN gpu", "stall")
+    check(c("bbgpu-host: ready: serving the submit ring") == "INFO bbgpu-host", "component line")
+    check(c("GPU process: host pid 40643 ready in 16 ms") == "INFO gpu-process", "component with a space")
+    check(c("Runtime: open(/app0/dvdroot_ps4/map/m01) failed") == "WARN runtime", "failed is a warning")
+    check(c("Context lock: could not take the lock") == "WARN context-lock", "could not is a warning")
+    check(c("Bloodborne™ | entry=0xa0 | image=91,042,036 bytes") == "INFO game", "no component")
+    check(c("[FAST PATH] Tracing disabled (BB_TRACE=0): direct import dispatch active.") == "INFO game", "bracket is not a component")
+    let crash = LogEntry(time: Date(), severity: .critical, source: "crash", message: "Crash: x")
+    check(c("  #3 0x1234 in Foo", after: crash) == "CRIT crash", "indented continuation keeps the line before")
+    check(c("Runtime: 0 errors found") == "INFO runtime", "no warning words")
+
+    // Text and JSON lines.
+    let tz = TimeZone(secondsFromGMT: 3 * 3600)!
+    let t = Date(timeIntervalSince1970: 1_792_668_185.123) // 2026-10-22 11:23:05.123 UTC
+    let entry = LogEntry(time: t, severity: .warning, source: "gpu.render", message: "GPU [Render] <Warning> a \"quoted\" /path")
+    let text = SessionLog.textLine(entry, timeZone: tz)
+    check(text == "2026-10-22T14:23:05.123+03:00 WARN   GPU [Render] <Warning> a \"quoted\" /path", "text line: \(text)")
+    let back = SessionLog.parse(text)
+    check(back.severity == .warning && back.message == entry.message && abs((back.time ?? .distantPast).timeIntervalSince(t)) < 0.001, "text line parses back")
+    let utcText = SessionLog.textLine(entry, timeZone: TimeZone(secondsFromGMT: 0)!)
+    check(utcText.hasPrefix("2026-10-22T11:23:05.123+00:00 WARN "), "UTC+0 keeps the offset form: \(utcText)")
+    check(SessionLog.parse("Runtime: plain old line") == (nil, nil, "Runtime: plain old line") as (Date?, LogSeverity?, String), "older log line is all message")
+    let json = SessionLog.jsonLine(entry, session: .init(id: "game-2026-10-22_14-23-05", appVersion: "0.5.4"))
+    let object = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+    check(object["@timestamp"] as? String == "2026-10-22T11:23:05.123Z" && object["log.level"] as? String == "warning", "JSON time (UTC) and level: \(json)")
+    check(object["syslog.severity.code"] as? Int == 4 && object["log.logger"] as? String == "gpu.render", "JSON syslog code and source")
+    check(object["message"] as? String == entry.message && object["session.id"] as? String == "game-2026-10-22_14-23-05"
+          && object["service.version"] as? String == "0.5.4", "JSON message and session")
+    check(!json.contains("\n") && json.hasPrefix("{\"@timestamp\""), "one line, stable key order")
+    check(SessionLog.name(start: t, timeZone: tz) == "game-2026-10-22_14-23-05", "session name in local time")
+
+    // Files: migration of the old game.log, links, two starts in one second, retention.
+    let fm = FileManager.default
+    let folder = fm.temporaryDirectory.appendingPathComponent("launcher-logs-\(getpid())")
+    try? fm.removeItem(at: folder)
+    try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    try? Data("old latest\n".utf8).write(to: folder.appendingPathComponent("game.log"))
+    try? Data("old previous\n".utf8).write(to: folder.appendingPathComponent("game.previous.log"))
+    let first = try? SessionLog.begin(in: folder, start: t)
+    let migrated = SessionLog.sessions(in: folder).filter { $0 != first?.text }
+    let migratedText = migrated.compactMap { try? String(contentsOf: $0, encoding: .utf8) }.sorted()
+    check(migratedText == ["old latest\n", "old previous\n"], "old logs kept as dated sessions: \(migrated.map(\.lastPathComponent))")
+    check(first.map { fm.fileExists(atPath: $0.text.path) && fm.fileExists(atPath: $0.json.path) } == true, "session files created")
+    check((try? fm.destinationOfSymbolicLink(atPath: folder.appendingPathComponent("game.log").path)) == first?.text.lastPathComponent, "game.log links to the session")
+    let second = try? SessionLog.begin(in: folder, start: t)
+    check(second?.text.lastPathComponent == SessionLog.name(start: t) + "-2.log", "two starts in one second")
+    check((try? fm.destinationOfSymbolicLink(atPath: folder.appendingPathComponent("game.previous.log").path)) == first?.text.lastPathComponent, "game.previous.log links to the one before")
+    for i in 0..<30 { _ = try? SessionLog.begin(in: folder, start: t.addingTimeInterval(Double(i + 1) * 60)) }
+    let kept = SessionLog.sessions(in: folder)
+    check(kept.count == SessionLog.keep, "keeps \(SessionLog.keep) sessions: \(kept.count)")
+    let jsonCount = ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).filter { $0.hasSuffix(".jsonl") }.count
+    check(jsonCount == SessionLog.keep, "their JSON logs too (\(jsonCount))")
+    try? fm.removeItem(at: folder)
+
+    // Crash report from a timestamped session log.
+    let mac = SystemInfo(appVersion: "0.5.4", model: "Mac15,8", chip: "Apple M3 Max", memoryGB: 64, macOS: "Version 26.6 (Build 25G62)")
+    let lines: [LogEntry] = [
+        LogEntry(time: t, severity: .notice, source: "launcher", message: "launcher: Bloodborne for Mac 0.5.4"),
+        LogEntry(time: t + 1, severity: .warning, source: "gpu.render", message: "GPU [Render] <Warning> slow pipeline"),
+        LogEntry(time: t + 2, severity: .info, source: "runtime", message: "Runtime: loading /Users/hunter/save"),
+        LogEntry(time: t + 3, severity: .warning, source: "gpu.render", message: "GPU [Render] <Warning> slow pipeline"),
+        LogEntry(time: t + 4, severity: .error, source: "runtime", message: "Runtime ERROR: bad map"),
+        LogEntry(time: t + 5, severity: .critical, source: "crash", message: "Crash: the GPU process crashed (signal 11)"),
+        LogEntry(time: t + 6, severity: .error, source: "launcher", message: "launcher: the game stopped with status 1 after 0 min 6 s"),
+    ]
+    let logText = lines.map { SessionLog.textLine($0, timeZone: tz) }.joined(separator: "\n") + "\n"
+    let report = CrashReport(status: 1, log: logText, logName: "game-2026-10-22_14-23-05.log", system: mac, settings: [],
+                             home: "/Users/hunter", started: t, ended: t + 366, timeZone: tz)
+    check(report.cause == "the GPU process crashed (signal 11)", "cause found behind the timestamp")
+    check(report.report.contains("- Session: started 2026-10-22 14:23:05 +03:00, ran 6 min 6 s"), "session line")
+    check(report.report.contains("(at 14:23:10.123)") && report.report.contains("7 lines: 1 critical, 2 errors, 2 warnings"), "cause time and counts")
+    check(report.report.contains("14:23:08.123 WARN   GPU [Render] <Warning> slow pipeline  (×2)"), "repeated warning listed once with its count")
+    check(report.report.contains("14:23:09.123 ERROR  Runtime ERROR: bad map") && report.report.contains("~/save") && !report.report.contains("hunter"), "excerpt with time and level, redacted")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, session logs)")
