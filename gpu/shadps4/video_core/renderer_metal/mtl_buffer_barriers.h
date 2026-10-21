@@ -176,6 +176,11 @@ struct OrderRequest {
         return std::min({render_end.Span().lo, render_vertex.Span().lo, copy.Span().lo,
                          compute.Span().lo});
     }
+    /// Whether it names a command from `first` on (the uploads ahead are not commands).
+    [[nodiscard]] bool NamesFrom(u64 first) const noexcept {
+        return render_end.Meets(first, ~0ull) || render_vertex.Meets(first, ~0ull) ||
+               copy.Meets(first, ~0ull) || compute.Meets(first, ~0ull);
+    }
     /// The kinds named (diagnostics and tests).
     [[nodiscard]] BarrierScopes Scopes() const noexcept {
         return BarrierScopes((render_end.Empty() ? 0 : ScopeRenderEnd) |
