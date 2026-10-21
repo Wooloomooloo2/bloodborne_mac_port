@@ -40,6 +40,8 @@ struct CrashReport: Equatable {
     let cause: String?
     let summary: String
     let report: String
+    /// The report with less context, to fit a new-issue link.
+    let compactReport: String
     let system: SystemInfo
 
     /// Warnings and errors listed before the cause (the most recent, each text once).
@@ -47,9 +49,9 @@ struct CrashReport: Equatable {
 
     /// `log`: the session's text log (SessionLog: time and severity on each line; an older plain
     /// log works too); `settings`: one-line summaries; `home`: shortened to ~; `started`/`ended`:
-    /// the session's start and end, when known.
+    /// the session's start and end, when known; `natives`: macOS's crash reports of the session.
     init(status: Int32, log: String, logName: String, system: SystemInfo, settings: [String], home: String,
-         started: Date? = nil, ended: Date? = nil, timeZone: TimeZone = .current) {
+         started: Date? = nil, ended: Date? = nil, natives: [NativeCrash] = [], timeZone: TimeZone = .current) {
         self.status = status
         self.system = system
         var parsed = log.split(separator: "\n", omittingEmptySubsequences: false).map { SessionLog.parse(String($0)) }
@@ -99,15 +101,6 @@ struct CrashReport: Equatable {
             return Self.redact("\(time.string(from: at)) \(label) \(short)", home: home)
         }
 
-        // Log excerpt: around the cause, else the end of the log.
-        let window: Range<Int>
-        if let index = causeIndex {
-            window = max(0, index - Self.contextLines)..<min(lines.count, index + Self.contextLines)
-        } else {
-            window = max(0, lines.count - Self.contextLines * 2)..<lines.count
-        }
-        let excerpt = window.map(show).joined(separator: "\n")
-
         // The most recent warnings and errors before the cause (or the end), each text once.
         var problems: [(index: Int, count: Int)] = []
         var seen: [String: Int] = [:] // text -> position in `problems`
@@ -122,58 +115,95 @@ struct CrashReport: Equatable {
         }
         problems.reverse()
 
-        var text = "**Bloodborne for Mac \(system.appVersion): crash report**\n\n"
-        text += "- Mac: \(system.line)\n"
-        if !settings.isEmpty { text += "- Settings: \(settings.joined(separator: ", "))\n" }
-        if let started {
-            let day = DateFormatter()
-            day.locale = Locale(identifier: "en_US_POSIX")
-            day.timeZone = timeZone
-            day.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZZ"
-            text += "- Session: started \(day.string(from: started))"
-            if let ended {
-                let seconds = max(0, Int(ended.timeIntervalSince(started)))
-                text += ", ran \(seconds / 60) min \(seconds % 60) s"
+        // The full report (the launcher's window, the clipboard, the zip), and a compact one that
+        // fits a new-issue link: fewer lines around the cause, fewer warnings and frames.
+        let cause = self.cause // (render must not capture self before init ends)
+        func render(context: Int, problemCount: Int, frameCount: Int) -> String {
+            // Log excerpt: around the cause, else the end of the log.
+            let window: Range<Int>
+            if let index = causeIndex {
+                window = max(0, index - context)..<min(lines.count, index + context)
+            } else {
+                window = max(0, lines.count - context * 2)..<lines.count
             }
+            let excerpt = window.map(show).joined(separator: "\n")
+            let problems = problems.suffix(problemCount)
+
+            var text = "**Bloodborne for Mac \(system.appVersion): crash report**\n\n"
+            text += "- Mac: \(system.line)\n"
+            if !settings.isEmpty { text += "- Settings: \(settings.joined(separator: ", "))\n" }
+            if let started {
+                let day = DateFormatter()
+                day.locale = Locale(identifier: "en_US_POSIX")
+                day.timeZone = timeZone
+                day.dateFormat = "yyyy-MM-dd HH:mm:ss ZZZZZ"
+                text += "- Session: started \(day.string(from: started))"
+                if let ended {
+                    let seconds = max(0, Int(ended.timeIntervalSince(started)))
+                    text += ", ran \(seconds / 60) min \(seconds % 60) s"
+                }
+                text += "\n"
+            }
+            text += "- Exit status: \(status)\n"
+            text += "- Cause: \(cause ?? "(no cause line in the log)")"
+            if let index = causeIndex, let at = parsed[index].time { text += " (at \(time.string(from: at)))" }
             text += "\n"
+            let counts = [LogSeverity.critical, .error, .warning].compactMap { severity -> String? in
+                let n = severities.filter { $0 == severity }.count
+                return n == 0 ? nil : "\(n) \(severity.keyword)\(n == 1 ? "" : severity == .critical ? "" : "s")"
+            }
+            text += "- Log: \(logName), \(lines.count) lines" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", ")) + "\n"
+            for native in natives { text += "- macOS crash report: \(Self.redact(native.summary, home: home))\n" }
+            text += "\n"
+            for native in natives where !native.frames.isEmpty {
+                text += "<details><summary>\(native.process): crashed thread</summary>\n\n```\n"
+                text += native.frames.prefix(frameCount).map { Self.redact($0, home: home) }.joined(separator: "\n")
+                text += "\n```\n</details>\n\n"
+            }
+            if !problems.isEmpty {
+                text += "<details><summary>Warnings and errors before \(causeIndex != nil ? "the cause" : "the end") (\(problems.count) most recent)</summary>\n\n```\n"
+                text += problems.map { show($0.index) + ($0.count > 1 ? "  (×\($0.count))" : "") }.joined(separator: "\n")
+                text += "\n```\n</details>\n\n"
+            }
+            text += "<details><summary>\(logName) (\(window.count) lines\(causeIndex != nil ? " around the cause" : ", the end of the log"))</summary>\n\n"
+            text += "```\n\(excerpt)\n```\n</details>\n"
+            return text
         }
-        text += "- Exit status: \(status)\n"
-        text += "- Cause: \(cause ?? "(no cause line in the log)")"
-        if let index = causeIndex, let at = parsed[index].time { text += " (at \(time.string(from: at)))" }
-        text += "\n"
-        let counts = [LogSeverity.critical, .error, .warning].compactMap { severity -> String? in
-            let n = severities.filter { $0 == severity }.count
-            return n == 0 ? nil : "\(n) \(severity.keyword)\(n == 1 ? "" : severity == .critical ? "" : "s")"
-        }
-        text += "- Log: \(logName), \(lines.count) lines" + (counts.isEmpty ? "" : ": " + counts.joined(separator: ", ")) + "\n\n"
-        if !problems.isEmpty {
-            text += "<details><summary>Warnings and errors before \(causeIndex != nil ? "the cause" : "the end") (\(problems.count) most recent)</summary>\n\n```\n"
-            text += problems.map { show($0.index) + ($0.count > 1 ? "  (×\($0.count))" : "") }.joined(separator: "\n")
-            text += "\n```\n</details>\n\n"
-        }
-        text += "<details><summary>\(logName) (\(window.count) lines\(causeIndex != nil ? " around the cause" : ", the end of the log"))</summary>\n\n"
-        text += "```\n\(excerpt)\n```\n</details>\n"
-        report = text
+        report = render(context: Self.contextLines, problemCount: Self.recentProblems, frameCount: NativeCrash.maxFrames)
+        compactReport = render(context: 8, problemCount: 5, frameCount: 8)
     }
 
-    /// A new issue with the title and the Mac filled in; the report itself is pasted (it is too
-    /// long for a URL).
-    var issueURL: URL {
+    /// GitHub's new-issue links stop working somewhere above 8,000 characters.
+    static let maxIssueURLLength = 7_500
+
+    /// A new issue with the title and the report filled in: the full report if the link can hold
+    /// it, else the compact one; `inline` false when even that is too long (the report is then
+    /// pasted from the clipboard). `bundle`: the diagnostics zip's name, to drag onto the issue.
+    func issueLink(bundle: String? = nil) -> (url: URL, inline: Bool) {
         let title = "Crash: " + String((cause ?? summary).prefix(90))
-        let body = """
+        let attach = bundle.map { "**Diagnostics:** please drag `\($0)` (the launcher showed it in Finder) onto this issue: it has the full session log and macOS's crash reports.\n\n" } ?? ""
+        let ask = "**What were you doing when it happened?**\n\n\n\n"
+        func url(_ body: String) -> URL {
+            var components = URLComponents(url: Self.newIssue, resolvingAgainstBaseURL: false)!
+            components.queryItems = [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body)]
+            return components.url!
+        }
+        for text in [report, compactReport] {
+            let link = url(ask + attach + text)
+            if link.absoluteString.count <= Self.maxIssueURLLength { return (link, true) }
+        }
+        let paste = """
             **Mac:** \(system.line)
             **Version:** \(system.appVersion)
 
-            **What were you doing when it happened?**
-
-
-            **Crash report** (Report on GitHub copied it to the clipboard: paste it below)
+            \(ask)\(attach)**Crash report** (Report on GitHub copied it to the clipboard: paste it below)
 
             """
-        var components = URLComponents(url: Self.newIssue, resolvingAgainstBaseURL: false)!
-        components.queryItems = [URLQueryItem(name: "title", value: title), URLQueryItem(name: "body", value: body)]
-        return components.url!
+        return (url(paste), false)
     }
+
+    /// The new-issue link without a diagnostics zip.
+    var issueURL: URL { issueLink().url }
 
     /// The user's home folder and any other /Users/<name> become ~, so reports don't carry names.
     static func redact(_ text: String, home: String) -> String {

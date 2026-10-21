@@ -21,6 +21,9 @@ final class LauncherModel: ObservableObject {
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
     @Published var showingCrashReport = false
+    /// The diagnostics zip of the last crash (CrashBundle), once written.
+    @Published private(set) var crashBundle: URL?
+    @Published private(set) var preparingCrashBundle = false
     /// The running or last session's text log (SessionLog).
     @Published private(set) var sessionLog: URL?
     private var sessionStart: Date?
@@ -210,14 +213,46 @@ final class LauncherModel: ObservableObject {
             crashReport = nil
         } else {
             let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
-            let report = CrashReport(status: status, log: log, logName: logURL.lastPathComponent,
-                                     system: .current(appVersion: appVersion), settings: settingsSummary,
-                                     home: NSHomeDirectory(), started: sessionStart, ended: Date())
+            let (logName, system, settings, ended) = (logURL.lastPathComponent, SystemInfo.current(appVersion: appVersion),
+                                                      settingsSummary, Date())
+            let started = sessionStart
+            let makeReport: @Sendable ([NativeCrash]) -> CrashReport = { natives in
+                CrashReport(status: status, log: log, logName: logName, system: system, settings: settings,
+                            home: NSHomeDirectory(), started: started, ended: ended, natives: natives)
+            }
+            let report = makeReport([])
             crashReport = report
+            crashBundle = nil
             exitMessage = report.summary
             showingCrashReport = true
+            prepareCrashBundle(report: report, status: status, makeReport: makeReport)
         }
         onExit?(status)
+    }
+
+    /// In the background: macOS's crash reports of the session (into the report), then the zip.
+    private func prepareCrashBundle(report: CrashReport, status: Int32, makeReport: @escaping @Sendable ([NativeCrash]) -> CrashReport) {
+        preparingCrashBundle = true
+        let start = sessionStart ?? Date().addingTimeInterval(-3600)
+        let looksLikeCrash = (status > 128 && status < 160) || report.cause.map {
+            $0.localizedCaseInsensitiveContains("signal") || $0.localizedCaseInsensitiveContains("crash")
+        } == true
+        let name = "crash-" + (sessionLog?.deletingPathExtension().lastPathComponent ?? SessionLog.name(start: start))
+            .replacingOccurrences(of: "game-", with: "")
+        let (logs, sessionLog, settings, conf) = (logsFolder, sessionLog, settingsURL, confURL)
+        Task.detached {
+            let native = CrashBundle.nativeCrashes(since: start, expectOne: looksLikeCrash)
+            let full = native.crashes.isEmpty ? report : makeReport(native.crashes)
+            let zip = try? CrashBundle.write(report: full, name: name, logs: logs, sessionLog: sessionLog,
+                                             ipsFiles: native.files, settings: settings, launchConf: conf)
+            await MainActor.run {
+                // (Unless another session ended meanwhile.)
+                guard self.crashReport?.report == report.report else { return }
+                self.crashReport = full
+                self.crashBundle = zip
+                self.preparingCrashBundle = false
+            }
+        }
     }
 
     /// The settings most likely to matter in a crash report.
@@ -238,11 +273,18 @@ final class LauncherModel: ObservableObject {
         NSPasteboard.general.setString(crashReport.report, forType: .string)
     }
 
-    /// Copies the report (too long for a link) and opens a new GitHub issue to paste it into.
+    /// Opens a new GitHub issue with the report filled in (copied too, for when it is too long for
+    /// the link) and shows the diagnostics zip in Finder, to drag onto the issue.
     func reportOnGitHub() {
         guard let crashReport else { return }
         copyCrashReport()
-        NSWorkspace.shared.open(crashReport.issueURL)
+        let link = crashReport.issueLink(bundle: crashBundle?.lastPathComponent)
+        if let crashBundle { showCrashBundle(crashBundle) }
+        NSWorkspace.shared.open(link.url)
+    }
+
+    func showCrashBundle(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     func effect(_ key: String) -> Bool { settings.effects[key] ?? false }

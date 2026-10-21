@@ -441,6 +441,16 @@ The severity is read from the line itself: `Crash:` lines are critical, `STOP:` 
 errors, the GPU library's own levels (`<Warning>`, `<Error>`) are kept, and lines saying something
 failed are warnings. Your home folder appears as `~` in the system log and in crash reports.
 
+**Crash reports.** When the game stops with an error, the launcher shows what happened and, by
+itself, puts a diagnostics zip in `~/Library/Logs/Bloodborne/Reports` (the last 10 are kept): the
+crash report, the session's `.log` and `.jsonl`, `bbport.ini`, `launch.conf`, and macOS's own
+crash reports (`.ips`) of the game's processes from that session. Their exception and crashed
+thread also go into the report. Your home folder is shown as `~`, and the identifiers macOS puts
+in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. **Report on
+GitHub** opens a new issue with the report already filled in (copied to the clipboard as well,
+for reports too long for the link) and shows the zip in Finder to drag onto the issue. Nothing is
+sent until you submit the issue.
+
 ### Typing text
 
 Text the game asks for (the character's name, the network password under *Network Settings*)

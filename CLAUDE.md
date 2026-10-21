@@ -152,6 +152,10 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   zsh's builtin `log` shadows `/usr/bin/log`). Severity comes from the line (`Crash:` critical,
   `STOP:`/`ERROR:` error, GPU `<Warning>`...). The writer must hold the `Pipe` until the end:
   released, it closes the read end and a still-writing bbgpu-host dies of SIGPIPE.
+  On a crash `launcher/App/CrashBundle.swift` collects the session's `.ips` reports
+  (`launcher/Model/NativeCrash.swift`: exception + crashed thread into the report; `.ips` escapes
+  slashes as `\/`, unescape before redacting) and zips report, logs, ini and conf into
+  `Logs/Bloodborne/Reports`; the issue link carries the report (compact version if needed).
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
 ## State as of 2026-10-21 (after 0.5.3, local master, not pushed)

@@ -370,8 +370,66 @@ do {
     check(report.report.contains("14:23:09.123 ERROR  Runtime ERROR: bad map") && report.report.contains("~/save") && !report.report.contains("hunter"), "excerpt with time and level, redacted")
 }
 
+// NativeCrash: macOS .ips reports of the game's processes, and the issue link.
+do {
+    let header = #"{"app_name":"bbgpu-host","timestamp":"2026-10-22 14:09:41.00 +0300","bug_type":"309","name":"bbgpu-host"}"#
+    let body = #"""
+    {"procName":"bbgpu-host","procPath":"\/Users\/hunter\/Applications\/Bloodborne.app\/Contents\/MacOS\/bbgpu-host",
+     "crashReporterKey":"49B0A095-3C99-8D24-C7F9-C2BD20AB1301","sleepWakeUUID":"9035D3E7","bootSessionUUID":"B92C7B86",
+     "exception":{"type":"EXC_BAD_ACCESS","signal":"SIGSEGV","subtype":"KERN_INVALID_ADDRESS at 0x0000000000000010"},
+     "termination":{"namespace":"SIGNAL","indicator":"Segmentation fault: 11"},
+     "threads":[{"frames":[{"imageOffset":4096,"imageIndex":0}]},
+                {"triggered":true,"frames":[{"imageOffset":1234,"symbol":"Vulkan::Renderer::Draw()","symbolLocation":120,"imageIndex":1},
+                                            {"imageOffset":4660,"imageIndex":0}]}],
+     "usedImages":[{"name":"bbgpu-host"},{"name":"libbbgpu.dylib"}]}
+    """#
+    let crash = NativeCrash(ips: header + "\n" + body, file: "bbgpu-host-2026-10-22-140941.ips")
+    check(crash?.process == "bbgpu-host" && crash?.exception == "EXC_BAD_ACCESS (SIGSEGV), KERN_INVALID_ADDRESS at 0x0000000000000010, Segmentation fault: 11", "exception: \(crash?.exception ?? "nil")")
+    check(crash?.frames == ["0  libbbgpu.dylib           Vulkan::Renderer::Draw() + 120", "1  bbgpu-host               0x1234"], "crashed thread's frames: \(crash?.frames ?? [])")
+    check(NativeCrash(ips: #"{"app_name":"Safari"}"# + "\n" + #"{"procName":"Safari"}"#, file: "x.ips") == nil, "other apps' reports ignored")
+    check(NativeCrash(ips: "not json", file: "x.ips") == nil, "not an .ips")
+    let scrubbed = NativeCrash.scrub(header + "\n" + body, home: "/Users/hunter")
+    check(!scrubbed.contains("49B0A095") && !scrubbed.contains("9035D3E7") && scrubbed.contains("\"crashReporterKey\":\"removed\"")
+          && !scrubbed.contains("hunter") && scrubbed.contains("~/Applications"), "identifiers and home removed from the zip's copy")
+
+    let fm = FileManager.default
+    let folder = fm.temporaryDirectory.appendingPathComponent("launcher-ips-\(getpid())")
+    try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+    let now = Date()
+    for (name, age) in [("bbgpu-host-2026-10-22-140941.ips", 10.0), ("bb-probe-2026-10-22-140942.ips", 5.0),
+                        ("bbgpu-host-macos27-2026-10-22-140943.ips", 1.0), ("Safari-2026-10-22-140941.ips", 1.0),
+                        ("bbgpu-host-2026-10-21-090000.ips", 86_400.0), ("bb-probe.diag", 1.0)] {
+        let url = folder.appendingPathComponent(name)
+        try? Data("x".utf8).write(to: url)
+        try? fm.setAttributes([.modificationDate: now.addingTimeInterval(-age)], ofItemAtPath: url.path)
+    }
+    let found = NativeCrash.find(in: folder, since: now.addingTimeInterval(-60), until: now).map(\.lastPathComponent)
+    check(found == ["bbgpu-host-2026-10-22-140941.ips", "bb-probe-2026-10-22-140942.ips", "bbgpu-host-macos27-2026-10-22-140943.ips"],
+          "the session's reports of the game's processes, oldest first: \(found)")
+    try? fm.removeItem(at: folder)
+
+    let mac = SystemInfo(appVersion: "0.5.4", model: "Mac15,8", chip: "Apple M3 Max", memoryGB: 64, macOS: "Version 26.6 (Build 25G62)")
+    let short = CrashReport(status: 139, log: "Runtime: hello\nCrash: the GPU process crashed (signal 11)\n", logName: "game.log",
+                            system: mac, settings: [], home: "/Users/hunter", natives: [crash!])
+    check(short.report.contains("- macOS crash report: bbgpu-host: EXC_BAD_ACCESS (SIGSEGV)") && short.report.contains("Vulkan::Renderer::Draw() + 120"), "native crash in the report")
+    let link = short.issueLink(bundle: "crash-2026-10-22_14-03-05.zip")
+    let linkBody = URLComponents(url: link.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "body" }?.value ?? ""
+    check(link.inline && linkBody.contains("Vulkan::Renderer::Draw()") && linkBody.contains("crash-2026-10-22_14-03-05.zip")
+          && linkBody.contains("What were you doing"), "short report goes into the issue")
+    let longLog = (1...400).map { "Runtime: line \($0) " + String(repeating: "x", count: 120) }.joined(separator: "\n") + "\nCrash: boom\n"
+    let long = CrashReport(status: 1, log: longLog, logName: "game.log", system: mac, settings: [], home: "/h")
+    let longLink = long.issueLink()
+    check(longLink.url.absoluteString.count <= CrashReport.maxIssueURLLength || !longLink.inline, "never a link over the limit")
+    check(long.compactReport.count < long.report.count, "compact report is shorter")
+    let huge = CrashReport(status: 1, log: (1...400).map { "GPU [R] <Warning> w\($0) " + String(repeating: "é ", count: 145) }.joined(separator: "\n") + "\nCrash: boom\n",
+                           logName: "game.log", system: mac, settings: [], home: "/h")
+    let hugeLink = huge.issueLink()
+    let hugeBody = URLComponents(url: hugeLink.url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "body" }?.value ?? ""
+    check(!hugeLink.inline && hugeBody.contains("paste it below") && hugeBody.contains("Apple M3 Max"), "too long: paste from the clipboard")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, session logs)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, session logs, native crashes)")
