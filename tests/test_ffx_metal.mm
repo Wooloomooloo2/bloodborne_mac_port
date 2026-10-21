@@ -4,7 +4,7 @@
 // back end's FfxInterface and compiles to a Metal compute pipeline; a second request for a blob
 // is served from the pipeline cache. Resources, clears and copies (Task 2); pipelines and compute
 // jobs (Task 3): AMD's FSR 3 host code on the back end reproduces the Vulkan path's outputs on
-// synthetic frames (tests/data/fsr3, written by tests/fsr3_golden_vk.cpp). The renderer's wrapper
+// synthetic frames (tests/data/fsr3, written by the Vulkan golden tool). The renderer's wrapper
 // (Fsr3Metal, Task 4) runs those cases, and is re-created across sizes without compiling or
 // leaking. Links libbbgpu (the ShaderCompiler, AMD's host code); the MSL disk cache goes to a
 // temporary directory (SetHostKernelCacheDir).

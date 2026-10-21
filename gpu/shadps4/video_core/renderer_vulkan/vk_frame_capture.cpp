@@ -50,6 +50,8 @@ void AddBuffers(Entry& entry) {
     pending_buffers.clear();
 }
 bool pass_open = false;
+std::mutex trace_mutex;
+std::vector<std::string> trace_lines;
 std::mutex display_mutex;
 std::vector<VAddr> display_buffers;
 // bbport: read on every draw; the game registers a handful of display buffers once.
@@ -98,7 +100,7 @@ void Write(VAddr presented) {
     char stamp[32];
     const std::time_t now = std::time(nullptr);
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&now));
-    const std::string path = std::format("{}/frame_{}.txt", dir, stamp);
+    const std::string path = std::format("{}/frame_{}.txt", dir, std::string(stamp));
     FILE* f = std::fopen(path.c_str(), "w");
     if (!f) {
         std::printf("Frame capture: cannot write %s\n", path.c_str());
@@ -135,6 +137,20 @@ void Write(VAddr presented) {
     }
     std::fclose(f);
     std::printf("Frame capture: %zu passes written to %s\n", entries.size(), path.c_str());
+    std::scoped_lock lk{trace_mutex};
+    if (!trace_lines.empty()) {
+        const std::string trace_path = std::format("{}/frame_{}.trace.txt", dir, std::string(stamp));
+        if (FILE* t = std::fopen(trace_path.c_str(), "w")) {
+            for (const auto& line : trace_lines) {
+                std::fputs(line.c_str(), t);
+                std::fputc('\n', t);
+            }
+            std::fclose(t);
+            std::printf("Frame capture: %zu trace events written to %s\n", trace_lines.size(),
+                        trace_path.c_str());
+        }
+        trace_lines.clear();
+    }
 }
 
 } // namespace
@@ -209,6 +225,10 @@ void FrameCapture::BeginPass(const VideoCore::ImageInfo* const* colors, u32 num_
         pending_sampled.clear();
         pending_buffers.clear();
         pass_open = false;
+        {
+            std::scoped_lock lk{trace_mutex};
+            trace_lines.clear();
+        }
         state.store(Recording, std::memory_order_release);
     }
     if (state.load(std::memory_order_relaxed) != Recording) {
@@ -230,6 +250,7 @@ void FrameCapture::Draw(u64 vs_hash, u64 ps_hash, u32 num_indices, u32 num_insta
         entries.back().compute) {
         return;
     }
+    Trace(std::format("D {:08x} {:08x} {} {}", vs_hash, ps_hash, num_indices, num_instances));
     auto& e = entries.back();
     ++e.draws;
     e.indices += u64(num_indices) * std::max(num_instances, 1u);
@@ -245,6 +266,7 @@ void FrameCapture::Dispatch(u64 cs_hash, u32 x, u32 y, u32 z) {
         pending_buffers.clear();
         return;
     }
+    Trace(std::format("K {:08x} {}x{}x{}", cs_hash, x, y, z));
     if (!entries.empty() && entries.back().compute && !entries.back().shaders.empty() &&
         entries.back().shaders[0] == cs_hash) {
         ++entries.back().draws;
@@ -272,9 +294,18 @@ void FrameCapture::Buffer(u64 stage_hash, u32 slot, VAddr address, const void* d
 }
 
 void FrameCapture::Sampled(const VideoCore::ImageInfo& info, bool storage) {
+    Trace(std::format("T {:#x} {} {}", info.guest_address, info.guest_size, storage ? 1 : 0));
     if (pending_sampled.size() < 64) {
         pending_sampled.emplace_back(ToTarget(info), storage);
     }
+}
+
+void FrameCapture::Trace(std::string line) {
+    if (state.load(std::memory_order_relaxed) != Recording) {
+        return;
+    }
+    std::scoped_lock lk{trace_mutex};
+    trace_lines.push_back(std::move(line));
 }
 
 void FrameCapture::Note(const char* text) {

@@ -5,7 +5,7 @@ import unittest
 
 EXE=ROOT/'out/sema-test'
 
-@unittest.skipUnless(EXE.exists(),'run bash build.sh --test first')
+@unittest.skipUnless(EXE.exists(),'run bash build_macos.sh --test first')
 class SemaphoreTests(unittest.TestCase):
     def run_case(self,*args):
         return subprocess.run([str(EXE.resolve()),*args],capture_output=True,text=True,timeout=10)

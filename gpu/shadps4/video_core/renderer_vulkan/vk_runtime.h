@@ -110,6 +110,11 @@ public:
                     const vk::ClearValue& clear_value);
 
     void SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing = true);
+    /// bbport: gives an image both lazy usages (VideoCore::Image::allowed_shader_write), `needed`
+    /// (Usage*) being the ones a binding asked for: a new backing with them, the current one's
+    /// contents copied (all levels and layers); the old texture and its views are released once
+    /// that copy has run.
+    void UpgradeUsage(VideoCore::Image* image, u32 needed);
 
     /// bbport: ordering of the untracked arena, per command (mtl_buffer_barriers.h): right
     /// before a command is recorded, IsBufferAccessed for each range it reads or writes, then

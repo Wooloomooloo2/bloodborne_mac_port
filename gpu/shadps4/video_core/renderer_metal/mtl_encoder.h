@@ -106,6 +106,9 @@ protected:
     ~TimestampSink() = default;
 };
 
+/// bbport: BB_ENCODER_STATS frame boundary (Presenter, at each guest flip).
+void EncoderStatsFrame();
+
 class Encoder {
 public:
     explicit Encoder(Device& device, Ordering ordering = Ordering::InOrder);

@@ -22,6 +22,8 @@
 #include <system_error>
 #include <tuple>
 #include <unistd.h>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <spirv_cross/spirv_msl.hpp>
 
@@ -90,6 +92,8 @@ SpirvScan ScanSpirv(std::span<const u32> code) {
     }
     scan.valid = true;
     std::vector<u32> pagetable_candidates;
+    std::unordered_set<u32> patch_ids;
+    std::unordered_map<u32, u32> locations;
     for (size_t i = 5; i < code.size();) {
         const u32 word = code[i];
         const u32 length = word >> spv::WordCountShift;
@@ -184,11 +188,24 @@ SpirvScan ScanSpirv(std::span<const u32> code) {
             if (length >= 3 && code[i + 2] == spv::DecorationPerVertexKHR) {
                 scan.per_vertex = true;
             }
+            if (length >= 3 && code[i + 2] == spv::DecorationPatch) {
+                patch_ids.insert(code[i + 1]);
+            }
+            if (length >= 4 && code[i + 2] == spv::DecorationLocation) {
+                locations[code[i + 1]] = code[i + 3];
+            }
             break;
         default:
             break;
         }
         i += length;
+    }
+    for (const u32 id : patch_ids) {
+        if (const auto it = locations.find(id); it != locations.end()) {
+            const bool first = scan.tess.patch_end == 0;
+            scan.tess.patch_first = first ? it->second : std::min(scan.tess.patch_first, it->second);
+            scan.tess.patch_end = std::max(scan.tess.patch_end, it->second + 1);
+        }
     }
     return scan;
 }
@@ -488,6 +505,17 @@ std::string Convert(std::span<const u32> spirv, const SpirvScan& scan,
             throw std::runtime_error("no output vertex count for the evaluation shader");
         }
         comp.set_execution_mode(spv::ExecutionModeOutputVertices, variant.output_vertices);
+        // Every patch constant the control shader writes, read or not: SPIRV-Cross then adds
+        // placeholders for the unread ones (raw_buffer_tese_input), so the struct matches the
+        // control shader's in layout and size. (A TES reading locations 4-13 of 0-13 had them at
+        // offset 0 and a 160-byte stride against the TCS's 224: the pipeline was refused.)
+        for (u32 location = variant.patch_first; location < variant.patch_end; ++location) {
+            sc::MSLShaderInterfaceVariable input;
+            input.location = location;
+            input.vecsize = 4;
+            input.rate = sc::MSL_SHADER_VARIABLE_RATE_PER_PATCH;
+            comp.add_msl_shader_input(input);
+        }
     }
 
     std::string msl = comp.compile();
@@ -838,6 +866,9 @@ MetalObjects BuildLibrary(id<MTLDevice> device, const std::string& msl, const st
         } else {
             options.fastMathEnabled = !safe_math;
         }
+        // bbport: positions declared Invariant (BB_SPIRV_PRECISE=invariant) only match across
+        // shaders with this, as MoltenVK set it (emit_spirv_floating_point.cpp).
+        options.preserveInvariance = msl.find(", invariant]]") != std::string::npos;
         NSError* error = nil;
         id<MTLLibrary> library =
             [device newLibraryWithSource:[NSString stringWithUTF8String:msl.c_str()]
@@ -1017,6 +1048,9 @@ CompileResult ShaderCompiler::Compile(std::span<const u32> spirv, u64 hash, std:
         break;
     case VariantKind::TessEval:
         tag = fmt::format("_te{}", variant.output_vertices);
+        if (variant.patch_end != 0) {
+            tag += fmt::format("p{}_{}", variant.patch_first, variant.patch_end);
+        }
         break;
     case VariantKind::GeometryKernel: {
         // The rewritten module depends on the export layout.

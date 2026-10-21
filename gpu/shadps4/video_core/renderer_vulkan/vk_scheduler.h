@@ -660,6 +660,17 @@ public:
     /// Starts a new rendering scope with provided state.
     void BeginRendering(const RenderState& new_state);
 
+    /// bbport: called right after a render pass ends (before the command that ended it is
+    /// recorded, and before a submission): the deferred copy-shader copies (vk_shader_hle.h).
+    using PassEndHook = void (*)(void* context);
+    void SetPassEndHook(PassEndHook hook, void* context) {
+        pass_end_hook = hook;
+        pass_end_context = context;
+    }
+    /// bbport: reopens the render pass that ended last on the same attachments, loading them
+    /// (its clears already ran).
+    void ResumeRendering();
+
     /// bbport: hoisted copies are recorded now, on the calling thread, into the upload encoder,
     /// whose command buffer is committed (untracked) right before the next submission, so they
     /// run before all of its commands (Runtime::HoistCopy decides when that is safe). Copies
@@ -974,6 +985,10 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    PassEndHook pass_end_hook = nullptr;
+    void* pass_end_context = nullptr;
+    bool in_pass_end_hook = false;
+    void PassEnded();
     // bbport: threaded recording
     /// The chunk being filled belongs to one thread at a time (the GPU command thread, or the
     /// draw recording thread while it runs). ChunkGuard reports overlapping users, e.g. a

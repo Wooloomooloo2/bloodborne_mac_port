@@ -12,6 +12,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <cstdio>
 #include "bbport_threads.h"
 
 #include <array>
@@ -35,6 +36,9 @@ public:
     using Handler = void (*)(void* context, const u8* packet, u32 size);
 
     DrawPipe(Handler handler_, void* context_) : handler{handler_}, context{context_} {
+        const char* legacy = std::getenv("BB_PIPE_BLOCKING_WAIT");
+        blocking_wait = !legacy || legacy[0] != '0';
+        std::printf("Draw pipeline: %s producer waits\n", blocking_wait ? "blocking" : "legacy spin");
         ring = std::make_unique<u8[]>(Capacity);
         thread = std::jthread([this](std::stop_token stop) { Run(stop); });
     }
@@ -115,7 +119,13 @@ public:
             if (spins < 4096) {
                 bbport::CpuPause();
             } else {
-                std::this_thread::yield();
+                // Stage B can be blocked in a GPU fence for a full frame. A
+                // yield loop consumes a CPU core throughout that wait on macOS.
+                // Keep the short-latency spin, then sleep until B makes progress.
+                const u64 seen = consumed.load(std::memory_order_acquire);
+                if (seen != head) {
+                    WaitForProgress(seen);
+                }
             }
         }
         const u64 waited = bbport::CpuCycles() - start;
@@ -153,8 +163,37 @@ private:
     }
 
     void WaitForSpace(u64 at, u64 size) {
-        while (at + size - consumed.load(std::memory_order_acquire) > Capacity) {
-            bbport::CpuPause();
+        for (u32 spins = 0;; ++spins) {
+            const u64 seen = consumed.load(std::memory_order_acquire);
+            if (at + size - seen <= Capacity) {
+                return;
+            }
+            if (spins < 4096) {
+                bbport::CpuPause();
+            } else {
+                WaitForProgress(seen);
+            }
+        }
+    }
+
+    void WaitForProgress(u64 seen) {
+        if (!blocking_wait) {
+            std::this_thread::yield();
+            return;
+        }
+        producer_sleeping.store(true, std::memory_order_seq_cst);
+        // Paired seq_cst operations with PublishConsumed prevent a missed wake
+        // between announcing the waiter and checking the producer's predicate.
+        if (consumed.load(std::memory_order_seq_cst) == seen) {
+            consumed.wait(seen, std::memory_order_acquire);
+        }
+        producer_sleeping.store(false, std::memory_order_seq_cst);
+    }
+
+    void PublishConsumed(u64 at) {
+        consumed.store(at, std::memory_order_seq_cst);
+        if (producer_sleeping.load(std::memory_order_seq_cst)) {
+            consumed.notify_one();
         }
     }
 
@@ -204,7 +243,7 @@ private:
             const auto* header = reinterpret_cast<const Header*>(ring.get() + at % Capacity);
             if (header->size == 0) {
                 at += Capacity - at % Capacity;
-                consumed.store(at, std::memory_order_release);
+                PublishConsumed(at);
                 continue;
             }
             const u64 start = bbport::CpuCycles();
@@ -213,7 +252,7 @@ private:
             busy_cycles.fetch_add(busy, std::memory_order_relaxed);
             BbStats::rec_busy_ns.fetch_add(bbport::CyclesToNs(busy), std::memory_order_relaxed);
             at += header->size;
-            consumed.store(at, std::memory_order_release);
+            PublishConsumed(at);
         }
     }
 
@@ -227,6 +266,8 @@ private:
     alignas(64) std::atomic<u64> consumed{0};
     alignas(64) std::atomic<u32> wake{0};
     std::atomic<bool> sleeping{false};
+    std::atomic<bool> producer_sleeping{false};
+    bool blocking_wait = true; ///< set before thread creation; rollback/A-B switch
     std::atomic<u32> stage_b_tid{0};
     std::jthread thread;
 };

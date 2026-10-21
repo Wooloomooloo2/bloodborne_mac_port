@@ -84,6 +84,16 @@ Rasterizer::Rasterizer(Metal::Device& device_, Scheduler& scheduler_, Runtime& r
         constant_ring = std::make_unique<ConstantRing>(device, scheduler);
         draw_pipe = std::make_unique<DrawPipe>(&RunDrawPacket, this);
     }
+    scheduler.SetPassEndHook(
+        [](void* self) { FlushDeferredCopies(*static_cast<Rasterizer*>(self)); }, this);
+    // bbport: the frame capture's event trace also lists the SRT walkers' guest reads.
+    if (std::getenv("BB_CAPTURE_TRIGGER")) {
+        Shader::srt_read_hook = [](u64 address, u32 size) {
+            if (FrameCapture::Tracing()) {
+                FrameCapture::Trace(fmt::format("W {:#x} {}", address, size));
+            }
+        };
+    }
     // bbport: this thread joins the texture binding helper before it changes image state.
     runtime.SetImageAccessHook(&JoinBindHelper, this);
 }
@@ -547,6 +557,10 @@ void Rasterizer::CollectRingBindings(const Shader::Info& stage, const PreparedDr
             std::memcpy(dst, source, size);
         } else {
             memory->CopySparseMemory(address, dst, size);
+            if (FrameCapture::Tracing()) {
+                FrameCapture::Trace(fmt::format("R {} {:08x} {:#x} {}", u32(stage.sw_stage),
+                                                u32(stage.pgm_hash), address, size));
+            }
         }
         out.push_back({index, static_cast<u32>(size), *offset, address});
     };
@@ -1280,6 +1294,9 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     const auto [buffer, base] =
         buffer_cache.ObtainBuffer(indirect.args, stride * max_count, false);
     NoteRead(buffer, base, stride * max_count);
+    if (FrameCapture::Tracing()) {
+        FrameCapture::Trace(fmt::format("A {:#x} {}", indirect.args, stride * max_count));
+    }
 
     const VideoCore::Buffer* count_buffer;
     u64 count_offset;
@@ -1561,6 +1578,10 @@ bool Rasterizer::TexturesBindableOnHelper(const Shader::Info& stage,
         if (const auto depth_image_id = texture_cache.GetAssociatedDepth(*image)) {
             image_id = depth_image_id;
             image = &texture_cache.GetImage(image_id);
+        }
+        // bbport: a lazy usage upgrade (Runtime::UpgradeUsage) runs on the GPU thread.
+        if (image->NeededUsage(entry.desc.view_info) != 0) {
+            return false;
         }
         if (image->binding.needs_rebind || !texture_cache.IsUpToDate(image_id) ||
             scene_targets->Tracks(image->image_uid) ||
@@ -1855,6 +1876,9 @@ void Rasterizer::ResolveVertexBuffers(const GraphicsPipeline* pipeline,
         std::tie(range.buffer, range.offset) =
             buffer_cache.ObtainBuffer(range.base_address, size, false);
         NoteRead(range.buffer, range.offset, size);
+        if (FrameCapture::Tracing()) {
+            FrameCapture::Trace(fmt::format("V {:#x} {}", range.base_address, size));
+        }
     }
 
     // The streams, by attribute location (fetch shader order, like guest_buffers). A V# without
@@ -1906,8 +1930,11 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
     // Bind index buffer.
     const u32 index_buffer_size = regs.num_indices * index_size;
     const auto [buffer, offset] =
-        buffer_cache.ObtainBuffer(index_address, index_buffer_size, false);
+        buffer_cache.ObtainIndexBuffer(index_address, index_buffer_size);
     NoteRead(buffer, offset, index_buffer_size);
+    if (FrameCapture::Tracing()) {
+        FrameCapture::Trace(fmt::format("I {:#x} {}", index_address, index_buffer_size));
+    }
     index_bind = {buffer->Ref(offset), is_index16 ? Metal::IndexType::U16 : Metal::IndexType::U32};
 }
 
@@ -1943,6 +1970,22 @@ void Rasterizer::SetDrawEncoders(const Pipeline& pipeline, bool indirect) {
 }
 
 void Rasterizer::OrderAccesses() {
+    // bbport: a command of the pass that touches the ranges of copies deferred to its end
+    // (vk_shader_hle.h) has them run first: the pass ends there and reopens.
+    if (scheduler.IsRendering()) {
+        bool conflict = false;
+        for (const auto& b : bound_buffers) {
+            conflict = conflict || DeferredCopiesConflict(b.buffer, b.offset, b.size, b.is_written);
+        }
+        for (const auto& r : read_ranges) {
+            conflict = conflict || DeferredCopiesConflict(r.buffer, r.offset, r.size, false);
+        }
+        if (conflict) {
+            BbStats::deferred_copy_conflicts.fetch_add(1, std::memory_order_relaxed);
+            scheduler.EndRendering();
+            scheduler.ResumeRendering();
+        }
+    }
     // Checked now, right before the command is recorded: the uploads and copies recorded while
     // its resources were bound are among the accesses it is checked against.
     Metal::OrderRequest need;
@@ -2157,6 +2200,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 }
             } else if (desc.buffer_type == Shader::BufferType::BdaPagetable) {
                 const auto* bda_buffer = buffer_cache.GetBdaPageTableBuffer();
+                if (FrameCapture::Tracing()) {
+                    FrameCapture::Trace(fmt::format("M {} {:08x}", u32(stage.sw_stage),
+                                                    u32(stage.pgm_hash)));
+                }
                 // bbport: direct memory access (BB_DIRECT_MEMORY_ACCESS=1) reads any guest
                 // memory by address: the whole arena and the page table, for the ordering.
                 const auto stage_of_read = stage.sw_stage == Shader::SwStage::Fragment ||
@@ -2217,6 +2264,12 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 }
                 const auto [buffer, offset] = buffer_cache.ObtainBuffer(
                     vsharp.base_address, size, desc.is_written, desc.is_formatted);
+                if (FrameCapture::Tracing()) {
+                    FrameCapture::Trace(fmt::format("B {} {:08x} {:#x} {} {}",
+                                                    u32(stage.sw_stage), u32(stage.pgm_hash),
+                                                    vsharp.base_address, size,
+                                                    desc.is_written ? 1 : 0));
+                }
                 const u64 offset_aligned = Common::AlignDown(offset, alignment);
                 const u64 adjust = offset - offset_aligned;
                 if (adjust % 4 != 0) {
@@ -2233,7 +2286,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                            draw_encoders);
                 if (desc.is_written) {
                     // Raw storage-buffer writes can also make an aliased cached image stale.
-                    texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size,
+                                                          stage.pgm_hash);
                 }
             }
         }
@@ -2432,6 +2486,21 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
         }
 
         image_descriptor_array_sizes.push_back(num_bindings);
+    }
+
+    // bbport: a lazy usage upgrade replaces the image's texture. Every binding of this stage gets
+    // its upgrade before any binding takes a texture: a dispatch that writes one mip and reads
+    // another in a second pixel format must not write the replaced texture.
+    if (!on_helper) {
+        for (const auto& [image_id, desc_ptr] : image_bindings) {
+            if (!image_id) {
+                continue;
+            }
+            auto& image = texture_cache.GetImage(image_id);
+            if (const u32 needed = image.NeededUsage(desc_ptr->view_info)) {
+                runtime.UpgradeUsage(&image, needed);
+            }
+        }
     }
 
     // Second pass to re-bind images that were updated after binding
@@ -3652,6 +3721,7 @@ void Rasterizer::NoteFrameStart() {
         profiler->BeginFrame();
     }
     const u64 frame = BbStats::gpu_frames.fetch_add(1, std::memory_order_relaxed) + 1;
+    Metal::EncoderStatsFrame(); // BB_ENCODER_STATS
     // BB_BUFFER_STATS=1: how many earlier frames the GPU has not finished when the GPU thread
     // starts a frame — the lag that decides whether guest memory can be read in place.
     static const bool stats = [] {

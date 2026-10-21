@@ -1,12 +1,11 @@
 /* Native arm64 GPU process, runtime side (docs/DESIGN_NATIVE_GPU_PROCESS.md, M2 and M3).
- * Default on macOS (BB_GPU_PROCESS=0 disables): spawns out/bbgpu-host (arm64 slice), hands it the guest memory
+ * The only renderer on macOS: spawns out/bbgpu-host (arm64 slice), hands it the guest memory
  * entry and a shared control block (host/bbgpu_protocol.h, host/bbgpu_shared.h) and mirrors
  * every guest view into it at the same address, through the control block's submit ring. Then
  * probe.c starts the renderer there (bbgpu_init_remote) and the GPU work follows on the same
- * ring. If the host fails before the renderer starts, this logs it and the runtime continues
- * single-process; after that, losing the host ends the game.
+ * ring. If the host cannot start, or is lost at any point, the game stops with a "Crash:" line
+ * (the launcher's crash report shows it).
  *
- *   BB_GPU_PROCESS=0             disable (single process); on by default
  *   BB_GPU_HOST=path             host executable (default: bbgpu-host next to bb-probe)
  *   BB_GPU_PROCESS_VERIFY_MS=n   period of the mirror verification (default 0 = off; e.g. 5000)
  *
@@ -62,6 +61,13 @@ typedef union {
 } Inbox;
 typedef struct { Inbox m; mach_msg_max_trailer_t trailer; } InboxBuffer;
 
+/* The game cannot run without the GPU process (there is no single-process mode any more). */
+static void start_failed(const char *why) {
+    printf("Crash: the GPU process could not start (%s). The lines above say why.\n", why);
+    fflush(stdout);
+    _exit(GPU_PROCESS_EXIT_START);
+}
+
 static void lost_locked(const char *why) {
     if (!alive) return;
     alive = 0;
@@ -70,10 +76,12 @@ static void lost_locked(const char *why) {
         const int quit = strstr(why, "exited with status 0") != NULL;
         if (quit) printf("GPU process: game window closed; exiting\n");
         else printf("GPU process: host lost (%s) while rendering; exiting\n", why);
+        if (!quit) printf("Crash: the GPU process stopped unexpectedly (%s)\n", why);
         fflush(stdout);
         _exit(quit ? 0 : 1);
     }
-    printf("GPU process: host lost (%s); continuing single-process\n", why);
+    printf("GPU process: host lost (%s) before rendering\n", why);
+    start_failed(why);
 }
 
 /* runtime_memory.c, region table write lock held: pushed in operation order, ahead of any GPU
@@ -313,12 +321,25 @@ static int spawn(const char *path, mach_port_t port) {
     return 0;
 }
 
+/* SIGTERM, then SIGKILL if the host has not exited within 3 s (a stuck host may never get to
+ * its exit path, and the game must not wait on it forever). */
 static void stop_host(void) {
     if (host_pid > 0) {
         kill(host_pid, SIGTERM);
-        waitpid(host_pid, NULL, 0);
+        for (int i = 0; i < 300 && waitpid(host_pid, NULL, WNOHANG) == 0; ++i) usleep(10000);
+        if (kill(host_pid, 0) == 0) {
+            kill(host_pid, SIGKILL);
+            waitpid(host_pid, NULL, 0);
+        }
         host_pid = 0;
     }
+}
+
+void gpu_process_stop(void) {
+    pthread_mutex_lock(&mutex);
+    alive = 0; /* the host's exit is expected now: no "lost" report */
+    pthread_mutex_unlock(&mutex);
+    stop_host();
 }
 
 void *gpu_process_shared(void) {
@@ -335,31 +356,22 @@ void gpu_process_rendering(void) {
 }
 
 void gpu_process_start(void) {
-    /* On by default (macOS): BB_GPU_PROCESS=0 keeps everything in this process. */
-    const char *env = getenv("BB_GPU_PROCESS");
-    if (env && !strcmp(env, "0")) return;
-    if (runtime_memory_create_pool() || runtime_memory_pool_entry() == MACH_PORT_NULL) {
-        puts("GPU process: no shared guest memory entry (BB_SHARED_GUEST_MEMORY=0?); single-process");
-        return;
-    }
+    if (runtime_memory_create_pool() || runtime_memory_pool_entry() == MACH_PORT_NULL)
+        start_failed("no shared memory entry for the game's memory");
     char path[PATH_MAX];
-    if (host_path(path, sizeof path)) { puts("GPU process: cannot locate bbgpu-host; single-process"); return; }
+    if (host_path(path, sizeof path)) start_failed("bbgpu-host was not found next to bb-probe");
     mach_port_t hs = MACH_PORT_NULL;
     if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &hs) != KERN_SUCCESS ||
-        mach_port_insert_right(mach_task_self(), hs, hs, MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS) {
-        puts("GPU process: cannot allocate the handshake port; single-process");
-        return;
-    }
+        mach_port_insert_right(mach_task_self(), hs, hs, MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS)
+        start_failed("cannot allocate the handshake port");
     /* The control block: a small entry of its own (offsets only; mapped anywhere on each side). */
     memory_object_size_t shared_size = BBGPU_SHARED_SIZE;
     mach_vm_address_t shared_at = 0;
     if (mach_make_memory_entry_64(mach_task_self(), &shared_size, 0, MAP_MEM_NAMED_CREATE | VM_PROT_READ | VM_PROT_WRITE,
                                   &shared_entry, MACH_PORT_NULL) != KERN_SUCCESS ||
         mach_vm_map(mach_task_self(), &shared_at, BBGPU_SHARED_SIZE, 0, VM_FLAGS_ANYWHERE, shared_entry, 0, FALSE,
-                    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE) != KERN_SUCCESS) {
-        puts("GPU process: cannot create the shared control block; single-process");
-        return;
-    }
+                    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_READ | VM_PROT_WRITE, VM_INHERIT_NONE) != KERN_SUCCESS)
+        start_failed("cannot create the shared control block");
     shared = (BbGpuShared *)(uintptr_t)shared_at;
     bbgpu_shared_init(shared);
     struct timespec start;
@@ -420,8 +432,7 @@ void gpu_process_start(void) {
     }
     if (!ok) {
         stop_host();
-        puts("GPU process: continuing single-process");
-        return;
+        start_failed("the handshake with bbgpu-host failed");
     }
     printf("GPU process: host pid %d ready in %ld ms (%s, page %u bytes); guest entry 0x%" PRIx64
            " bytes mirrored at 0x%" PRIx64 "-0x%" PRIx64 "\n",

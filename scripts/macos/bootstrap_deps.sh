@@ -3,11 +3,11 @@
 #  - x86_64 (default) -> deps/x86_64: bb-probe and the game run under Rosetta 2, so every
 #    library linked into that process must be x86-64.
 #  - arm64 (BB_DEPS_ARCH=arm64) -> deps/arm64: the native GPU host process (bbgpu-host, see
-#    docs/DESIGN_NATIVE_GPU_PROCESS.md). Same pinned set minus the x86-only Zydis/Zycore/xbyak
-#    (they only serve the x86 SRT-walker JIT in the shader recompiler).
+#    docs/DESIGN_NATIVE_GPU_PROCESS.md). The same pinned set.
 # Each architecture has its own prefix, build directory and stamps; neither ever sees the
-# other's libraries. Host tools (cmake, ninja, nasm, glslang, pkgconf) come from the native
-# arm64 Homebrew.
+# other's libraries. No Vulkan loader or MoltenVK (removed in 0.5.3: the renderer is Metal);
+# Vulkan-Headers stay for Vulkan-Hpp's types, SPIRV-Cross turns the shaders' SPIR-V into MSL.
+# Host tools (cmake, ninja, nasm, glslang, pkgconf) come from the native arm64 Homebrew.
 #
 #   bash scripts/macos/bootstrap_deps.sh                   # x86-64: build what is missing
 #   BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh # arm64
@@ -32,13 +32,9 @@ SDL_TAG=release-3.4.18
 FMT_TAG=11.2.0
 XXHASH_TAG=v0.8.3
 MINIZ_TAG=3.1.2
-ZYDIS_TAG=v4.1.1
 VULKAN_TAG=vulkan-sdk-1.4.363.0
-MOLTENVK_TAG=v1.4.2
 MAGIC_ENUM_TAG=v0.9.7
 ROBIN_MAP_TAG=v1.4.0
-VMA_TAG=v3.3.0
-XBYAK_TAG=v7.43
 FFMPEG_TAG=n7.1.5
 # Online play (gpu/bbnet, libbbnet.dylib; x86-64 only: the module runs in the game process).
 PROTOBUF_TAG=v21.12          # the last protobuf without abseil; protoc comes with it
@@ -120,37 +116,24 @@ fetch SDL https://github.com/libsdl-org/SDL.git $SDL_TAG $SDL_COMMIT
 fetch fmt https://github.com/fmtlib/fmt.git $FMT_TAG $FMT_COMMIT
 fetch xxHash https://github.com/Cyan4973/xxHash.git $XXHASH_TAG $XXHASH_COMMIT
 fetch miniz https://github.com/richgel999/miniz.git $MINIZ_TAG $MINIZ_COMMIT
-[[ $ARCH == x86_64 ]] && fetch zydis https://github.com/zyantific/zydis.git $ZYDIS_TAG $ZYDIS_COMMIT
 fetch Vulkan-Headers https://github.com/KhronosGroup/Vulkan-Headers.git $VULKAN_TAG $VULKAN_HEADERS_COMMIT
-fetch Vulkan-Loader https://github.com/KhronosGroup/Vulkan-Loader.git $VULKAN_TAG $VULKAN_LOADER_COMMIT
 fetch magic_enum https://github.com/Neargye/magic_enum.git $MAGIC_ENUM_TAG $MAGIC_ENUM_COMMIT
 fetch robin-map https://github.com/Tessil/robin-map.git $ROBIN_MAP_TAG $ROBIN_MAP_COMMIT
-fetch VulkanMemoryAllocator https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git $VMA_TAG $VMA_COMMIT
-[[ $ARCH == x86_64 ]] && fetch xbyak https://github.com/herumi/xbyak.git $XBYAK_TAG $XBYAK_COMMIT
 fetch FFmpeg https://github.com/FFmpeg/FFmpeg.git $FFMPEG_TAG $FFMPEG_COMMIT
-# SPIR-V -> MSL for the Metal renderer (both libraries compile it until M7 trims the x86-64 one).
+# SPIR-V -> MSL for the Metal renderer (the x86-64 library still compiles it: MACOS_BACKLOG).
 fetch SPIRV-Cross https://github.com/KhronosGroup/SPIRV-Cross.git $VULKAN_TAG $SPIRV_CROSS_COMMIT
 
 cmake_dep Vulkan-Headers .
-cmake_dep Vulkan-Loader . -DUPDATE_DEPS=OFF -DBUILD_TESTS=OFF -DVulkanHeaders_DIR="$PREFIX/share/cmake/VulkanHeaders"
 cmake_dep SDL . -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
 cmake_dep fmt . -DFMT_TEST=OFF -DFMT_DOC=OFF
 cmake_dep xxHash cmake_unofficial -DBUILD_SHARED_LIBS=OFF -DXXHASH_BUILD_XXHSUM=OFF
 cmake_dep miniz . -DBUILD_SHARED_LIBS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_FUZZERS=OFF
-if [[ $ARCH == x86_64 ]]; then
-    # Zydis builds against its bundled Zycore, but its installed CMake config also needs an
-    # installed Zycore (find_dependency): install the same copy separately.
-    cmake_dep zycore ../zydis/dependencies/zycore -DZYCORE_BUILD_SHARED_LIB=OFF
-    cmake_dep zydis . -DZYDIS_BUILD_TOOLS=OFF -DZYDIS_BUILD_EXAMPLES=OFF -DZYDIS_BUILD_DOXYGEN=OFF
-fi
 cmake_dep magic_enum . -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF
 cmake_dep robin-map .
-cmake_dep VulkanMemoryAllocator .
 cmake_dep SPIRV-Cross . -DSPIRV_CROSS_SHARED=OFF -DSPIRV_CROSS_STATIC=ON \
     -DSPIRV_CROSS_CLI=OFF -DSPIRV_CROSS_ENABLE_TESTS=OFF -DSPIRV_CROSS_ENABLE_HLSL=OFF \
     -DSPIRV_CROSS_ENABLE_CPP=OFF -DSPIRV_CROSS_ENABLE_REFLECT=OFF -DSPIRV_CROSS_ENABLE_C_API=OFF \
     -DSPIRV_CROSS_ENABLE_UTIL=OFF
-[[ $ARCH == x86_64 ]] && cmake_dep xbyak .
 
 # Online module libraries (x86-64 only): all static, linked into libbbnet.dylib. zlib is the
 # system's. protoc runs under Rosetta; deps/host/bin/protoc is the same protoc built arm64,
@@ -215,40 +198,9 @@ if ! stamp FFmpeg; then
     done_stamp FFmpeg
 fi
 
-# MoltenVK: the release dylib is universal (arm64 + x86_64). Registered with the loader
-# through an ICD manifest; run scripts point VK_DRIVER_FILES at it.
-if ! stamp MoltenVK; then
-    if [[ ! -f $SRC/MoltenVK-macos.tar ]]; then
-        echo "== fetch MoltenVK $MOLTENVK_TAG"
-        curl -fsSL -o "$SRC/MoltenVK-macos.tar" \
-            "https://github.com/KhronosGroup/MoltenVK/releases/download/$MOLTENVK_TAG/MoltenVK-macos.tar"
-        if [[ $(shasum -a 256 "$SRC/MoltenVK-macos.tar" | cut -c1-64) != "$MOLTENVK_SHA256" ]]; then
-            echo "MoltenVK-macos.tar: SHA-256 differs from the pinned $MOLTENVK_SHA256; refusing it" >&2
-            rm -f "$SRC/MoltenVK-macos.tar"; exit 1
-        fi
-    fi
-    rm -rf "$BUILD/MoltenVK" && mkdir -p "$BUILD/MoltenVK"
-    tar -xf "$SRC/MoltenVK-macos.tar" -C "$BUILD/MoltenVK"
-    dylib=$(find "$BUILD/MoltenVK" -name libMoltenVK.dylib -path '*macOS*' | head -1)
-    lipo "$dylib" -verify_arch $ARCH || { echo "MoltenVK dylib lacks $ARCH" >&2; exit 1; }
-    cp "$dylib" "$PREFIX/lib/"
-    mkdir -p "$PREFIX/share/vulkan/icd.d"
-    cat > "$PREFIX/share/vulkan/icd.d/MoltenVK_icd.json" <<'JSON'
-{
-    "file_format_version": "1.0.0",
-    "ICD": {
-        "library_path": "../../../lib/libMoltenVK.dylib",
-        "api_version": "1.4.0",
-        "is_portability_driver": true
-    }
-}
-JSON
-    done_stamp MoltenVK
-fi
-
 echo
 echo "$ARCH dependencies ready in $PREFIX"
-for lib in libvulkan.1.dylib libSDL3.0.dylib libMoltenVK.dylib libavcodec.dylib; do
+for lib in libSDL3.0.dylib libavcodec.dylib; do
     printf '  %-22s %s\n' "$lib" "$(lipo -archs "$PREFIX/lib/$lib" 2>/dev/null || echo missing)"
 done
 if [[ $ARCH == x86_64 ]]; then

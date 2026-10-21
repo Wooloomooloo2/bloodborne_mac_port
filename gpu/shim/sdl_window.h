@@ -31,6 +31,8 @@ public:
     /// False while the window is minimised, hidden or fully occluded (macOS keeps the size then,
     /// and the window server composites nothing): the presenter skips frames. Any thread.
     bool IsVisible() const { return visible.load(std::memory_order_relaxed); }
+    /// True while the window is full screen (the presenter keeps three drawables then). Any thread.
+    bool IsFullscreen() const { return fullscreen.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
     /// Keyboard text entry for the system IME dialog; the typed text shows in a box over the
@@ -43,6 +45,7 @@ private:
     std::atomic<s32> width, height;
     std::atomic<bool> is_open{true};
     std::atomic<bool> visible{true};
+    std::atomic<bool> fullscreen{false};
     void UpdateVisible();
     std::mutex text_mutex;
     bool text_requested{}, text_active{}, text_password{};

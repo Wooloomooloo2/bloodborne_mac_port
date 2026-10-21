@@ -1,7 +1,8 @@
 # macOS Port Plan (Apple Silicon)
 
-Status: **work in progress — boots on MoltenVK; character creation and the first level are
-playable (2026-10-11).**
+Status: **playable; native Metal renderer since 0.5.0, MoltenVK and the Vulkan loader removed
+in 0.5.3 (2026-10-19).** The plan below is the original one (2026-10-11); the progress list and
+[`ROADMAP.md`](ROADMAP.md) say where it went.
 
 ## Approach
 
@@ -18,6 +19,10 @@ Graphics use a staged hybrid plan:
 3. **Native Metal backend** only where profiling (Instruments / Metal System Trace) shows
    MoltenVK translation overhead is the bottleneck.
 
+Where it went: the renderer moved into a native arm64 process (`bbgpu-host`, 0.3.0) and became
+native Metal there (0.5.0); 0.5.3 removed MoltenVK, the Vulkan loader and the single-process
+mode. The game process stays x86-64 under Rosetta 2.
+
 ## Porting work
 
 | Area | Linux/Windows today | macOS plan |
@@ -28,23 +33,23 @@ Graphics use a staged hybrid plan:
 | Thread dumps | `getdents64` + `tgkill` | **done:** `task_threads` / `pthread_kill` |
 | Restart | `close_range` | **done:** close loop |
 | Timed locks / clocks | `pthread_mutex_timedlock`, `clock_nanosleep`, `RUSAGE_THREAD` | **done:** trylock backoff, monotonic sleep loop, Mach `thread_info` |
-| Upscaling | FSR 3.1 / FSR 4 | FSR 3.1, then MetalFX (FSR 4 not expected to work) |
+| Upscaling | FSR 3.1 / FSR 4 | **done:** MetalFX, FSR 3.1 (Metal back end for FidelityFX), TAA, FSR 1; FSR 4 removed (no Apple GPU path) |
 
 ## Toolchain
 
 - Xcode command line tools (Apple clang, targeting `x86_64-apple-macos`, deployment target 15.0
   because Rosetta runs AVX2 from macOS 15)
-- `bash scripts/macos/bootstrap_deps.sh`: builds pinned x86-64 SDL3, Vulkan headers/loader,
-  fmt, xxHash, miniz, Zydis, FFmpeg 7.1 and header-only libs into `deps/x86_64` (no sudo, no x86
-  Homebrew), and installs the universal MoltenVK dylib with an ICD manifest. Host tools (cmake,
-  ninja, nasm, glslang, pkgconf, boost headers) come from the normal arm64 Homebrew.
-- `bash build_macos.sh [--test|--gpu-only]`: builds `out/gpu/libbbgpu.dylib`, `out/bb-probe` and
-  `out/bb-gpu-capabilities` (x86-64), optionally running the unit tests.
-- Run with `VK_DRIVER_FILES=deps/x86_64/share/vulkan/icd.d/MoltenVK_icd.json` (`run.sh` sets it on macOS).
+- `bash scripts/macos/bootstrap_deps.sh` (and `BB_DEPS_ARCH=arm64` for the GPU host): builds
+  pinned SDL3, Vulkan-Headers (Vulkan-Hpp types only), SPIRV-Cross, fmt, xxHash, miniz,
+  FFmpeg 7.1 and header-only libs into `deps/<arch>` (no sudo, no x86 Homebrew). Host tools
+  (cmake, ninja, nasm, glslang, pkgconf, boost headers) come from the normal arm64 Homebrew.
+- `bash build_macos.sh [--test|--gpu-only]`: builds `out/gpu/libbbgpu.dylib` and `out/bb-probe`
+  (x86-64), `out/gpu-arm64/libbbgpu.dylib` and `out/bbgpu-host` (arm64), optionally running the
+  unit tests. No Vulkan loader or driver is involved at build or run time.
 
-Verified 2026-10-11 on an M4 Max (macOS 26.6): an x86-64 binary under Rosetta enumerates
-"Apple M4 Max", Vulkan 1.3, via MoltenVK 1.4.2. Relevant for the plan: `VK_EXT_metal_objects`
-and `VK_EXT_external_memory_host` are available; `geometryShader` and `logicOp` are not.
+Verified 2026-10-11 on an M4 Max (macOS 26.6), with MoltenVK then: an x86-64 binary under
+Rosetta enumerates "Apple M4 Max", Vulkan 1.3, via MoltenVK 1.4.2; `geometryShader` and
+`logicOp` are missing (the Metal renderer emulates geometry shaders since 0.5.0).
 
 ## Unpacking the game (`tools/pkg_extract`)
 
@@ -72,7 +77,9 @@ python3 -c "import sys; sys.path.insert(0,'scripts'); import game_check; print(g
 - [ ] GPU on MoltenVK; fix rendering gaps
 - [x] MetalFX temporal upscaling (upscaler `metalfx`; 1080p presets render the whole frame
   smaller on macOS) (2026-10-11)
+- [x] Native arm64 GPU process (0.3.0), native Metal renderer (0.5.0)
+- [x] Launcher and `.app` bundle (0.4.0)
+- [x] MoltenVK, the Vulkan loader and FSR 4 removed (0.5.3, 2026-10-19)
 - [ ] Zero-copy guest memory
-- [ ] Launcher and `.app` bundle
 
 Session handoff notes for Claude Code live in [`CLAUDE.md`](../CLAUDE.md).

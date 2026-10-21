@@ -63,7 +63,6 @@ static void sleep_ms(unsigned ms) {
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     CHECK(!runtime_memory_reserve_space(), "cannot reserve the guest range");
-    setenv("BB_GPU_PROCESS", "1", 1);
     gpu_process_start();
     void *shared = gpu_process_shared();
     CHECK(shared, "the GPU host did not start (out/bbgpu-host built?)");

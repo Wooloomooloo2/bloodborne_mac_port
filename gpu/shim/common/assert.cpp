@@ -7,6 +7,7 @@
 
 void assert_fail_impl() {
     std::fflush(stdout);
+    std::fputs("Crash: a check in the renderer failed (the GPU log above says which)\n", stderr);
     std::fputs("STOP: GPU library assertion failed (see GPU log above)\n", stderr);
     std::_Exit(23);
 }

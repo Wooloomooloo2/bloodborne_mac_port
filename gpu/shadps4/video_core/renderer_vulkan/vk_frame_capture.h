@@ -44,6 +44,13 @@ public:
     /// Contents of a bound buffer (first 1 KiB), kept for small passes and a pass's first draw.
     static void Buffer(u64 stage_hash, u32 slot, VAddr address, const void* data, u64 size);
     static void Note(const char* text);
+    /// bbport: the event trace written next to the capture (frame_*.trace.txt): passes, draws,
+    /// dispatches, buffer bindings and copy-shader copies in command order, for dependency
+    /// analysis. Only while a frame is being recorded.
+    static bool Tracing() {
+        return state.load(std::memory_order_relaxed) == Recording;
+    }
+    static void Trace(std::string line);
 
     /// bbport: records the next full frame, as the trigger file does (the overlay's "Capture
     /// frame" button). Written to BB_CAPTURE_DIR, else ~/Library/Logs/Bloodborne/captures.

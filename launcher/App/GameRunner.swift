@@ -21,7 +21,9 @@ enum GameRunner {
 
     /// The game's processes (one copy at a time).
     static var isGameRunning: Bool {
-        run(["/usr/bin/pgrep", "-x", "bbgpu-host"]).status == 0 || run(["/usr/bin/pgrep", "-x", "bb-probe"]).status == 0
+        run(["/usr/bin/pgrep", "-x", "bbgpu-host"]).status == 0 ||
+            run(["/usr/bin/pgrep", "-x", "bbgpu-host-macos27"]).status == 0 ||
+            run(["/usr/bin/pgrep", "-x", "bb-probe"]).status == 0
     }
 
     static var hasRosetta: Bool { run(["/usr/bin/arch", "-x86_64", "/usr/bin/true"]).status == 0 }

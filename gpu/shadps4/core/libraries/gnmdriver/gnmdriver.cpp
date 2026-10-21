@@ -158,6 +158,7 @@ std::atomic<u64> gnm_call_seq{0};
 extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_t size);
 extern "C" uint64_t runtime_thread_cpu_ns(int which);
 extern "C" void runtime_game_cpu_since_last(uint64_t* total_ns, uint64_t* busiest_ns, char busiest_name[32]);
+extern "C" void runtime_sampler_flip(uint64_t main_cpu_ns);
 
 u64 TraceThreadId() {
     thread_local const u64 id = [] {
@@ -618,7 +619,9 @@ static s32 RemoteSubmit(u32 count, const u32* dcb_gpu_addrs[], const u32* dcb_si
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count());
             if (BbGpuShared* shared = BbSplit::Shared()) {
-                __atomic_store_n(&shared->game_main_cpu_ns, runtime_thread_cpu_ns(0), __ATOMIC_RELAXED);
+                const u64 main_cpu = runtime_thread_cpu_ns(0);
+                runtime_sampler_flip(main_cpu); // BB_SAMPLE_MS (runtime_sampler.c)
+                __atomic_store_n(&shared->game_main_cpu_ns, main_cpu, __ATOMIC_RELAXED);
                 __atomic_store_n(&shared->game_flip_cpu_ns, runtime_thread_cpu_ns(1), __ATOMIC_RELAXED);
                 u64 total = 0, busiest = 0;
                 char name[32];
@@ -876,13 +879,17 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
         return;
     }
 
+    // bbport: the compute work is queued first and the wait for the previous submission comes
+    // after (as in DiAvisoo/bbport-mac-optimized). A graphics WAIT_REG_MEM after SubmitDone can
+    // wait for a label this compute work writes: waiting first, the GPU never went idle and
+    // the work never reached it. The game submits compute only at start and while loading
+    // (~55 calls a session), which fits the black loading screen 1 launch in 10 (#18).
     std::scoped_lock lk{m_submit_lock};
-    WaitGpuIdle();
-
     if (BbSplit::Remote()) {
         const BbGpuDingDong record{{BBGPU_REC_DING_DONG, sizeof(BbGpuDingDong)}, gnm_vqid,
                                    next_offs_dw};
         BbSplit::Push(&record);
+        WaitGpuIdle();
         return;
     }
 
@@ -896,6 +903,7 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
     auto& offs_dw = asc_next_offs_dw[vqid];
 
     if (next_offs_dw == offs_dw) {
+        WaitGpuIdle();
         return;
     }
 
@@ -946,6 +954,7 @@ void PS4_SYSV_ABI sceGnmDingDong(u32 gnm_vqid, u32 next_offs_dw) {
         });
     }
     liverpool->SubmitAsc(gnm_vqid, acb_span);
+    WaitGpuIdle();
 }
 
 void PS4_SYSV_ABI sceGnmDingDongForWorkload(u32 gnm_vqid, u32 next_offs_dw, u64 workload_id) {

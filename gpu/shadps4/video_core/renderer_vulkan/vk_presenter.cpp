@@ -10,6 +10,7 @@
 #include "bbport_cpu.h"
 #include "bbport_gpu_capture.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -66,6 +67,15 @@ Metal::LayerConfig LayerConfigFromEnv() {
     return config;
 }
 
+// Full screen: three. macOS shows a full-screen layer's frames directly, without the window
+// compositor that otherwise absorbs a late frame, so with two a frame that misses a refresh
+// also holds up the next nextDrawable: 10-18 late frames per run against 0-2 with three at the
+// 60 cap on an M4 Max, and 30-40 FPS on a MacBook Air M5 (#25, 2026-10-21). BB_SWAPCHAIN_IMAGES
+// overrides here too.
+u32 FullscreenDrawables(const Metal::LayerConfig& config) {
+    return std::getenv("BB_SWAPCHAIN_IMAGES") ? config.max_drawables : 3;
+}
+
 vk::Format GetFrameViewFormat(const Libraries::VideoOut::PixelFormat format) {
     switch (format) {
     case Libraries::VideoOut::PixelFormat::A8B8G8R8Srgb:
@@ -117,6 +127,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     // Snapshots read the drawable back.
     config.framebuffer_only = snapshot_trigger.empty();
     Metal::ConfigureLayer(device, layer, config);
+    windowed_drawables = layer_drawables = config.max_drawables;
+    fullscreen_drawables = FullscreenDrawables(config);
     // The settings menu and FPS counter, drawn into the drawable (Present).
     BbOverlay::Init(device, FrameFormat);
     for (u32 i = 0; i < FramePool::Count; ++i) {
@@ -129,8 +141,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     if (fsr_settings.enable) {
         fsr_pass = std::make_unique<HostPasses::FsrPass>(device);
     }
-    std::printf("Presenter: CAMetalLayer, %u drawables, display sync %s, frame limit %u\n",
-                config.max_drawables, config.display_sync ? "on" : "off",
+    std::printf("Presenter: CAMetalLayer, %u drawables (%u in full screen), display sync %s, "
+                "frame limit %u\n",
+                config.max_drawables, fullscreen_drawables, config.display_sync ? "on" : "off",
                 EmulatorSettings.GetFrameLimit());
 }
 
@@ -345,6 +358,22 @@ std::string Presenter::TakeSnapshotRequest() {
     return path.empty() ? snapshot_trigger + ".png" : path;
 }
 
+namespace {
+/// bbport: frame pacing (bbport.ini frame_pacing, default off): the minimum time each frame stays
+/// on screen, the frame cap's period. On variable-refresh displays (ProMotion) frames at a steady
+/// cap otherwise alternate between neighbouring refresh slots (12.5 / 20.8 ms at 60 FPS on a
+/// MacBook Pro); with it they are shown for one period each. It holds frames until their slot:
+/// about one more frame of input latency (measured +23 ms at 60 FPS). Slightly under the period
+/// (97%), so a frame on time is never held back to the next refresh.
+double PacingSeconds() {
+    if (!BbSettings::Get().frame_pacing.load(std::memory_order_relaxed)) {
+        return 0;
+    }
+    const u32 fps = EmulatorSettings.GetFrameLimit();
+    return fps ? 0.97 / fps : 0;
+}
+} // namespace
+
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame, u32) {
     last_present = {NowNs(), 0, 0, 0};
     // nextDrawable and the present passes create autoreleased objects, and this thread
@@ -357,6 +386,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             BbOverlay::Render(nullptr, nullptr, 0, 0); // FPS timing, the menu's pending save
             pool->Free(frame);
             return;
+        }
+        if (const u32 wanted = window.IsFullscreen() ? fullscreen_drawables : windowed_drawables;
+            wanted != layer_drawables) {
+            Metal::SetMaximumDrawables(layer, wanted);
+            layer_drawables = wanted;
+            std::printf("Presenter: %u drawables (%s)\n", wanted,
+                        window.IsFullscreen() ? "full screen" : "window");
         }
         Metal::Drawable drawable = Metal::NextDrawable(layer);
         if (!drawable.drawable) {
@@ -411,7 +447,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                         std::fflush(stdout);
                     }).detach();
                 }
-            });
+            }, PacingSeconds());
         last_present.submitted = NowNs();
         last_present.presented = last_present.submitted;
     });

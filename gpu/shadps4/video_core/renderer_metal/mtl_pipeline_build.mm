@@ -221,7 +221,10 @@ GraphicsPsos PipelineFactory::TessellationPsos(const Vulkan::GraphicsPipelineKey
     if (ok) {
         input.control = Variant(*tcs_module, {.kind = Kind::TessControl, .domain = tes_info.domain});
         input.eval = Variant(*tes_module,
-                             {.kind = Kind::TessEval, .output_vertices = tcs_info.output_vertices});
+                             {.kind = Kind::TessEval,
+                              .output_vertices = tcs_info.output_vertices,
+                              .patch_first = tcs_info.patch_first,
+                              .patch_end = tcs_info.patch_end});
         ok = input.control && input.eval;
     }
     if (!ok) {

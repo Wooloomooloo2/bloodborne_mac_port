@@ -7,14 +7,19 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cxxabi.h>
+#include <dlfcn.h>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <fmt/format.h>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device_impl.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 
@@ -301,7 +306,105 @@ private:
     u64 cross_waits{}, self_waits{}, slot_cross{}, inversions{};
 };
 
+/// bbport: BB_ENCODER_STATS=1: Metal encoders opened per frame by kind and by why the one
+/// before ended (another kind, a reopen for more access or another lane, an ordering barrier or
+/// wait, a fill or clamp kernel, an explicit EndEncoding, the end of a render pass). Printed
+/// every 5 s. Render encoders opened in a pass that already had one are pass splits: each stores
+/// and reloads the attachments on Apple's tile-based GPUs.
+enum EndCause : u8 {
+    CauseFresh, CauseSwitchRender, CauseSwitchCompute, CauseSwitchBlit, CauseReopenAccess,
+    CauseReopenLane, CauseBarrier, CauseOrderWait, CauseFill, CauseClamp, CauseEndEncoding,
+    CausePassEnd, NumCauses
+};
+constexpr const char* kCauseNames[NumCauses] = {
+    "first", "after render", "after compute", "after blit", "reopen (access)", "reopen (lane)",
+    "ordering barrier", "ordering wait", "fill kernel", "clamp kernel", "EndEncoding",
+    "pass end"};
+enum OpenKind : u8 { OpenRender, OpenRenderSplit, OpenCompute, OpenBlit, NumOpenKinds };
+constexpr const char* kOpenNames[NumOpenKinds] = {"render (pass start)", "render (pass split)",
+                                                  "compute", "blit"};
+const bool encoder_stats = [] {
+    const char* env = std::getenv("BB_ENCODER_STATS");
+    return env && env[0] == '1';
+}();
+std::atomic<u64> encoder_opens[NumOpenKinds][NumCauses];
+/// Callers that open a compute encoder inside a render pass (it splits the pass): two return
+/// addresses up from Impl::Compute, named with dladdr when printed.
+std::mutex split_callers_mutex;
+std::unordered_map<u64, u64> split_callers;
+std::unordered_map<u64, std::pair<void*, void*>> split_caller_frames;
+void NoteSplitCaller(void* a, void* b) {
+    std::scoped_lock lock{split_callers_mutex};
+    const u64 key = (u64(uintptr_t(a)) << 1) ^ u64(uintptr_t(b));
+    ++split_callers[key];
+    split_caller_frames.try_emplace(key, a, b);
+}
+std::string SymbolName(void* pc) {
+    Dl_info info{};
+    if (!pc || !dladdr(pc, &info) || !info.dli_sname) {
+        return fmt::format("{}", pc);
+    }
+    int status = 0;
+    char* demangled = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+    std::string name = status == 0 && demangled ? demangled : info.dli_sname;
+    std::free(demangled);
+    if (name.size() > 90) {
+        name.resize(90);
+    }
+    return name;
+}
+std::atomic<u64> encoder_stats_frames{0};
+std::atomic<s64> encoder_stats_since{0};
+
+void PrintEncoderStats() {
+    const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
+    s64 since = encoder_stats_since.load(std::memory_order_relaxed);
+    if (since == 0) {
+        encoder_stats_since.compare_exchange_strong(since, now);
+        return;
+    }
+    if (now - since < 5'000'000'000 ||
+        !encoder_stats_since.compare_exchange_strong(since, now)) {
+        return;
+    }
+    const u64 frames = std::max<u64>(1, encoder_stats_frames.exchange(0));
+    u64 total = 0;
+    std::string line;
+    for (u32 k = 0; k < NumOpenKinds; ++k) {
+        for (u32 c = 0; c < NumCauses; ++c) {
+            const u64 n = encoder_opens[k][c].exchange(0);
+            total += n;
+            if (n * 10 >= frames) { // at least 0.1 per frame
+                line += fmt::format("\n  {:6.1f}  {} {}", double(n) / frames, kOpenNames[k],
+                                    kCauseNames[c]);
+            }
+        }
+    }
+    {
+        std::scoped_lock lock{split_callers_mutex};
+        std::vector<std::pair<u64, u64>> top(split_callers.begin(), split_callers.end());
+        std::ranges::sort(top, [](const auto& x, const auto& y) { return x.second > y.second; });
+        for (size_t i = 0; i < std::min<size_t>(top.size(), 6); ++i) {
+            const auto [a, b] = split_caller_frames[top[i].first];
+            line += fmt::format("\n  {:6.1f}  compute in a pass from {} < {}",
+                                double(top[i].second) / frames, SymbolName(a), SymbolName(b));
+        }
+        split_callers.clear();
+    }
+    std::printf("Encoders: %.1f per frame over %llu frames:%s\n", double(total) / frames,
+                static_cast<unsigned long long>(frames), line.c_str());
+    std::fflush(stdout);
+}
+
 } // namespace
+
+/// Frame boundary for BB_ENCODER_STATS (Presenter, at each guest flip).
+void EncoderStatsFrame() {
+    if (encoder_stats) {
+        encoder_stats_frames.fetch_add(1, std::memory_order_relaxed);
+        PrintEncoderStats();
+    }
+}
 
 struct Encoder::Impl {
     explicit Impl(Device& device_, Ordering ordering)
@@ -393,6 +496,23 @@ struct Encoder::Impl {
 
     // Render pass (Task 5).
     bool in_pass{}, pass_opened{}, pass_clears{};
+    EndCause last_end = CauseFresh; ///< why the last encoder ended (BB_ENCODER_STATS)
+    /// Ends every open encoder for `cause` (BB_ENCODER_STATS records it for the next open).
+    void EndAll(EndCause cause) {
+        if (render || compute || blit) {
+            last_end = cause;
+        }
+        FlushPendingClear();
+        EndRender();
+        EndCompute();
+        EndBlit();
+    }
+    void NoteOpen(OpenKind kind, EndCause cause) {
+        if (encoder_stats) {
+            encoder_opens[kind][cause].fetch_add(1, std::memory_order_relaxed);
+        }
+        last_end = CauseFresh;
+    }
     bool pass_resolves{}; ///< a colour attachment resolves at the end of the pass
     MTLRenderPassDescriptor* pass_first; ///< as begun, with its clears
     MTLRenderPassDescriptor* pass_load;  ///< the same with Load actions (reopening)
@@ -675,10 +795,14 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
     /// The open blit encoder, reopened when it was opened for less than `access` needs.
     id<MTLBlitCommandEncoder> Blit(Access access = Access::None) {
         const OrderTracker::Accesses need = Need(access);
+        EndCause cause = last_end;
         if (blit && !Covers(open_access, need)) {
             EndBlit();
+            cause = CauseReopenAccess;
         }
         if (!blit) {
+            cause = render ? CauseSwitchRender : compute ? CauseSwitchCompute : cause;
+            NoteOpen(OpenBlit, cause);
             FlushPendingClear();
             EndRender();
             EndCompute();
@@ -697,10 +821,17 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
     /// The open compute encoder, reopened when it was opened for less than `access` needs.
     id<MTLComputeCommandEncoder> Compute(Access access, Lane lane) {
         const OrderTracker::Accesses need = Need(access);
+        EndCause cause = last_end;
         if (compute && (!Covers(open_access, need) || (order && open_lane != lane))) {
+            cause = Covers(open_access, need) ? CauseReopenLane : CauseReopenAccess;
             EndCompute();
         }
         if (!compute) {
+            cause = render ? CauseSwitchRender : blit ? CauseSwitchBlit : cause;
+            NoteOpen(OpenCompute, cause);
+            if (encoder_stats && in_pass) {
+                NoteSplitCaller(__builtin_return_address(1), __builtin_return_address(2));
+            }
             FlushPendingClear();
             EndRender();
             EndBlit();
@@ -746,11 +877,15 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
     id<MTLRenderCommandEncoder> Render(bool draw = false) {
         const OrderTracker::Accesses need =
             draw ? Need(render_access, pass_vertex_rw ? Access::Read : Access::None) : Need(Access::None);
+        EndCause cause = last_end;
         if (render && !Covers(open_access, need)) {
             EndRender();
+            cause = CauseReopenAccess;
         }
         if (!render) {
             ASSERT_MSG(in_pass, "Draw outside a render pass");
+            cause = compute ? CauseSwitchCompute : blit ? CauseSwitchBlit : cause;
+            NoteOpen(pass_opened ? OpenRenderSplit : OpenRender, cause);
             EndCompute();
             EndBlit();
             @autoreleasepool {
@@ -960,10 +1095,7 @@ void Encoder::FillBuffer(BufferRef dst, u64 size, u32 pattern) {
         }
     }
     // A dedicated compute encoder, so the caller's compute state is untouched.
-    impl->FlushPendingClear();
-    impl->EndRender();
-    impl->EndCompute();
-    impl->EndBlit();
+    impl->EndAll(CauseFill);
     id<MTLComputePipelineState> pipeline = impl->FillPipeline();
     const u32 args[2] = {pattern, u32(size / 4)};
     @autoreleasepool {
@@ -1044,10 +1176,7 @@ void Encoder::WaitForDeviceTick(u64 device_tick) {
 void Encoder::EndEncoding() {
     // A pass whose encoder has not opened yet still owes its clears: run them first, so work
     // encoded outside the Encoder next (MetalFX) comes after them.
-    impl->FlushPendingClear();
-    impl->EndRender();
-    impl->EndCompute();
-    impl->EndBlit();
+    impl->EndAll(CauseEndEncoding);
 }
 
 void* Encoder::CommandBuffer() {
@@ -1100,9 +1229,7 @@ void Encoder::OrderBarrier(HazardClass c, BarrierScopes scopes) {
     // Commands after the barrier must not share an encoder with the ones before it (the pass
     // continues with Load, as after a blit).
     if (impl->open_access[u32(c)] != Access::None) {
-        impl->EndRender();
-        impl->EndCompute();
-        impl->EndBlit();
+        impl->EndAll(CauseBarrier);
     }
     impl->order->Barrier(c, scopes);
 }
@@ -1141,9 +1268,7 @@ void Encoder::OrderWait(const OrderRequest& request) {
         request, impl->device.KnownGpuTick(), impl->open_first, impl->open_last);
     if (plan.end_open) {
         // The next Metal encoder waits (a pass continues with Load, as after a blit).
-        impl->EndRender();
-        impl->EndCompute();
-        impl->EndBlit();
+        impl->EndAll(CauseOrderWait);
     } else if (plan.waits.num_waits) {
         // The open encoder waits before the command's work (a pass goes on).
         if (FenceCheck::Get().On()) {
@@ -1250,6 +1375,7 @@ void Encoder::Dispatch(Size3 groups, Size3 threads_per_group) {
 
 void Encoder::DispatchIndirect(BufferRef args, Size3 threads_per_group) {
     ASSERT_MSG(impl->compute_pipeline, "Dispatch without a compute pipeline");
+    args = LowOffset(args); // 32-bit indirect offsets (mtl_buffer.h)
     impl->ApplyCompute();
     [impl->compute dispatchThreadgroupsWithIndirectBuffer:(__bridge id<MTLBuffer>)args.buffer
                                      indirectBufferOffset:args.offset
@@ -1364,6 +1490,9 @@ void Encoder::EndRenderPass() {
     if (!impl->pass_opened && (impl->pass_clears || impl->pass_resolves)) {
         impl->Render(); // a pass that only clears or resolves still has to do it
     }
+    if (impl->render) {
+        impl->last_end = CausePassEnd;
+    }
     impl->EndRender();
     impl->in_pass = false;
     impl->pass_first = nil;
@@ -1459,6 +1588,7 @@ void Encoder::Draw(Primitive primitive, u32 vertex_count, u32 instance_count, u3
 void Encoder::DrawIndexed(Primitive primitive, u32 index_count, IndexType type, BufferRef indices,
                           u32 instance_count, s32 base_vertex, u32 first_instance) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    indices = LowOffset(indices); // 32-bit index offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawIndexedPrimitives:ToMtl(primitive)
                              indexCount:index_count
@@ -1474,6 +1604,7 @@ void Encoder::DrawIndexed(Primitive primitive, u32 index_count, IndexType type, 
 
 void Encoder::DrawIndirect(Primitive primitive, BufferRef args) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    args = LowOffset(args); // 32-bit indirect offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawPrimitives:ToMtl(primitive)
                   indirectBuffer:(__bridge id<MTLBuffer>)args.buffer
@@ -1484,6 +1615,8 @@ void Encoder::DrawIndirect(Primitive primitive, BufferRef args) {
 void Encoder::DrawIndexedIndirect(Primitive primitive, IndexType type, BufferRef indices,
                                   BufferRef args) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    indices = LowOffset(indices); // 32-bit index and indirect offsets (mtl_buffer.h)
+    args = LowOffset(args);
     impl->ApplyRender();
     [impl->render drawIndexedPrimitives:ToMtl(primitive)
                               indexType:type == IndexType::U32 ? MTLIndexTypeUInt32
@@ -1506,10 +1639,7 @@ void Encoder::DrawIndirectCount(Primitive primitive, BufferRef args, u32 stride,
     // The clamp copies the records to a scratch buffer (the source is guest data and stays
     // untouched) on its own compute encoder, so the caller's compute state is untouched. The
     // render encoder ends here; the pass reopens (Load) at the draws below, after the clamp.
-    impl->FlushPendingClear();
-    impl->EndRender();
-    impl->EndCompute();
-    impl->EndBlit();
+    impl->EndAll(CauseClamp);
     id<MTLComputePipelineState> pipeline = impl->ClampCountPipeline();
     const u32 params[2] = {stride / 4, max_count};
     id<MTLBuffer> scratch;
@@ -1542,6 +1672,7 @@ void Encoder::DrawIndirectCount(Primitive primitive, BufferRef args, u32 stride,
 void Encoder::DrawPatches(u32 control_points, u32 patch_start, u32 patch_count,
                           BufferRef patch_index_buffer, u32 instance_count, u32 base_instance) {
     ASSERT_MSG(impl->render_pipeline, "Draw without a render pipeline");
+    patch_index_buffer = LowOffset(patch_index_buffer); // 32-bit offsets (mtl_buffer.h)
     impl->ApplyRender();
     [impl->render drawPatches:control_points
                    patchStart:patch_start

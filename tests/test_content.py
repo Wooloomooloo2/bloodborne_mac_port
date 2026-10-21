@@ -24,7 +24,7 @@ class ProfileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError,'invalid user-defined'):
                     content_profile.prepare(p,p)
 
-@unittest.skipUnless(EXE.exists(),'run bash build.sh --test first')
+@unittest.skipUnless(EXE.exists(),'run bash build_macos.sh --test first')
 class ContentTests(unittest.TestCase):
     def run_case(self,*args):
         return subprocess.run([str(EXE.resolve()),*args],capture_output=True,text=True,timeout=5)

@@ -3,7 +3,7 @@
 # eboot.bin is x86-64 code executed directly. Dependencies come from deps/x86_64
 # (scripts/macos/bootstrap_deps.sh); nothing from the arm64 Homebrew may be linked.
 #
-#   bash build_macos.sh            # libbbgpu.dylib, bb-probe, bb-gpu-capabilities
+#   bash build_macos.sh            # libbbgpu.dylib, bb-probe, bbgpu-host (arm64 dependencies)
 #   bash build_macos.sh --test     # also build and run the runtime tests
 #   bash build_macos.sh --gpu-only # only the GPU library
 set -euo pipefail
@@ -11,7 +11,7 @@ cd -- "$(dirname -- "$0")"
 ROOT=$PWD
 PREFIX=$ROOT/deps/x86_64
 export MACOSX_DEPLOYMENT_TARGET=15.0
-if [[ ! -f $PREFIX/.built-MoltenVK ]]; then
+if [[ ! -f $PREFIX/.built-SDL ]]; then
     echo 'x86-64 dependencies missing: run bash scripts/macos/bootstrap_deps.sh' >&2; exit 1
 fi
 if [[ ! -f $PREFIX/.built-SPIRV-Cross ]]; then # the Metal renderer, in both libraries since M3
@@ -25,19 +25,14 @@ CC=${CC:-/usr/bin/clang}
 ARCH=(-arch x86_64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET)
 export PKG_CONFIG_LIBDIR=$PREFIX/lib/pkgconfig:$PREFIX/share/pkgconfig
 unset PKG_CONFIG_PATH
-read -r -a includes <<< "$(pkg-config --cflags vulkan sdl3)"
-read -r -a libraries <<< "$(pkg-config --libs vulkan sdl3)"
+read -r -a includes <<< "$(pkg-config --cflags sdl3)"
+read -r -a libraries <<< "$(pkg-config --libs sdl3)"
 
 # GPU library (shadPS4 video core + drivers): out/gpu/libbbgpu.dylib. PGO is GCC-specific
 # (.gcda profiles) and stays off on macOS; BB_LTO=OFF disables link-time optimization.
 if [[ ! -f gpu/third_party/fsr-vulkan/CMakeLists.txt || ! -f gpu/third_party/imgui/imgui.h ]]; then
     git submodule update --init --recursive
 fi
-for patch in gpu/patches/fsr-vulkan/*.patch; do
-    if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
-        git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
-    fi
-done
 # Boost is header-only: the arm64 Homebrew headers are fine (nothing is linked from there).
 boost=$(brew --prefix boost 2>/dev/null || echo /opt/homebrew/opt/boost)
 # Online module (gpu/bbnet; BB_NET=OFF skips it): its libraries come from deps/x86_64 too, and
@@ -48,7 +43,7 @@ cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DCMAKE_OSX_ARCHITECTURES=x86_64 -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
     -DCMAKE_PREFIX_PATH="$PREFIX;$boost" -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew \
     -DBoost_INCLUDE_DIR="$boost/include" \
-    -DBB_PGO=off -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" -DBB_METAL_NATIVE_STAGE=6 \
+    -DBB_PGO=off -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" \
     -DBB_NET="${BB_NET:-ON}" ${protoc:+-DBB_PROTOC="$protoc"} -Wno-dev >/dev/null
 echo "GPU library: LTO ${BB_LTO:-ON}"
 # A failed GPU build must stop here: an older libbbgpu.dylib would otherwise be used silently.
@@ -84,9 +79,9 @@ if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/l
     ar rcs out/libatrac9.a out/atrac9/*.o
 fi
 cflags=(-std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${ARCH[@]}")
-"$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/gpu_process.c src/vulkan_smoke.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -framework CoreFoundation -o out/bb-probe
+"$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/gpu_process.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -framework CoreFoundation -o out/bb-probe
 echo "Built $PWD/out/bb-probe"
-# Native arm64 GPU process (docs/DESIGN_NATIVE_GPU_PROCESS.md; BB_GPU_PROCESS=1): the GPU
+# Native arm64 GPU process (docs/DESIGN_NATIVE_GPU_PROCESS.md): the GPU
 # library built arm64 (scripts/macos/build_gpu_arm64.sh, needs deps/arm64 from
 # BB_DEPS_ARCH=arm64 scripts/macos/bootstrap_deps.sh) linked into out/bbgpu-host.
 ARM64_PREFIX=$ROOT/deps/arm64
@@ -106,9 +101,6 @@ if [[ -f $ARM64_PREFIX/lib/pkgconfig/sdl3.pc ]]; then
 else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
 fi
-# GPU check for run.sh (live_resolution=auto): links only the Vulkan loader.
-"$CC" -std=c11 -O2 -Wall -Wextra -Werror "${ARCH[@]}" "${includes[@]}" tools/gpu_capabilities.c "${libraries[@]}" \
-    -Wl,-rpath,"$PREFIX/lib" -o out/bb-gpu-capabilities
 if [[ ${1:-} == --test ]]; then
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
     out/pad-test
@@ -151,20 +143,13 @@ if [[ ${1:-} == --test ]]; then
             -Wl,-rpath,"$ROOT/${walker#*:}" -o "out/srt-walker-test-${walker%%:*}"
         "out/srt-walker-test-${walker%%:*}"
     done
-    # Metal back end M0: our Metal encoders between MoltenVK command buffers (arm64, no window).
-    if [[ -f $ARM64_PREFIX/lib/libMoltenVK.dylib ]]; then
-        /usr/bin/clang++ -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c++20 -fobjc-arc -O2 -g \
-            -Wall -Wextra -Werror -Wno-missing-field-initializers -I"$ARM64_PREFIX/include" tests/test_metal_interop.mm -L"$ARM64_PREFIX/lib" \
-            -lMoltenVK -Wl,-rpath,"$ARM64_PREFIX/lib" -framework Metal -framework Foundation -o out/metal-interop-test
-        out/metal-interop-test
-        MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS=2 out/metal-interop-test
-    fi
     # Metal-native M1: Metal::Object, Device ticks and limits, Metal::Encoder (arm64, no window);
     # again under Metal's validation layer.
     if [[ -f out/gpu-arm64/libbbmetal_core.a ]]; then
         /usr/bin/clang++ -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c++20 -fobjc-arc -O2 -g \
             -Wall -Wextra -Werror -Igpu/shim -Igpu/shadps4 -I"$ARM64_PREFIX/include" tests/test_mtl_encoder.mm gpu/shim/common/logging/log.cpp gpu/shim/common/assert.cpp out/gpu-arm64/libbbmetal_core.a -L"$ARM64_PREFIX/lib" -lfmt \
             -framework Metal -framework Foundation -o out/mtl-encoder-test
+        glslang -V --quiet tests/data/spec_const.comp -o out/spec_const.spv  # the Specialize test's module
         out/mtl-encoder-test
         MTL_DEBUG_LAYER=1 out/mtl-encoder-test
         # Metal-native M3: the rasterizer's draw helper (core part), plain and under validation.

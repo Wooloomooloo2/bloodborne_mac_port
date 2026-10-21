@@ -24,6 +24,20 @@ check $'fps_cap=45\n' "- -"                     # not a cap the launcher offers:
 check $'upscaler=off\n' "- -"                   # no keys: today's behaviour
 check $'fps_cap=40\nfullscreen=1\n' "90 1" BB_FPS_LIMIT=90
 check $'fullscreen=1\n' "- 0" BB_FULLSCREEN=0
+compression() { # ini text, expected BB_LAZY_TEXTURE_USAGE (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_LAZY_TEXTURE_USAGE "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s" "${BB_LAZY_TEXTURE_USAGE:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: texture_compression for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+compression $'texture_compression=0\n' "0"
+compression $'texture_compression=1\n' "-"
+compression $'upscaler=off\n' "-"                     # default: compressed
+compression $'texture_compression=0\n' "1" BB_LAZY_TEXTURE_USAGE=1
 rm -f "$ini"
 /bin/bash -c 'source scripts/launch_settings.sh; bb_launch_settings /nonexistent/bbport.ini' ||
     { echo "FAIL: launch settings with a missing file"; exit 1; }
@@ -105,4 +119,4 @@ check_secret $'shadnet_npid=hunter\nshadnet_password=inline\n' "inline -"       
 check_secret $'shadnet_npid=nobody\nshadnet_password=keychain\n' "- -"          # nothing stored: unset, not "keychain"
 check_secret $'thd_online_id=dreamer\nthd_token=keychain\n' "- tok-from-keychain"
 check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\n' "env -" BB_SHADNET_PASSWORD=env
-echo "PASS: launch settings (fps_cap, fullscreen, online, p2p_port, online_pool, keychain secrets)"
+echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, online, p2p_port, online_pool, keychain secrets)"

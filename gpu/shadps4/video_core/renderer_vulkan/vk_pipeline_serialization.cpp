@@ -12,10 +12,19 @@
 #include "video_core/renderer_metal/mtl_pso_cache.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
+namespace Shader::Backend::SPIRV {
+int PreciseMode();
+}
+
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // bbport: Metal shader profile (native Metal)
-static constexpr u32 ShaderMetaVersion = 9u; // bbport: no NoContraction in FS/CS
+static constexpr u32 ShaderMetaVersionBase = 9u; // bbport: no NoContraction in FS/CS
+// bbport: cached SPIR-V depends on BB_SPIRV_PRECISE, which the keys do not record (mode 0,
+// "vertex", keeps version 9; the invariant default since 0.5.4 rebuilds an older cache once).
+static u32 ShaderMetaVersion() {
+    return ShaderMetaVersionBase | (u32(Shader::Backend::SPIRV::PreciseMode()) << 8);
+}
 // bbport: 7 Metal vertex attributes; 8 depth/stencil formats only while the pass binds the
 // depth buffer (Metal-native M5; a game's stored cache is rebuilt once).
 static constexpr u32 PipelineKeyVersion = 8u;
@@ -75,7 +84,7 @@ void RegisterShaderMeta(const Shader::Info& info,
     Serialization::Archive ar;
     Serialization::Writer meta{ar};
 
-    meta.Write(Serialization::ShaderMetaVersion);
+    meta.Write(Serialization::ShaderMetaVersion());
     meta.Write(Serialization::ShaderBinaryVersion);
 
     meta.Write(perm_hash);
@@ -100,12 +109,14 @@ void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx)
 
 bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
                     std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
-                    Shader::StageSpecialization& spec, size_t& perm_idx, bool legacy) {
+                    Shader::StageSpecialization& spec, size_t& perm_idx, bool legacy,
+                    bool& old_meta) {
     Serialization::Reader meta{ar};
 
     u32 meta_version{};
     meta.Read(meta_version);
-    if (meta_version != Serialization::ShaderMetaVersion) {
+    if (meta_version != Serialization::ShaderMetaVersion()) {
+        old_meta = true;
         return false;
     }
 
@@ -318,7 +329,8 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage,
     Shader::StageSpecialization spec{};
     spec.info = &program->info;
     size_t perm_idx{};
-    if (!LoadShaderMeta(ar, program->info, sel.fetch_shader, spec, perm_idx, loading_legacy)) {
+    if (!LoadShaderMeta(ar, program->info, sel.fetch_shader, spec, perm_idx, loading_legacy,
+                        load_old_meta)) {
         return false;
     }
     // bbport: a permutation's SPIR-V numbers its resources from the bindings of the stages before
@@ -449,6 +461,7 @@ void PipelineCache::WarmUp() {
             pldata.Read(is_compute);
 
             bool result{};
+            load_old_meta = false;
             if (is_compute) {
                 result = LoadComputePipeline(ar);
             } else {
@@ -457,6 +470,10 @@ void PipelineCache::WarmUp() {
 
             if (result) {
                 ++num_pipelines;
+            } else if (load_old_meta) {
+                // A shader from another BB_SPIRV_PRECISE mode or build: it could never preload
+                // again, so the cache migrates like one with old pipeline keys.
+                ++num_old_format;
             }
         });
 
@@ -522,9 +539,12 @@ PipelineCache::StoredReport PipelineCache::LoadStored() {
                 return;
             }
             load_conflict = false;
+            load_old_meta = false;
             if (is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar)) {
                 ++report.loaded;
                 report.legacy += loading_legacy ? 1 : 0;
+            } else if (load_old_meta) {
+                ++report.old_format;
             } else {
                 ++report.not_loaded;
                 report.conflicts += load_conflict ? 1 : 0;

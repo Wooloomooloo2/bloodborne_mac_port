@@ -61,7 +61,7 @@ class RestartResolutionTests(unittest.TestCase):
                 env['BB_RENDER_RES'] = '800x450'
             if live:
                 env['BB_LIVE_RES'] = '1'
-            if bare_path:  # the AppImage's PATH: coreutils and bash, no sed/grep
+            if bare_path:  # a bare PATH: coreutils and bash, no sed/grep
                 tools = data / 'bin'
                 tools.mkdir()
                 for name in ('bash', 'dirname', 'mkdir', 'realpath'):
@@ -89,17 +89,18 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertIsNone(self.run_restarts(ini_extra='live_resolution=1\n')[0]['BB_RENDER_RES'])
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1)[0]['BB_RENDER_RES'],
                          '854x480')
-        # Unset: off (the startup patch), whatever the GPU; auto asks the GPU check.
+        # Unset and auto: off (the startup patch), whatever the GPU.
         self.assertEqual(self.run_restarts(caps=1)[0]['BB_RENDER_RES'], '854x480')
-        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1)[0]['BB_RENDER_RES'])
+        self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1)[0]['BB_RENDER_RES'],
+                         '854x480')
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=auto\n', caps=0)[0]['BB_RENDER_RES'],
                          '854x480')
 
     def test_live_resolution_without_sed_or_grep(self):
-        # A missing sed ended run.sh (exit 127) before the game in the AppImage on NixOS.
+        # A missing sed once ended run.sh (exit 127) before the game.
         self.assertEqual(self.run_restarts(ini_extra='live_resolution=0\n', caps=1,
                                            bare_path=True)[0]['BB_RENDER_RES'], '854x480')
-        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=auto\n', caps=1,
+        self.assertIsNone(self.run_restarts(ini_extra='live_resolution=1\n', caps=1,
                                             bare_path=True)[0]['BB_RENDER_RES'])
 
     def test_explicit_render_override_survives_restart(self):

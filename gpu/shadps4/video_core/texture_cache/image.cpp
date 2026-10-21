@@ -3,11 +3,16 @@
 
 #include "bbport_toggles.h"
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "video_core/renderer_metal/mtl_texture.h"
 #include "video_core/renderer_metal/vk_to_mtl.h"
+#include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_bind_helper.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/texture_cache/image.h"
 
@@ -16,6 +21,18 @@ namespace VideoCore {
 using namespace Vulkan;
 
 Common::IncrementalIdProvider<u64> Image::global_image_uid{};
+
+bool LazyTextureUsage() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_LAZY_TEXTURE_USAGE");
+        const bool lazy = !(env && env[0] == '0');
+        // bbport: in the log for reports (launcher: Advanced → Texture compression).
+        std::printf("Textures: lossless compression %s\n",
+                    lazy ? "on" : "off (BB_LAZY_TEXTURE_USAGE=0)");
+        return lazy;
+    }();
+    return on;
+}
 
 namespace {
 
@@ -103,6 +120,13 @@ Image::Image(Metal::Device& device_, Vulkan::Runtime& runtime_,
     texture_desc.render_target = !info.props.is_block;
     texture_desc.shader_write = !info.props.is_block && !info.props.is_depth;
     texture_desc.format_views = !info.props.is_block;
+    // bbport: both usages only when a binding needs them (allowed_shader_write).
+    allowed_shader_write = texture_desc.shader_write;
+    allowed_format_views = texture_desc.format_views;
+    if (LazyTextureUsage()) {
+        texture_desc.shader_write = false;
+        texture_desc.format_views = false;
+    }
 
     backing = &CreateBacking(info.num_samples);
 }
@@ -118,6 +142,8 @@ Image::BackingImage& Image::CreateBacking(u32 num_samples) {
     desc.shader_write = texture_desc.shader_write && samples == 1;
     if (samples > 1) {
         desc.levels = 1;
+        // No usage upgrades of multisample backings (no copies between them): both from the start.
+        desc.format_views = allowed_format_views;
     }
 
     auto& new_backing = backing_images.emplace_back();
@@ -134,6 +160,54 @@ Image::BackingImage& Image::CreateBacking(u32 num_samples) {
     return new_backing;
 }
 
+u32 Image::CurrentUsage() const {
+    return (backing && backing->desc.shader_write ? UsageShaderWrite : 0) |
+           (backing && backing->desc.format_views ? UsageFormatViews : 0);
+}
+
+void Image::ApplyNewUsage(u32 needed) {
+    needed &= (allowed_shader_write ? UsageShaderWrite : 0) |
+              (allowed_format_views ? UsageFormatViews : 0);
+    needed &= ~CurrentUsage();
+    if (!needed || !backing || !backing->image_view_ids.empty() || backing_images.size() != 1) {
+        return;
+    }
+    // Both usages (as Runtime::UpgradeUsage): no replacement of the texture later.
+    texture_desc.shader_write = allowed_shader_write;
+    texture_desc.format_views = allowed_format_views;
+    const u32 samples = backing->num_samples;
+    backing_images.clear();
+    backing = &CreateBacking(samples);
+}
+
+u32 Image::NeededUsage(const ImageViewInfo& view_info) const {
+    const Metal::TextureDesc& desc = backing->desc;
+    u32 needed = 0;
+    if (view_info.is_storage && allowed_shader_write && !desc.shader_write && desc.samples <= 1) {
+        needed |= UsageShaderWrite;
+    }
+    if (!allowed_format_views || desc.format_views) {
+        return needed;
+    }
+    // The view ImageView makes (depth and stencil views first). sRGB twins, swizzles and level
+    // or layer ranges need no PixelFormatView usage (checked with the Metal API validation);
+    // other pixel formats and stencil views of depth textures do.
+    if (has_depth && Vulkan::LiverpoolToVK::IsFormatDepthCompatible(view_info.format)) {
+        return needed;
+    }
+    if (has_stencil && Vulkan::LiverpoolToVK::IsFormatStencilCompatible(view_info.format)) {
+        const u32 stencil = Metal::StencilViewPixelFormat(desc.pixel_format);
+        return needed | (stencil != 0 && stencil != desc.pixel_format ? UsageFormatViews : 0);
+    }
+    const u32 requested = Metal::VkToMtl::PixelFormat(view_info.format);
+    if (requested != 0 && requested != desc.pixel_format &&
+        Metal::SafeViewPixelFormat(desc.pixel_format, requested, false) != requested &&
+        Metal::SafeViewPixelFormat(desc.pixel_format, requested, true) == requested) {
+        needed |= UsageFormatViews;
+    }
+    return needed;
+}
+
 ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_samples) {
     if (ensure_guest_samples && backing->num_samples > 1 != info.num_samples > 1) {
         runtime->SetBackingSamples(this, info.num_samples);
@@ -147,6 +221,18 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
         backing->last_view = static_cast<u32>(std::distance(view_infos.begin(), it));
         const auto view_id = backing->image_view_ids[backing->last_view];
         return (*slot_image_views)[view_id];
+    }
+    if (const u32 needed = NeededUsage(view_info)) {
+        if (Vulkan::BindHelper::OnHelper()) {
+            // Rasterizer::TexturesBindableOnHelper keeps such bindings on the GPU thread.
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true)) {
+                LOG_ERROR(Render_Vulkan, "texture usage upgrade needed on the binding helper");
+            }
+        } else {
+            runtime->UpgradeUsage(this, needed);
+            return FindView(view_info, false);
+        }
     }
     const auto view_id = slot_image_views->insert(view_info, *this);
     backing->image_view_infos.emplace_back(view_info);

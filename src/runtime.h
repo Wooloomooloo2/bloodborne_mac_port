@@ -108,6 +108,10 @@ void runtime_context_lock_stats(void);
 /* runtime_thread.c (macOS): CPU time of the game's main thread (0) or the calling thread (1). */
 uint64_t runtime_thread_cpu_ns(int which);
 void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char busiest_name[32]);
+/* BB_SAMPLE_MS sampler of the main thread (runtime_sampler.c): the guest image at load, the
+ * main thread's CPU time at each flip. */
+void runtime_sampler_init(const void *image, uint64_t size);
+void runtime_sampler_flip(uint64_t main_cpu_ns);
 void *runtime_low_malloc(size_t size);
 void *runtime_low_calloc(size_t nmemb, size_t size);
 void *runtime_low_alloc_aligned(size_t size, size_t align);

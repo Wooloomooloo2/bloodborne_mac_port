@@ -21,6 +21,19 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Signals into guest threads break the game (2026-10-21).** SIGPROF sent to the main thread
+  every 1 ms (a sampler's first version) made texture streaming fail every time within minutes
+  (`CSGXTextureCreateFragment.cpp(137)` panic, then the game's deliberate null write), even with
+  a handler that made no system call. The watchdog's stack dump (`probe.c` `dump_frames`,
+  SIGUSR2 to every thread) is the same kind of interruption, which fits CLAUDE.md's "the
+  BB_TIMEOUT stack dump derails a worker". Cause not found (an interrupted wait or syscall the
+  runtime passes on as an error is the suspect). *Fix:* dump stacks by suspending threads and
+  reading their state (as `runtime_sampler.c` now does), not with signals.
+- **`mtl-encoder-test` fails on an M2 (#30, 2026-10-20).** Its timestamp check "the render
+  encoder's fragment end is sampled, after the blit" assumes the M4's sampling points; on an M2
+  Max it fails and stops `build_macos.sh --test`. Make the check depend on the counter sampling
+  points the device reports, or skip it where they differ.
+
 - **Metal-native: world geometry missing after long play (Hemwick graveyard, user's 0.4.5 test,
   2026-10-17).** After a long session a large rock wall and the terrain behind it drew as a flat
   fog-coloured hole; quit to menu and load restored them. Suspects: a missed CPU write to guest
@@ -268,9 +281,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   *Refinement:* emit bounds checks in the SPIR-V backend (`shader_recompiler/backend/spirv`) for
   buffer loads/stores/atomics on macOS — targeted first (vertex fetch, storage buffers) where
   glitches trace back to OOB reads, everywhere if a native Metal backend is built.
-- **Buffer-cache arena window.** *Now:* one fully backed 16 GiB arena at 0x7000000000
-  (`BufferCache::MacArenaBase/MacArenaPages`); a GPU buffer outside it stops with "outside the
-  macOS guest arena". *Refinement:* per-page arenas with copy-based migration (rewriting the
+- **Buffer-cache arena window.** *Now:* one lazily committed arena at 0x7000000000 sized to
+  direct memory plus 1 GiB (6 GiB retail, 10 GiB with `BB_DMEM_MB=9152`; the game's highest
+  mapping ends at 4.80 GiB in every log so far); a GPU buffer outside it stops with "outside the
+  macOS guest arena". 16 GB Macs (issue #19) still keep the whole 6 GiB in Metal's working set:
+  if they stay slow, a smaller arena needs these. *Refinement:* per-page arenas with copy-based migration (rewriting the
   BDA page table), or zero-copy import (Performance) which removes arenas altogether.
 - **Host pointers above 1 TiB reach the guest.** `__error` returns the host thread's errno
   address (0x7fc6…), above the game's 40-bit pointer range. Harmless if used immediately; if
@@ -337,7 +352,17 @@ Each item: what was done for now, what the refinement is, and where it lives.
   bad data). Then a long-walk repro from a save (Hemwick lamp), and Option B.
 - **Black loading screen that never finishes (#18, 2026-10-18).** About 1 launch in 10 on an M3
   Pro stops at a black screen with the loading icon; a relaunch works. No log of a stuck run
-  yet (asked for one).
+  yet (asked for one). *Candidate fixed 2026-10-19:* `sceGnmDingDong` waited for the previous
+  submission to retire before queueing its compute work, so a graphics WAIT_REG_MEM on a label
+  that work writes could never finish (the order DiAvisoo/bbport-mac-optimized changed). The game
+  submits compute only at start and while loading (~55 calls a session, measured), none of them
+  over a pending SubmitDone in our runs: a timing race, likelier on slower Macs. Now queued
+  first, then waited. Confirm with Didjus's reports.
+  **Cause found 2026-10-19 (PR #20, cherry-picked as 2cb8681):** Didjus's stuck-run log shows the
+  render thread's draw-list task (`0x219d220`, run by GXRenderThread's loop after the frame job)
+  writing the immediate context while the main thread was in `0xebb960` under the lock, then
+  "bad packet ... at word 777". That task is now hooked under the same lock (the "third direct
+  user" of 2026-10-17). Author's tests: 2 of 2 hangs before, 0 of 5 after. Confirm on #18.
 - **Metal: a tessellation pipeline refused, its draws skipped (2026-10-18, user, 0.5.1).** Every
   session: `GetTessellationPipeline: … the evaluation shader reads 160 bytes of patch constants,
   the control shader writes 224` (vs 0x2fb9d0c43ee, fs 0xdbb1593690c; pipeline fs dbb222eb hs
@@ -347,6 +372,21 @@ Each item: what was done for now, what the refinement is, and where it lives.
   same offsets, accept a prefix and index with the TCS stride (`patch_stride` is already the
   TCS's). MoltenVK drew it (0.4.x). Which geometry it is: not known yet (a candidate for some
   missing floors, but not the progressive disappearance above).
+  **Fixed 2026-10-19:** not a prefix but a suffix. The TCS writes patch locations 8-21 (14
+  float4s); the TES reads 12-21, so SPIRV-Cross dropped 8-11 and its struct started with
+  location 12 at offset 0. The TES variant now carries the TCS's patch range
+  (`CompileVariant::patch_first/patch_end`, cache tag `_te<N>p<first>_<end>`) and declares every
+  location with `add_msl_shader_input` (per patch, vec4): SPIRV-Cross adds placeholders
+  (`raw_buffer_tese_input`), so both structs are 224 bytes with the same offsets. `--msl-check`
+  on a copy of the user's cache: 649 of 649 pipelines, all 30 tessellation ones. Still to see in
+  game: what it draws (the error line should be gone).
+- **Flaky unit test: `untracked command buffers count too` (test_mtl_encoder.mm, 2026-10-20).**
+  It compares the GPU busy time of two 64 MiB fills; failed once in a full `--test` run while the
+  machine was otherwise idle, then passed 5 of 5 alone and in the next full run. A timing bound,
+  not a renderer bug; widen the margin or repeat the measurement before failing.
+- **Full-screen pacing in the unfocused test harness (2026-10-20).** 30-40 spikes per run (25 ms
+  frames) full screen vs 0 windowed, master and the cleanup branch alike (FINDINGS). Check with
+  the app focused before treating it as a real problem.
 - **GPU host crash in `Scheduler::KickRecording` (2026-10-14, user session).** SIGSEGV at
   address 0x20008 (a null `record_chunk`: its size field follows the 128 KiB buffer) on the draw
   recording thread, `RunWriteData` → `WaitHostCopies` → `KickRecording`, right after an area
@@ -370,7 +410,7 @@ Each item: what was done for now, what the refinement is, and where it lives.
   alias. *Refinement:* toggle protection (RW→RX) on executable aliases after host writes, if
   the game ever runs code from direct/flexible memory.
 
-- **GPU process split (default since 2026-10-12; `BB_GPU_PROCESS=0` = single process).** *Now:*
+- **GPU process split (default since 2026-10-12, the only mode since 2026-10-19).** *Now:*
   (a) every GPU page protection is a synchronous round trip to bb-probe and every fault on a
   protected page is relayed to the host (~950 faults/s in the city, no FPS loss measured) —
   *proper:* batch protections asynchronously with ordering guarantees; (b) input: the host
@@ -400,6 +440,51 @@ Each item: what was done for now, what the refinement is, and where it lives.
   The same fix for 0.4.x is on branch `fix/low-alloc-free-list` (not merged). FINDINGS 2026-10-18.
 
 ## 2. Performance
+
+- **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
+  pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
+  tessellated draws encodes its vertex and control kernels in a compute encoder, so the pass
+  ends and reopens with Load (a store and reload of every attachment). Tessellated draws are
+  15-25% of the city's GPU frame (skipped: 6.6-7.5 -> 5.6 ms/frame, 83 fewer encoders;
+  FINDINGS 2026-10-21); the splits are part of that. *Fix:* encode a pass's tessellation
+  kernels before its render encoder opens. Needs the pass's commands ahead (stage B would hold a
+  render pass until its end, or stage A records tessellated draws' kernel work in a pre-pass
+  list) and a conflict check: a copy-shader copy or storage write earlier in the same pass to a
+  range a kernel reads (vertex streams, constants) keeps that run in place, as deferred copies
+  do for their ranges. Check with screenshots of the cobblestones and other tessellated
+  geometry, `BB_ENCODER_STATS` and GPU time; fewer encoders also means fewer ordering waits
+  (~1700 a frame).
+
+- **x86-64 GPU library: trim to the remote shim (M7 leftover, 2026-10-19).** The game process
+  loads an x86-64 libbbgpu that only runs in remote mode, yet it compiles the whole Metal
+  renderer, FSR 3.1 (FidelityFX host code), MetalFX, ImGui and SPIRV-Cross (so bootstrap still
+  builds SPIRV-Cross for x86-64). *Done in 0.5.3:* an exported-symbols list
+  (`gpu/shim/bbgpu_game.exports`) plus dead stripping: 15.5 → 13.4 MB. The rest stays reachable
+  through the single-process branches of gnmdriver.cpp, driver.cpp and video_out.cpp
+  (`if (BbSplit::Remote()) ... else <renderer>`). *Measured:* with `Remote()` a compile-time
+  `true` in that build the library is 5.0 MB (scratch experiment, not committed). *Why not
+  yet:* that changes behaviour before `bbgpu_init_remote` (the mode is still Single then):
+  `bbgpu_handle_fault` would relay faults to a host that has not started its renderer, and
+  `bbgpu_split_keyboard`/`InvalidateMemory` would dereference a null shared block before
+  `bbgpu_split_attach`. *Refinement:* make the game side's mode explicit from the start (or
+  guard those entry points), delete the single-process branches, then leave the renderer,
+  ffx_metal, MetalFX, the overlay and SPIRV-Cross out of the x86-64 build (and bootstrap).
+  Needs game runs: boot, movies (AvPlayer), save load, restart, text entry, fault relays.
+- **SDL is still built with its Vulkan support (2026-10-19).** The window is a Metal window now,
+  so SDL never loads a Vulkan library, but libSDL3 still contains the loader code and names
+  `libvulkan`/`libMoltenVK` as candidates. `-DSDL_VULKAN=OFF` in `bootstrap_deps.sh` would drop
+  it; untested (needs a fresh bootstrap of both architectures and a game run).
+
+- **Ideas from DiAvisoo/bbport-mac-optimized (bmy's engine on KosmicKrisp, 2026-10-19).**
+  (a) Skipping attachmentless draws without shader writes or queries (`BB_SKIP_EMPTY_DRAWS`, off
+  there): Metal starts a maximum-size render pass for each. Our Cathedral Ward capture has no
+  such pass, so check one more scene before doing anything. (b) A per-thread cache of mapping
+  extents for the draw-preparation workers' region lookups (theirs was a mutex; ours,
+  `host/host_runtime.c`, is a read/write lock: measure contention first). (c) Parking spin-waits
+  on `std::atomic::wait` after the pause loop instead of yielding (`BB_PIPE_PARK_WAITS`): energy
+  on battery. (d) Their sparse arena (KosmicKrisp has sparse binding) only commits bound
+  blocks; the Metal equivalent is placement heaps, an alternative to zero-copy (M7) for 16 GB
+  Macs.
 
 - **Frame drops while traversing (user's 0.4.5 test, 2026-10-17).** Otherwise very smooth (the user:
   better pacing than the original and the PC version on a 4060). Shader/pipeline compiles or asset
@@ -470,6 +555,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   work per write, possibly contending with live compiles, and longer than the 5 s exit-flush
   bound (`bbgpu_flush_caches` then gives up, logged; the old file stays). The "wrote N pipelines"
   line now logs the duration: check it on a 16 GB / 8-core Mac in M5; grow the interval with N.
+  **Spaced 2026-10-21:** writes wait at least 20 times the last one's duration (~5% of one
+  core; `kWriteSpacing`). *Still:* an incremental archive (a second file for this session's
+  new pipelines, both given to `binaryArchives`) would make each write proportional to the new
+  pipelines only.
   Seen 2026-10-18 on the M4 Max: quitting after character creation logged "the pipeline archive
   write did not finish within 5000 ms; exiting without it" (pipelines from that session recompile
   next launch). Later the same evening (M4 Max, 0.5.1, on battery): **12–14 s per write at
@@ -586,7 +675,39 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **PGO on macOS:** profile-guided optimization is off (the profiles are GCC `.gcda`).
   *Refinement:* clang `-fprofile-generate`/`-fprofile-use` with `.profdata`.
 
+### Measured on an M3 Pro, not done (2026-10-20)
+
+- **Tessellated light volumes split the deferred lighting pass.** 73 of ~87 tessellated draws per
+  frame at the clinic are light volumes in the lighting pass (2× R11G11B10 + D32S8, 477 draws), in
+  43 runs. Each run's vertex/control kernels end the render encoder and reopen it: 82 reopens per
+  frame. An empty split costs ~0.05 ms there (48 extra splits: +2.3 ms GPU), so the splits are
+  ~4 ms of a 22 ms frame. Skipping the tessellated draws (wrong image) gave +22.5% at the clinic,
+  +7% in Hunter's Dream. Fix idea: encode a pass's tessellation kernels before its render encoder
+  (buffer the pass's draws as `Runs` does for patch draws).
+- **Area loads stall the renderer.** Entering new parts of Central Yharnam creates 400–700
+  textures in one frame (130–230 MB) and waits on the host copy threads: 100–300 ms frames.
+  Spread the creation and uploads over frames, or use worker threads.
+- **Write faults cost the game ~19% of its time in the city.** That is 1,300–2,500 faults/s at
+  ~150 µs each: four thread wake-ups across the processes per fault, while the renderer's own
+  handling takes ~40 µs. Read-backs of GPU data wait ~10 ms each for the GPU thread. A game-side fast
+  path (unprotect locally, apply the invalidation later) was tried and dropped: its 256 KB window
+  also covered GPU-written images, whose texture invalidation re-uploaded stale guest memory over
+  them. A correct one must leave texture-watched pages to the renderer.
+
 ## 3. Mac GUI
+
+- **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
+  text box opens in full screen, takes typing and Escape cancels, but the letters are not
+  masked. Masking depends on the game setting `OrbisImeOption` PASSWORD (bit 4,
+  `src/runtime_services.c` `ime_init`); either Bloodborne does not set it for this field or it
+  arrives elsewhere. Log `param->option` once to tell which; mask the password field by its
+  prompt if the game never asks.
+
+- **Ultrawide and quicksave (seen in DiAvisoo/bbport-mac-optimized, 2026-10-19).** 21:9 and 32:9
+  output resolutions with an optional Nexus Mods UI pack (the launcher backs up and restores the
+  game's menu files), and quicksave/quickload (F2/F3: snapshot the save folder; quickload
+  restores it and restarts the game). Ultrawide fits the launcher's Advanced tab (#15). GPL-2.0:
+  code can be borrowed with credit.
 
 - **Hide the mouse cursor over the game (request via the user, 2026-10-18).** Nothing hides it
   today. `gpu/shim/window.cpp` (host owns the window): `SDL_HideCursor` while the game window has

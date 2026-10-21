@@ -21,6 +21,10 @@ using SrtWalkerCode = const u32*;
 SrtWalkerCode RegisterWalkerCode(const u8* ptr, size_t size);
 /// Runs a walker: user_data -> flat_dst (whose first NumUserDataRegs words hold the user data).
 void RunSrtWalker(SrtWalkerCode code, const u32* user_data, u32* flat_dst);
+/// bbport: diagnostics (the frame capture's event trace): called with each guest address a
+/// walker reads, when set.
+using SrtReadHook = void (*)(u64 address, u32 size);
+extern SrtReadHook srt_read_hook;
 
 struct PersistentSrtInfo {
     // Special case when fetch shader uses step rates.

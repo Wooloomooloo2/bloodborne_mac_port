@@ -117,7 +117,6 @@ static void print_exit_summary(void) {
         fclose(f);
     }
 }
-int vulkan_smoke(void);
 
 
 static void fail(const char *message) {
@@ -125,6 +124,54 @@ static void fail(const char *message) {
     fflush(stderr);
     exit(1);
 }
+#ifdef __APPLE__
+/* Ends the game with a "Crash:" line (the launcher's crash report leads with it), taking the GPU
+ * process down first so its window closes. */
+static void crash_exit(const char *why, int status) {
+    printf("Crash: %s\n", why);
+    fflush(stdout);
+    gpu_process_stop();
+    _exit(status);
+}
+/* Hang watchdog: the game flips a frame many times a second, loading screens included. No new
+ * flip for BB_HANG_SECONDS (default 30, 0 = off) after the first one means the game is stuck,
+ * for example waiting for GPU work that never arrives (#18). A late wake-up (system sleep,
+ * the process stopped) restarts the count. */
+static void *hang_watchdog(void *arg) {
+    const unsigned limit = (unsigned)(uintptr_t)arg;
+    uint64_t last = 0;
+    struct timespec since, before;
+    clock_gettime(CLOCK_MONOTONIC, &since);
+    before = since;
+    for (;;) {
+        sleep(1);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        const uint64_t flips = bbgpu_get_flip_count();
+        const int woke_late = now.tv_sec - before.tv_sec > 5;
+        before = now;
+        if (flips != last || flips == 0 || woke_late) {
+            last = flips;
+            since = now;
+            continue;
+        }
+        if ((unsigned)(now.tv_sec - since.tv_sec) >= limit) {
+            char why[160];
+            snprintf(why, sizeof why, "the game stopped responding (no new frame for %u seconds, %" PRIu64
+                     " frames before; BB_HANG_SECONDS)", limit, flips);
+            crash_exit(why, GPU_PROCESS_EXIT_HANG);
+        }
+    }
+    return NULL;
+}
+static void start_hang_watchdog(void) {
+    const char *env = getenv("BB_HANG_SECONDS");
+    const unsigned limit = env ? (unsigned)strtoul(env, NULL, 10) : 30;
+    if (!limit) return;
+    pthread_t thread;
+    if (!pthread_create(&thread, NULL, hang_watchdog, (void *)(uintptr_t)limit)) pthread_detach(thread);
+}
+#endif
 static uint64_t read64(FILE *f) {
     unsigned char b[8];
     if (fread(b, 1, 8, f) != 8) fail("truncated boot file");
@@ -372,6 +419,17 @@ static void fault(int sig, siginfo_t *info, void *context) {
     uintptr_t rip = (uintptr_t)UC_REG(uc, rip);
     char line[512];
     Dl_info where;
+    /* One plain line first: the launcher's crash report leads with it. */
+    if (rip - (uintptr_t)image < 0x10000000)
+        snprintf(line, sizeof(line), "Crash: the game crashed (signal %d at guest offset 0x%lx)\n", sig,
+                 (unsigned long)(rip - (uintptr_t)image));
+    else if (dladdr((void *)rip, &where) && where.dli_fname)
+        snprintf(line, sizeof(line), "Crash: the port crashed (signal %d in %s, %s)\n", sig,
+                 strrchr(where.dli_fname, '/') ? strrchr(where.dli_fname, '/') + 1 : where.dli_fname,
+                 where.dli_sname ? where.dli_sname : "?");
+    else
+        snprintf(line, sizeof(line), "Crash: the port crashed (signal %d at %p)\n", sig, (void *)rip);
+    { ssize_t written_=write(2, line, strlen(line)); (void)written_; }
     if (rip - (uintptr_t)image < 0x10000000)
         snprintf(line, sizeof(line), "Guest fault (signal %d) at guest offset 0x%lx, address %p\n",
                  sig, (unsigned long)(rip - (uintptr_t)image), info->si_addr);
@@ -577,9 +635,9 @@ int main(int argc, char **argv) {
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
 #ifdef __APPLE__
-    /* Before SDL/MoltenVK map anything: on macOS large host mmaps land in the guest range. */
+    /* Before SDL maps anything: on macOS large host mmaps land in the guest range. */
     if (runtime_memory_reserve_space()) fail("cannot reserve guest address range");
-    /* The native arm64 GPU process renders (BB_GPU_PROCESS=0: single process). */
+    /* The native arm64 GPU process renders; the game stops if it cannot start. */
     gpu_process_start();
 #endif
     runtime_memory_start_stats();
@@ -593,7 +651,6 @@ int main(int argc, char **argv) {
         g_bb_trace = 1;
     }
 
-    if (argc == 2 && !strcmp(argv[1], "--vulkan-only")) return vulkan_smoke();
     int cpu_only = 0, strict_imports = 0;
     unsigned timeout_seconds = 10;
     const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL;
@@ -629,7 +686,7 @@ int main(int argc, char **argv) {
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds] | --vulkan-only\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds]\n", argv[0]);
         return 1;
     }
     if (content_profile) {
@@ -770,6 +827,7 @@ int main(int argc, char **argv) {
     image = allocate(round_page(size));
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
+    runtime_sampler_init(image, size);
     if (!cpu_only) {
         char title[128]="Bloodborne", serial[16]="UNKNOWN", sfo[4096];
         uint32_t attributes=0;
@@ -783,15 +841,16 @@ int main(int argc, char **argv) {
         gpu_enabled=1; /* page tracking starts while the rasterizer registers guest memory */
 #ifdef __APPLE__
         void *split=gpu_process_shared();
-        if (split) {
-            if (bbgpu_init_remote(&gpu,split)) fail("GPU initialization in the GPU host failed");
-            gpu_process_rendering();
-        } else
-#endif
+        if (!split) crash_exit("the GPU process is not running", GPU_PROCESS_EXIT_START);
+        if (bbgpu_init_remote(&gpu,split)) crash_exit("the renderer could not start in the GPU process", 1);
+        gpu_process_rendering();
+        start_hang_watchdog();
+#else
         if (bbgpu_init(&gpu)) fail("GPU initialization failed");
+#endif
         /* BB_SYNC_TRACE=1: lock calls in the Gnm check's report (load-crash hunt). */
         if (getenv("BB_SYNC_TRACE") && getenv("BB_SYNC_TRACE")[0]=='1') runtime_sync_hook = bbgpu_record_sync;
-        printf("GPU: window and Vulkan presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,bbgpu_symbol_count());
+        printf("GPU: window and presenter ready; SDK 0x%08x, %u HLE symbols\n",(unsigned)sdk,bbgpu_symbol_count());
     }
     image_size = size;
     resolved_targets = calloc(import_count + 1, sizeof(void *));

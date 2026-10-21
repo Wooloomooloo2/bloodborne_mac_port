@@ -49,7 +49,6 @@ class BufferCache {
     /// Granularity of the page table (what MoltenVK's sparse alignment gave: 16 KiB, shift 14).
     static constexpr u64 MIN_BLOCK_SIZE = 16_KB;
     static constexpr u64 MacArenaBase = 0x7000000000; ///< runtime_memory.c USER_MIN (macOS)
-    static constexpr u64 MacArenaPages = 4; ///< 16 GiB of guest GPU address space (BB_ARENA_GIB)
     u64 mac_arena_end = 0; ///< end of the arena (smaller where Metal buffers are limited)
     /// Highest arena offset requested so far, in 256 MiB steps (logged when it grows: how big
     /// the arena needs to be; it is committed in full, ~1 GB of memory per GiB).
@@ -111,6 +110,12 @@ public:
                                                              bool is_written,
                                                              bool is_texel_buffer = false,
                                                              bool note_use = true);
+
+    /// Metal's indexed draw path truncates offsets above 4 GiB on M2 (observed).
+    /// Rebase those ranges into fence-managed staging; preserve GPU-written indices.
+    /// bbport: only for an arena without CPU contents; otherwise the encoder draws through a
+    /// window of the arena (Metal::LowOffset) and the arena range is returned.
+    [[nodiscard]] std::pair<const Buffer*, u64> ObtainIndexBuffer(VAddr device_addr, u32 size);
 
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);

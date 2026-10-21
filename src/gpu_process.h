@@ -1,15 +1,19 @@
 /* Native arm64 GPU process (docs/DESIGN_NATIVE_GPU_PROCESS.md), runtime side: spawns
  * out/bbgpu-host, hands it the guest memory entry and the shared control block, mirrors every
- * guest view into it at the same addresses; probe.c then starts the renderer there. macOS only,
- * on by default; BB_GPU_PROCESS=0 keeps the renderer in bb-probe (single process). */
+ * guest view into it at the same addresses; probe.c then starts the renderer there. macOS only;
+ * the game cannot run without it. */
 #pragma once
 #include <stdint.h>
 
 #ifdef __APPLE__
 #include "host/bbgpu_protocol.h" /* bbgpu_checksum */
-/* Starts the host (BB_GPU_PROCESS=1): spawn, handshake, then mirror guest views. Any failure is
- * logged and the runtime continues single-process. Call once, early, before guest maps. */
+/* Exit statuses (the launcher's crash report reads the "Crash:" line; these tell scripts). */
+enum { GPU_PROCESS_EXIT_START = 70, GPU_PROCESS_EXIT_HANG = 76 };
+/* Starts the host: spawn, handshake, then mirror guest views. Any failure ends the game with a
+ * "Crash:" line (GPU_PROCESS_EXIT_START). Call once, early, before guest maps. */
 void gpu_process_start(void);
+/* Stops the host (SIGTERM, then waits for it): before the game exits on its own. */
+void gpu_process_stop(void);
 /* The shared control block while the host is up (for bbgpu_init_remote), else NULL. */
 void *gpu_process_shared(void);
 /* The renderer now runs in the host: from here on, losing the host ends the game. */

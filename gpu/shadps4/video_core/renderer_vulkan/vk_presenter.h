@@ -156,6 +156,9 @@ private:
     std::unique_ptr<Rasterizer> rasterizer;
     VideoCore::TextureCache& texture_cache;
     void* layer; ///< CAMetalLayer* (the window's, SDL_Metal_GetLayer)
+    /// Drawables in a window and in full screen (LayerConfigFromEnv, FullscreenDrawables), and
+    /// the count the layer has now (bb:Present only).
+    u32 windowed_drawables{2}, fullscreen_drawables{3}, layer_drawables{2};
     /// bbport: BB_SNAPSHOT_TRIGGER (empty: off). Present writes the drawable as a PNG when this
     /// file exists (its first line, else "<trigger>.png"), then removes it. Create the trigger
     /// atomically (temp file + mv) or the path line may not be there yet. The PNG is written by

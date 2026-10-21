@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <set>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -150,13 +151,31 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
     });
 }
 
-void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size) {
+void TextureCache::InvalidateMemoryFromGPU(VAddr address, size_t max_size, u64 writer) {
     std::scoped_lock lock{mutex};
     ForEachImageInRegion(address, max_size, [&](ImageId image_id, Image& image) {
         // Only consider images that match base address.
         // TODO: Maybe also consider subresources
         if (image.info.guest_address != address) {
             return;
+        }
+        // bbport: BB_LOG_UPLOAD_MB=<n> also names, once, each writer that dirties an image of
+        // at least n MB (diagnostics).
+        static const double log_upload_mb = [] {
+            const char* env = std::getenv("BB_LOG_UPLOAD_MB");
+            return env ? std::atof(env) : 0.0;
+        }();
+        if (log_upload_mb > 0 && image.info.guest_size >= log_upload_mb * 1e6) {
+            static std::set<std::pair<u64, VAddr>> logged;
+            if (logged.emplace(writer, address).second) {
+                LOG_WARNING(Render_Vulkan,
+                            "GPU write dirties image {:#x} size {:#x} ({}x{} format {}): {} {:#x}, "
+                            "write size {:#x}, image flags {:#x}",
+                            address, image.info.guest_size, image.info.size.width,
+                            image.info.size.height, static_cast<u32>(image.info.pixel_format),
+                            writer ? "shader" : "DMA copy", writer, max_size,
+                            static_cast<u32>(image.flags));
+            }
         }
         // Ensure image is reuploaded when accessed again.
         image.flags |= ImageFlagBits::GpuDirty;
@@ -224,6 +243,8 @@ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, Bindi
         new_info.resources = std::max(requested_info.resources, cache_image.info.resources);
         new_info.UpdateSize();
         const auto new_image_id = slot_images.insert(device, runtime, slot_image_views, new_info);
+        // bbport: the replacement keeps the lazy usages the old image got.
+        slot_images[new_image_id].ApplyNewUsage(slot_images[cache_image_id].CurrentUsage());
         RegisterImage(new_image_id);
 
         // Inherit image usage
@@ -475,6 +496,9 @@ std::tuple<ImageId, int, int> TextureCache::ResolveOverlap(const ImageInfo& imag
 
 ImageId TextureCache::ExpandImage(const ImageInfo& info, ImageId image_id) {
     const auto new_image_id = slot_images.insert(device, runtime, slot_image_views, info);
+    // bbport: the larger image keeps the lazy usages the old one got (the game grows mip
+    // chains one level at a time).
+    slot_images[new_image_id].ApplyNewUsage(slot_images[image_id].CurrentUsage());
     RegisterImage(new_image_id);
 
     auto& src_image = slot_images[image_id];
@@ -598,6 +622,10 @@ ImageId TextureCache::FindImage(ImageDesc& desc, bool exact_fmt) {
     // Create and register a new image
     if (!image_id) {
         image_id = slot_images.insert(device, runtime, slot_image_views, info);
+        // bbport: the creating binding's lazy usages from the start (a texture first bound as
+        // storage, or in another pixel format), instead of an upgrade copy at its first view.
+        auto& created = slot_images[image_id];
+        created.ApplyNewUsage(created.NeededUsage(desc.view_info));
         RegisterImage(image_id);
     }
 
@@ -790,8 +818,13 @@ void TextureCache::RefreshImage(Image& image) {
         const auto [mip_size, mip_pitch, mip_height, mip_offset] = image.info.mips_layout[m];
 
         // Protect GPU modified resources from accidental CPU reuploads.
+        // bbport: an image only ever filled from GPU buffer writes (the 1080p R32F one the game
+        // writes with a compute shader every frame: 9 MB) skips the CPU hash. The hash is only
+        // compared once the image is GPU-modified, and here it would read memory whose GPU write
+        // may still be pending; 0 makes that later comparison upload, as a changed hash would.
         const u8* mip_addr = std::bit_cast<u8*>(image.info.guest_address) + mip_offset;
-        const u64 mip_hash = XXH3_64bits(mip_addr, mip_size);
+        const u64 mip_hash =
+            is_gpu_dirty && !is_gpu_modified ? 0 : XXH3_64bits(mip_addr, mip_size);
         if (is_gpu_modified && !is_gpu_dirty && image.mip_hashes[m] == mip_hash) {
             continue;
         }
@@ -1019,8 +1052,9 @@ void TextureCache::UntrackImageTail(ImageId image_id) {
 
 void TextureCache::GarbageCollectImages() {
     { // Metal always reports usage (Device::AllocatedSize)
-        // Without the resident buffers: the guest arena (8-16 GiB, private) counts in full from
-        // its creation, which kept a 16 GB Mac above the trigger and evicted textures for nothing.
+        // Without the resident buffers: the guest arena (6 GiB, private) counts in full from its
+        // creation, which kept a 16 GB Mac above the trigger and evicted textures for nothing.
+        // The budget below leaves them out instead.
         const u64 allocated = device.AllocatedSize();
         const u64 resident = device.ResidentBytes();
         total_used_memory = allocated > resident ? allocated - resident : 0;
@@ -1041,7 +1075,13 @@ void TextureCache::GarbageCollectImages() {
         if (budget != 0 || local_mem != 0) {
             const bool is_low_vram = (local_mem > 0 && local_mem <= 4096ULL * 1024 * 1024) ||
                                      (budget > 0 && budget <= 4096ULL * 1024 * 1024);
-            const u64 base_mem = !forced_budget && is_low_vram && local_mem > 0 ? local_mem : budget;
+            u64 base_mem = !forced_budget && is_low_vram && local_mem > 0 ? local_mem : budget;
+            // bbport: the resident buffers (the guest arena above all) count toward Metal's
+            // working set too, so images get what they leave. Measured against the whole set,
+            // images could grow to ~8 GB beside an 8 GiB arena on a 16 GB Mac and the GPU
+            // process sat at Metal's limit (11.53 of 11.55 GB, issue #19). BB_GC_BUDGET_MB
+            // stands for the working set (BB_GC_BUDGET_MB=11015: a 16 GB Mac's).
+            base_mem = base_mem > resident + (2ULL << 30) ? base_mem - resident : 2ULL << 30;
             static const u64 trig_pct = [is_low_vram] {
                 const char* e = std::getenv("BB_GC_TRIGGER");
                 return e ? std::strtoull(e, nullptr, 10) : (is_low_vram ? 70 : 70);

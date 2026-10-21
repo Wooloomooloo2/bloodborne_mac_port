@@ -165,13 +165,14 @@ extern "C" int bbgpu_msl_check(const char* cache_dir, const char* msl_cache_dir)
                 static_cast<unsigned long long>(archive_writes),
                 static_cast<unsigned long long>(archive_write_failures),
                 static_cast<unsigned long long>(archive_add_failures));
-    // At least 90% of the stored keys load; permutation conflicts (left to compile at runtime)
-    // and duplicates (loaded once, as their twin) are not counted against it.
-    const u32 loadable = report.keys - report.conflicts - report.duplicates;
+    // At least 90% of the stored keys load; permutation conflicts (left to compile at runtime),
+    // duplicates (loaded once, as their twin) and older formats (a game session migrates them)
+    // are not counted against it.
+    const u32 loadable = report.keys - report.conflicts - report.duplicates - report.old_format;
     const bool enough_loaded = report.loaded > 0 && u64{report.loaded} * 10 >= u64{loadable} * 9;
     if (!enough_loaded) {
         std::printf("MSL check: FAILED: %u of %u stored keys loaded (90%% needed; permutation "
-                    "conflicts and duplicates excluded)\n",
+                    "conflicts, duplicates and older formats excluded)\n",
                     report.loaded, loadable);
     }
     // The pipelines must reach the binary archive, or every start compiles them again; every

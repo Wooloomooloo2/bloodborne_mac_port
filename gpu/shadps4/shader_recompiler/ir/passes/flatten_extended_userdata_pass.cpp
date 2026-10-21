@@ -167,6 +167,8 @@ SrtWalkerCode RegisterWalkerCode(const u8* ptr, size_t size) {
     return StoreWalker(code.data(), code.size());
 }
 
+SrtReadHook srt_read_hook = nullptr;
+
 void RunSrtWalker(SrtWalkerCode code, const u32* user_data, u32* flat) {
     // Reads through guest pointers may fault (stale or unmapped tables): the faulting load is
     // marked zeroed for good and the walk restarts. It only reads guest memory and rewrites
@@ -215,6 +217,9 @@ void RunSrtWalker(SrtWalkerCode code, const u32* user_data, u32* flat) {
             const u32 off = op == SrtOp::PushPtrImm ? a : values[--nv];
             ptrs[np++] = cur;
             pc = i;
+            if (srt_read_hook && !zeroed) {
+                srt_read_hook(cur + u32(off << 2), 8);
+            }
             cur = zeroed ? 0 : LoadGuest<u64>(cur + u32(off << 2)) & 0xFFFFFFFFFFFFULL;
             continue;
         }
@@ -222,6 +227,9 @@ void RunSrtWalker(SrtWalkerCode code, const u32* user_data, u32* flat) {
         case SrtOp::CopyExpr: {
             const u32 off = op == SrtOp::CopyImm ? a : values[--nv];
             pc = i;
+            if (srt_read_hook && !zeroed) {
+                srt_read_hook(cur + u32(off << 2), 4);
+            }
             flat[b] = zeroed ? 0 : LoadGuest<u32>(cur + u32(off << 2));
             continue;
         }

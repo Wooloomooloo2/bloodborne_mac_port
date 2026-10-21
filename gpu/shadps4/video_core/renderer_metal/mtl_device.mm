@@ -74,6 +74,8 @@ void Device::StartWatchdog() {
             const auto stalled =
                 std::chrono::duration_cast<std::chrono::milliseconds>(now - since).count();
             if (u64(stalled) >= limit_ms) {
+                std::fprintf(stderr, "Crash: the GPU stopped making progress (%lld ms)\n",
+                             static_cast<long long>(stalled));
                 std::fprintf(stderr,
                              "STOP: GPU watchdog: tick %llu committed, %llu complete, no progress "
                              "for %lld ms; exiting so the GPU does not stall WindowServer "

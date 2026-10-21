@@ -73,6 +73,7 @@ private:
         u32 level = 0; ///< mip level of the native image this proxy stands for
         u32 width = 0, height = 0; ///< proxy size
         Metal::Object image; ///< id<MTLTexture> of the proxy
+        Metal::TextureDesc desc; ///< bbport: the proxy's description (lazy PixelFormatView)
         std::vector<std::pair<VideoCore::ImageViewInfo, Metal::Object>> views;
         SceneResolution::Coherence state;
     };
@@ -82,6 +83,9 @@ private:
     Entry& Get(VideoCore::ImageId, u32 level = 0);
     void* View(Entry&, const VideoCore::Image&, const VideoCore::ImageViewInfo&);
     void Copy(Entry&, VideoCore::Image&, bool to_native);
+    /// bbport: re-creates the proxy with PixelFormatView (contents copied) for a view in another
+    /// pixel format.
+    void UpgradeProxy(Entry&);
     /// Colour images: copied by CopyTexture at the same size, else by a nearest-texel draw.
     bool Blittable(const VideoCore::Image&) const;
     /// Depth (and stencil) images: resampled by a fullscreen draw writing depth and, with

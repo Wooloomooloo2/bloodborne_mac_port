@@ -1,6 +1,6 @@
 # Design: Native ARM64 GPU process (option A)
 
-Status: **M0–M4 done, split mode is the default** (2026-10-12; `BB_GPU_PROCESS=0` = single process). Gameplay renders correctly through the native host. In the GPU-bound city scene FPS is unchanged (27.5 both modes; the GPU-feeding thread waits on the GPU 59% → 72%), worst frames are steadier (37–58 ms vs 49–75 ms). Next lever: render-pass merging (GPU side). Originally a proposal for decision. Reverses founding decision 1 in `CLAUDE.md`
+Status: **M0–M4 done, split mode is the only mode** (default 2026-10-12; the single-process mode and `BB_GPU_PROCESS` were removed 2026-10-19). Gameplay renders correctly through the native host. In the GPU-bound city scene FPS is unchanged (27.5 both modes; the GPU-feeding thread waits on the GPU 59% → 72%), worst frames are steadier (37–58 ms vs 49–75 ms). Next lever: render-pass merging (GPU side). Originally a proposal for decision. Reverses founding decision 1 in `CLAUDE.md`
 ("everything runs as one x86-64 process under Rosetta"), so it needs the owner's go-ahead.
 Evidence behind it: [`FINDINGS.md`](FINDINGS.md), Part 2.
 
@@ -139,7 +139,8 @@ The host's own views stay writable: protection only matters where the game runs.
   control ports, and waits for "ready" before entering the game.
 - If either process dies the other exits; `runtime_restart` restarts both.
 - A **single-process fallback** (`BB_GPU_PROCESS=0`, today's design) stays until the split is
-  proven, so the game keeps working throughout.
+  proven, so the game keeps working throughout. *(Removed 2026-10-19: the split is proven, and a
+  silent fallback hid failures; a host that cannot start now stops the game with a "Crash:" line.)*
 
 ### 3.7 Build
 

@@ -571,7 +571,20 @@ void SliderRow(const char* label, std::atomic<float>& value, float lo, float hi,
     float v = value;
     char id[64];
     std::snprintf(id, sizeof(id), "##%s", label);
-    Store(value, v, ImGui::SliderFloat(id, &v, lo, hi, "%.2f"));
+    bool changed = ImGui::SliderFloat(id, &v, lo, hi, "%.2f");
+    // D-pad left/right step the focused slider: ImGui's own gamepad tweak needs Cross first and
+    // moves 0.01 a press (200 presses across the sharpness range).
+    if (ImGui::IsItemFocused() && !ImGui::IsItemActive()) {
+        const float step = (hi - lo) / 40.0f;
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft)) {
+            v = std::max(lo, v - step);
+            changed = true;
+        } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight)) {
+            v = std::min(hi, v + step);
+            changed = true;
+        }
+    }
+    Store(value, v, changed);
 }
 
 /// Label on the left, read-only value on the right.
@@ -788,9 +801,27 @@ void DisplayTab(BbSettings::Values& s) {
     HintBelow("Size of the final frame and HUD.");
     EndCard();
 
+    BeginCard("Frame pacing");
+    Toggle("Even frame times", s.frame_pacing);
+    HintBelow("Shows each frame for one period of the FPS cap. Smoother camera motion on "
+              "ProMotion displays when the game holds the cap, but about one frame more input "
+              "lag. No effect below the cap.");
+    EndCard();
+
     BeginCard("Overlay");
     Toggle("FPS counter in corner", s.show_fps);
     EndCard();
+
+    // Started by the launcher: its "show every time" switch, which is hard to find again once off.
+    if (const int shown = BbSettings::ShowLauncher(); shown >= 0) {
+        BeginCard("Launcher");
+        bool v = shown != 0;
+        if (ToggleRow("Show the launcher when Bloodborne opens", &v)) {
+            BbSettings::SetShowLauncher(v);
+        }
+        HintBelow("Holding \xE2\x8C\xA5 Option while opening Bloodborne shows it once.");
+        EndCard();
+    }
 }
 
 void GraphicsTab(BbSettings::Values& s) {

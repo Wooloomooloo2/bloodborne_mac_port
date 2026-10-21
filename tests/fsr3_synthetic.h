@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// bbport: synthetic FSR 3 input frames shared by the Vulkan golden tool (tests/fsr3_golden_vk.cpp)
+// bbport: synthetic FSR 3 input frames shared by the Vulkan golden tool (tests/data/fsr3/README)
 // and the Metal comparison test (tests/test_ffx_metal.mm, Fsr3MatchesVulkan), with the one set of
 // dispatch constants and golden cases both use (Metal-native M6 Task 3). The scene: a checkerboard
 // times a colour ramp, moving 1.25 render pixels per frame to the right, with matching motion

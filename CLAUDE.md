@@ -151,19 +151,33 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   `open -n --env BB_DATA_DIR=$PWD/out/macdata --env BB_LAUNCH_CONF=$PWD/out/macdata/launch.conf Bloodborne.app`.
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
+## State as of 2026-10-21 (after 0.5.3, local master, not pushed)
+
+- **0.5.4 candidates on master:** invariant positions by default (`BB_SPIRV_PRECISE=vertex`
+  restores 0.5.3; +15% GPU-bound at 1440p; an old shader cache migrates once), three drawables
+  in full screen (#25), archive writes spaced to 20x their duration. PR #20's remaining commits
+  (mouse look, Cmd+W) tested on branch `test-pr20-rest` with a link fix for the unit tests.
+- **Diagnostics:** `BB_SAMPLE_MS=1` (main-thread sampler for long frames, `BB_SAMPLE_DUMP`),
+  `BB_ENCODER_STATS=1` (Metal encoders per frame by kind and why the previous one ended),
+  `BB_PASS_STATS=1`, `BB_FRAME_STATS=1` spike lines (game/flip/present breakdown).
+- Traversal hitches on an M4 Max are GPU headroom (frames-ahead waits), not compiles or the
+  archive; the city's tessellated draws split 67 render passes a frame (FINDINGS 2026-10-21,
+  MACOS_BACKLOG Performance: tessellation kernels out of the pass).
+
 ## Next steps (in order)
 
 1. **Native arm64 GPU process** (docs/DESIGN_NATIVE_GPU_PROCESS.md): M0 spike passed (1.75× on
    MoltenVK-style CPU work). M1 done (guest pool = Mach named entry, `runtime_memory_pool_entry()`,
    `BB_SHARED_GUEST_MEMORY=0` fallback). M2 done (2026-10-12): `BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh`,
    `scripts/macos/build_gpu_arm64.sh` → `out/gpu-arm64/libbbgpu.dylib`, `out/bbgpu-host` (`host/`),
-   `BB_GPU_PROCESS=1` (`src/gpu_process.c`) mirrors guest memory into the host; HLE split in
+   `src/gpu_process.c` mirrors guest memory into the host; HLE split in
    `docs/HLE_CLASSIFICATION.md`. M3 implemented (2026-10-12, design "M3 plan"): portable SRT walker
    (bytecode), shared control block + rings (`host/bbgpu_shared.h`), host links the arm64 GPU
    library (`host/host_runtime.c`), game side in "remote" mode (`gpu/shim/bbport_split.*`).
    Tests pass (`tests/test_bbgpu_rings.c`, `tests/test_gpu_split.c`); the title screen renders
    through the host at 60 FPS. M4 (protect/fault relays) done: gameplay renders correctly. Split
-   mode is the DEFAULT on macOS (`BB_GPU_PROCESS=0` = single process); text entry and Restart
+   mode is the ONLY mode on macOS (single process and `BB_GPU_PROCESS` removed 2026-10-19: a host that
+   cannot start or is lost stops the game with a "Crash:" line); text entry and Restart
    go through the host; keyboard bridged, gamepads polled in bb-probe. Same FPS as single
    process in the GPU-bound city scene (27.5), steadier worst frames. Next: render-pass merging.
 2. Menu bugs: "Subpixel jitter" unticks itself; menu choices (upscaler/preset) not persisted
@@ -231,6 +245,12 @@ signin` (Discord device code, from the Windows launcher) → bbport.ini `thd_onl
 play logs → :18671) and sets `BB_THD_SERVER` / `BB_THD_AUTH` / `BB_THD_RULESET`.
 
 ## Gotchas learned
+
+- **Never send signals to guest threads** (sampling, stack dumps): SIGPROF every 1 ms on the
+  main thread made texture streaming fail within minutes. Suspend the thread and read its state
+  instead (`src/runtime_sampler.c`).
+- The test harness cannot enter full screen while nobody is at the Mac (no Space transition);
+  full-screen checks need the user present.
 
 - **Never attach lldb/debugserver to a Rosetta (x86-64) process and kill it**: on 2026-10-12 it
   wedged Rosetta (every new x86 process hung in state U until it recovered hours later).

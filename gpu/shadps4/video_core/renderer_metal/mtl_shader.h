@@ -90,6 +90,10 @@ struct TessellationInfo {
     bool clockwise{};         ///< TES: VertexOrderCw (neither declared: false)
     bool point_mode{};        ///< TES: PointMode
     u32 output_vertices{};    ///< TCS: OutputVertices (0 when not declared)
+    /// Locations [patch_first, patch_end) of the Patch variables (TCS: the patch constants it
+    /// writes; the recompiler puts them after the per-vertex attributes). Both 0: none.
+    u32 patch_first{};
+    u32 patch_end{};
 };
 /// The tessellation modes of `spirv`; all default when it declares none.
 TessellationInfo ReadTessellationInfo(std::span<const u32> spirv);
@@ -113,6 +117,11 @@ struct CompileVariant {
     u32 index_type{};         ///< TessVertex: 0 none, 1 uint16, 2 uint32 (the draw's index buffer)
     TessDomain domain{};      ///< TessControl: the evaluation shader's domain (the factor struct)
     u32 output_vertices{};    ///< TessEval: the control shader's OutputVertices (patch size)
+    /// TessEval: the control shader's patch constant locations [patch_first, patch_end). The
+    /// evaluation shader declares them all, so its patch struct has the control shader's layout
+    /// and size even where it reads only some of them (SPIRV-Cross drops unread ones otherwise).
+    u32 patch_first{};
+    u32 patch_end{};
     /// GeometryKernel: the export shader's output layout (TessVertex variant, TessLayout::members)
     GeometryEsLayout es;
     bool operator==(const CompileVariant&) const = default;

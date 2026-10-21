@@ -225,6 +225,8 @@ void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char 
     busiest_name[0] = 0;
 }
 
+void runtime_sampler_flip(uint64_t main_cpu_ns) { (void)main_cpu_ns; } /* game side only */
+
 int runtime_memory_read_backing(uintptr_t address, void *out, uint64_t size) {
     if (!host_view_covered(address, address + size)) return 0;
     memcpy(out, (const void *)address, size);

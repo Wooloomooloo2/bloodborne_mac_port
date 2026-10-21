@@ -164,6 +164,8 @@ struct PsoCache::Impl {
     u64 unwritten{};              ///< pipelines compiled since the last successful write
     /// The last write attempt (or the cache's creation): the writer waits kWriteInterval after it.
     std::chrono::steady_clock::time_point last_write = std::chrono::steady_clock::now();
+    /// How long the last write took: the next one waits at least kWriteSpacing times that.
+    std::chrono::steady_clock::duration last_write_cost{};
     bool stop{};                  ///< the writer thread ends
     std::condition_variable writer_cv;
     std::thread writer;           ///< PsoCache::WriterLoop
@@ -172,6 +174,12 @@ struct PsoCache::Impl {
 };
 
 constexpr auto kWriteInterval = std::chrono::seconds{10};
+/// A write re-adds every pipeline of the session (~2.4 ms each on an M4 Max: 1.3 s for ~300,
+/// 5-7 s for the 2-3k of a long game), on a utility thread that shares the CPU with the game
+/// and its compiles, most of all on Macs with fewer cores and in the session that rebuilds a
+/// cache. Writes wait at least this many times the last one's duration (~5% of one core); the
+/// exit flush (bbgpu_flush_caches) still writes everything left.
+constexpr int kWriteSpacing = 20;
 
 RenderPipeline::~RenderPipeline() {
     // Balance the +1 of __bridge_retained; ARC releases at the end of the scope.
@@ -275,7 +283,9 @@ void PsoCache::WriterLoop() {
         }
         // Everything compiled until then goes into one write (the destructor or, in the GPU host,
         // bbgpu_flush_caches writes the rest).
-        const auto due = impl->last_write + kWriteInterval;
+        const auto due =
+            impl->last_write + std::max<std::chrono::steady_clock::duration>(
+                                   kWriteInterval, impl->last_write_cost * kWriteSpacing);
         if (impl->writer_cv.wait_until(lock, due, [&] { return impl->stop; })) {
             return;
         }
@@ -357,6 +367,7 @@ bool PsoCache::WriteArchive() {
     }
     std::scoped_lock lock{impl->archive_mutex};
     impl->last_write = std::chrono::steady_clock::now(); // failures back off too
+    impl->last_write_cost = impl->last_write - write_start;
     if (!error.empty()) {
         ++counters.archive_write_failures;
         if (error != impl->last_error) {

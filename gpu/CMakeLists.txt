@@ -46,32 +46,25 @@ elseif (BB_PGO STREQUAL "use")
 endif()
 
 # bbport: the native arm64 GPU host (docs/DESIGN_NATIVE_GPU_PROCESS.md) builds this library for
-# arm64 (scripts/macos/build_gpu_arm64.sh). Zydis and Xbyak only serve the x86-64 SRT-walker JIT
-# in the shader recompiler, so they are x86-64 only.
+# arm64 (scripts/macos/build_gpu_arm64.sh).
 if (CMAKE_OSX_ARCHITECTURES)
     set(BB_TARGET_ARCH "${CMAKE_OSX_ARCHITECTURES}")
 else()
     set(BB_TARGET_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
 endif()
-if (BB_TARGET_ARCH MATCHES "^(arm64|aarch64|ARM64)$")
-    set(BB_ARM64 ON)
-else()
-    set(BB_ARM64 OFF)
-endif()
 message(STATUS "bbgpu target architecture: ${BB_TARGET_ARCH}")
 
-find_package(Vulkan REQUIRED)
+# Vulkan-Hpp's types only (the Metal renderer keeps shadPS4's Vulkan-named classes): headers, no
+# loader. Elsewhere the reference Linux path links the loader.
+if (APPLE)
+    find_package(VulkanHeaders CONFIG REQUIRED)
+else()
+    find_package(Vulkan REQUIRED)
+endif()
 find_package(fmt REQUIRED)
 find_package(Boost REQUIRED)
 find_package(magic_enum REQUIRED)
 find_package(tsl-robin-map REQUIRED)
-if (NOT TARGET GPUOpen::VulkanMemoryAllocator)
-    add_library(GPUOpen::VulkanMemoryAllocator INTERFACE IMPORTED)
-    find_path(VMA_INC NAMES vk_mem_alloc.h)
-    if (VMA_INC)
-        target_include_directories(GPUOpen::VulkanMemoryAllocator INTERFACE "${VMA_INC}")
-    endif()
-endif()
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
 pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
@@ -79,11 +72,6 @@ if (NOT APPLE)
     pkg_check_modules(X11 REQUIRED IMPORTED_TARGET x11)
 endif()
 find_package(miniz REQUIRED)
-set(BB_ZYDIS "")
-if (NOT BB_ARM64)
-    find_package(Zydis REQUIRED)
-    set(BB_ZYDIS Zydis::Zydis)
-endif()
 find_program(GLSLANG_COMPILER NAMES glslang glslangValidator REQUIRED)
 
 set(SIRIT_USE_SYSTEM_SPIRV_HEADERS OFF CACHE BOOL "" FORCE)
@@ -112,9 +100,8 @@ function(add_host_shader FILENAME SHADER_NAME)
         DEPENDS ${SOURCE} VERBATIM)
     set(SHADER_HEADERS ${SHADER_HEADERS} ${OUT} PARENT_SCOPE)
 endfunction()
-add_host_shader(color_to_ms_depth.frag color_to_ms_depth_frag)
-add_host_shader(ms_image_blit.frag ms_image_blit_frag)
-add_host_shader(ms_image_blit.frag ms_image_blit_msaa_frag SRC_MSAA=1)
+# color_to_ms_depth, ms_image_blit and depth_resample run as MSL ports
+# (renderer_metal/mtl_blit_shaders.h); their GLSL sources stay as the reference.
 add_host_shader(fault_buffer_process.comp fault_buffer_process_comp)
 add_host_shader(fsr.comp fsr_easu_comp SAMPLE_EASU=1)
 add_host_shader(fsr.comp fsr_rcas_comp SAMPLE_RCAS=1)
@@ -125,9 +112,6 @@ add_host_shader(taa.comp taa_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_comp)
 add_host_shader(taa_sharpen.comp taa_sharpen_ldr_comp LDR_OUTPUT=1)
 add_host_shader(buffer_multi_copy.comp buffer_multi_copy_comp)
-add_host_shader(depth_resample.frag depth_resample_frag)
-add_host_shader(depth_resample.frag depth_stencil_resample_frag HAS_STENCIL=1)
-add_host_shader(depth_resample.frag depth_stencil_bits_frag STENCIL_BITS=1)
 add_host_shader(camera_motion.comp camera_motion_debug_comp DEBUG_OVERLAY=1)
 foreach(BPP IN ITEMS 8 16 32 64 96 128)
     add_host_shader(tiling.comp tiling_micro_${BPP}_comp BITS_PER_PIXEL=${BPP} IS_MACRO_TILED=0)
@@ -144,27 +128,8 @@ file(GLOB_RECURSE RECOMPILER CONFIGURE_DEPENDS shadps4/shader_recompiler/*.cpp)
 list(FILTER VIDEO_CORE EXCLUDE REGEX "renderdoc\\.cpp$")
 # The Metal renderer (renderer_metal/) is added in the APPLE block below.
 list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_metal/")
-# Metal-native renderer (docs/superpowers/plans/2026-10-16-metal-native-roadmap.md): the milestone
-# the renderer sources are converted to. Files of later milestones leave the build.
-set(BB_METAL_NATIVE_STAGE 6 CACHE STRING "Metal-native renderer milestone the sources are converted to (5-7)")
-if (BB_METAL_NATIVE_STAGE LESS 5)
-    message(FATAL_ERROR "BB_METAL_NATIVE_STAGE below 5 is gone (M5 converted every renderer file)")
-endif()
-set(BB_UNCONVERTED_6 "")
-set(BB_UNCONVERTED_7 vk_instance vk_platform)
-foreach(stage 6 7)
-    if (BB_METAL_NATIVE_STAGE LESS ${stage})
-        foreach(source IN LISTS BB_UNCONVERTED_${stage})
-            list(FILTER VIDEO_CORE EXCLUDE REGEX "renderer_vulkan/${source}\\.cpp$")
-        endforeach()
-    endif()
-endforeach()
-set(BB_DECODER "")
-if (NOT BB_ARM64)
-    set(BB_DECODER shadps4/common/decoder.cpp)
-endif()
 set(COMMON
-    ${BB_DECODER} shadps4/common/error.cpp
+    shadps4/common/error.cpp
     shadps4/common/io_file.cpp shadps4/common/native_clock.cpp shadps4/common/number_utils.cpp
     shadps4/common/path_util.cpp shadps4/common/rdtsc.cpp shadps4/common/spin_lock.cpp shadps4/common/recursive_lock.cpp
     shadps4/common/string_util.cpp shadps4/common/thread.cpp shadps4/common/signal_context.cpp
@@ -182,8 +147,6 @@ add_dependencies(bbgpu host_shaders)
 # below), and an embedded Cyrillic font (third_party/fonts).
 target_sources(bbgpu PRIVATE third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp)
-# PUBLIC: the gated headers must see the same stage in the tests that include them.
-target_compile_definitions(bbgpu PUBLIC BB_METAL_NATIVE_STAGE=${BB_METAL_NATIVE_STAGE})
 target_include_directories(bbgpu PRIVATE third_party/imgui third_party/imgui/backends)
 target_compile_definitions(bbgpu PRIVATE
     BB_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf")
@@ -205,7 +168,6 @@ if (APPLE)
                                 shim/bbport_overlay_metal.mm
                                 third_party/imgui/backends/imgui_impl_metal.mm
                                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_compile_definitions(bbgpu PRIVATE VK_USE_PLATFORM_METAL_EXT)
     # The runtime's symbols resolve against the executable at load time (bb-probe, src/runtime*.c;
     # bbgpu-host, host/host_runtime.c); anything else left undefined is a link error (ld's
     # default: it warns that an explicit -undefined error is deprecated).
@@ -216,7 +178,7 @@ if (APPLE)
         runtime_memory_set_gpu_hooks runtime_memory_write_backing
         runtime_process_time_counter runtime_process_time_us runtime_restart
         runtime_thread_attach_host runtime_thread_clear_blocked runtime_thread_cpu_ns
-        runtime_thread_set_blocked runtime_tsc_frequency)
+        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip)
     foreach(symbol IN LISTS BB_HOST_RUNTIME_SYMBOLS)
         target_link_options(bbgpu PRIVATE -Wl,-U,_${symbol})
     endforeach()
@@ -224,9 +186,18 @@ if (APPLE)
     # its first call, so test programs that define only the ones they use still load (chained
     # fixups bind every symbol at load time).
     target_link_options(bbgpu PRIVATE -Wl,-no_fixup_chains)
+    # The x86-64 library serves the game's side only (remote mode; the arm64 GPU host renders):
+    # it exports the C API (gpu/bbgpu.h) and the SRT walker its test calls, so that LTO and
+    # dead stripping drop what nothing reaches (15.5 -> 13.4 MB). The renderer is still compiled
+    # in: its code stays reachable through the single-process branches (MACOS_BACKLOG).
+    if (BB_TARGET_ARCH STREQUAL "x86_64")
+        target_link_options(bbgpu PRIVATE
+            -Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/shim/bbgpu_game.exports -Wl,-dead_strip)
+        set_property(TARGET bbgpu APPEND PROPERTY LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/shim/bbgpu_game.exports)
+    endif()
     # The Metal renderer: SPIR-V -> MSL through SPIRV-Cross (deps/<arch>, bootstrap_deps.sh). The
-    # x86-64 library compiles it too (split mode never runs it there) until M7 trims that library
-    # to the remote shim.
+    # x86-64 library compiles it too (the game's side never runs it) until that library is trimmed
+    # to the remote shim (MACOS_BACKLOG, Performance).
     find_package(spirv_cross_core CONFIG REQUIRED)
     find_package(spirv_cross_glsl CONFIG REQUIRED)
     find_package(spirv_cross_msl CONFIG REQUIRED)
@@ -258,7 +229,7 @@ if (APPLE)
     foreach(source IN LISTS METAL_CORE_SOURCES)
         if (source MATCHES "\\.mm$")
             set_source_files_properties(${source} TARGET_DIRECTORY bbmetal_core PROPERTIES
-                COMPILE_OPTIONS "-fobjc-arc;-UVK_USE_PLATFORM_METAL_EXT;-Wno-unguarded-availability-new")
+                COMPILE_OPTIONS "-fobjc-arc;-Wno-unguarded-availability-new")
         endif()
     endforeach()
     file(GLOB METAL_SOURCES CONFIGURE_DEPENDS shadps4/video_core/renderer_metal/*.cpp
@@ -269,10 +240,8 @@ if (APPLE)
         "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation")
     foreach(source IN LISTS METAL_SOURCES)
         if (source MATCHES "\\.mm$")
-            # No Vulkan Metal-surface types here: under ARC their CAMetalLayer pointer breaks
-            # vulkan.hpp's constexpr templates.
             set_source_files_properties(${source} PROPERTIES COMPILE_OPTIONS
-                "-fobjc-arc;-UVK_USE_PLATFORM_METAL_EXT;-Wno-unguarded-availability-new")
+                "-fobjc-arc;-Wno-unguarded-availability-new")
         endif()
     endforeach()
     target_link_libraries(bbgpu PRIVATE spirv-cross-msl spirv-cross-glsl spirv-cross-core)
@@ -303,7 +272,7 @@ if (APPLE)
         shim/ffx_metal/ffx_metal_compute.mm shim/ffx_metal/fsr3_metal.mm)
     set_source_files_properties(shim/ffx_metal/ffx_metal.mm shim/ffx_metal/ffx_metal_resources.mm
         shim/ffx_metal/ffx_metal_compute.mm shim/ffx_metal/fsr3_metal.mm PROPERTIES COMPILE_OPTIONS
-        "-fobjc-arc;-UVK_USE_PLATFORM_METAL_EXT;-Wno-unguarded-availability-new")
+        "-fobjc-arc;-Wno-unguarded-availability-new")
     target_include_directories(bbgpu PRIVATE ${FFX_1_1_4_ROOT}/src/backends/shared)
     target_link_libraries(bbgpu PRIVATE ffx_fsr3_host)
 else()
@@ -312,14 +281,19 @@ else()
 endif()
 if (APPLE)
     target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
-        tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz ${BB_ZYDIS} sirit
+        tsl::robin_map PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::FFMPEG miniz::miniz sirit
         "-framework Metal" "-framework MetalFX" "-framework QuartzCore" "-framework Foundation")
 else()
     target_link_libraries(bbgpu PUBLIC Vulkan::Headers fmt::fmt Boost::headers magic_enum::magic_enum
-        tsl::robin_map GPUOpen::VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::X11 PkgConfig::FFMPEG miniz::miniz Zydis::Zydis sirit)
+        tsl::robin_map PkgConfig::XXHASH PkgConfig::SDL3 PkgConfig::X11 PkgConfig::FFMPEG miniz::miniz sirit)
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(draw-pipe-wait-test EXCLUDE_FROM_ALL ../tests/test_draw_pipe_wait.cpp
+    shim/common/logging/log.cpp)
+target_include_directories(draw-pipe-wait-test PRIVATE shim shadps4)
+target_link_libraries(draw-pipe-wait-test PRIVATE fmt::fmt)
+target_compile_options(draw-pipe-wait-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
@@ -379,21 +353,6 @@ if (APPLE)
     target_link_options(ffx-metal-test PRIVATE -Wl,-export_dynamic)
     target_compile_definitions(ffx-metal-test PRIVATE
         BB_FSR3_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/data/fsr3")
-    # The golden reference of Fsr3MatchesVulkan (tests/data/fsr3, checked in): the FSR-Vulkan
-    # submodule's portable wrapper on MoltenVK. One-shot, never part of bbgpu.
-    option(BB_FSR3_GOLDEN "Build fsr3-golden-vk (FSR 3 golden outputs through ffx-vulkan on MoltenVK)" OFF)
-    if (BB_FSR3_GOLDEN)
-        set(FFX_VK_PORTABLE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-        set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
-        add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
-        add_executable(fsr3-golden-vk EXCLUDE_FROM_ALL ../tests/fsr3_golden_vk.cpp)
-        target_include_directories(fsr3-golden-vk PRIVATE ../tests)
-        set(BB_MOLTENVK_ICD ${CMAKE_PREFIX_PATH})
-        list(GET BB_MOLTENVK_ICD 0 BB_MOLTENVK_ICD)
-        target_compile_definitions(fsr3-golden-vk PRIVATE
-            BB_MOLTENVK_ICD="${BB_MOLTENVK_ICD}/share/vulkan/icd.d/MoltenVK_icd.json")
-        target_link_libraries(fsr3-golden-vk PRIVATE ffx-vulkan::portable)
-    endif()
 endif()
 # These two run the TAA and camera motion kernels on Metal, recorded by the renderer's own
 # Taa::Record and CameraMotion::Record (M5 Tasks 7 and 5).
@@ -434,6 +393,15 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+
+# Opt-in synthetic regression: no game files or runtime diagnostics required.
+add_executable(index-offset-test EXCLUDE_FROM_ALL
+    ../tests/test_index_offset.cpp ../tests/test_index_triangle.mm)
+set_source_files_properties(../tests/test_index_triangle.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_include_directories(index-offset-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_options(index-offset-test PRIVATE -UNDEBUG)
+target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)
 
 # bbport online module (gpu/bbnet, libbbnet.dylib / libbbnet.so): built when its libraries are
 # there (macOS: deps/x86_64 from scripts/macos/bootstrap_deps.sh; Linux: shell.nix); BB_NET=OFF

@@ -18,6 +18,7 @@
 
 #include "bbport_copy.h"
 #include "bbport_cpu.h"
+#include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
@@ -208,9 +209,18 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         if (is_rendering) {
             is_rendering = false; // counted above, not again in EndRendering
             Record([runs = &draw_runs](Metal::Encoder& e) { runs->EndRenderPass(e); });
+            PassEnded();
         }
     }
     EndRendering();
+    if (FrameCapture::Tracing()) {
+        std::string line = fmt::format("P {}x{} d={}", new_state.width, new_state.height,
+                                       fmt::ptr(new_state.depth.texture));
+        for (u32 i = 0; i < new_state.num_colors; ++i) {
+            line += fmt::format(" c={}", fmt::ptr(new_state.colors[i].texture));
+        }
+        FrameCapture::Trace(std::move(line));
+    }
     is_rendering = true;
     render_state = new_state;
     Record([desc = render_state.ToDesc()](Metal::Encoder& e) { e.BeginRenderPass(desc); });
@@ -224,9 +234,34 @@ void Scheduler::EndRendering(std::source_location where, const char* detail) {
         const std::string reason = Where(where) + detail;
         CountPass(&reason, false);
     }
+    if (FrameCapture::Tracing()) {
+        FrameCapture::Trace(fmt::format("E {}:{}", where.file_name(), where.line()));
+    }
     is_rendering = false;
     // Through the draw runs: waiting patch draws are drawn in this pass first.
     Record([runs = &draw_runs](Metal::Encoder& e) { runs->EndRenderPass(e); });
+    PassEnded();
+}
+
+void Scheduler::PassEnded() {
+    if (pass_end_hook && !in_pass_end_hook) {
+        in_pass_end_hook = true;
+        pass_end_hook(pass_end_context);
+        in_pass_end_hook = false;
+    }
+}
+
+void Scheduler::ResumeRendering() {
+    if (is_rendering) {
+        return;
+    }
+    RenderState state = render_state;
+    for (u32 i = 0; i < state.num_colors; ++i) {
+        state.colors[i].clear = false;
+    }
+    state.depth.clear = false;
+    state.depth.clear_stencil = false;
+    BeginRendering(state);
 }
 
 void Scheduler::PushDebugGroup(std::string label) {

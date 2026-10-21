@@ -3,12 +3,6 @@
 
 #include "video_core/renderer_vulkan/vk_common.h"
 
-// Implement vma functions
-#define VMA_IMPLEMENTATION
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnullability-completeness"
-#include <vk_mem_alloc.h>
-#pragma clang diagnostic pop
-
-// Store the dispatch loader here
+// Store the dispatch loader here (bbport: never initialised; the Metal renderer uses Vulkan-Hpp's
+// types only, no Vulkan functions).
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE

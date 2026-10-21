@@ -78,6 +78,9 @@ enum : std::uint64_t {
     /// The vertex streams of a draw come from the draw-preparation worker's V#s (alone of the
     /// prepared resources; PreparedResources turns them all off); bit set: from the registers.
     PreparedVertexInputs = 1ull << 62,
+    /// Copy-shader copies issued inside a render pass wait for its end instead of ending it
+    /// (vk_shader_hle.cpp, Defer); bit set: they end the pass. BB_DEFER_COPIES=0 too.
+    DeferredShaderCopies = 1ull << 63,
     // Bits 20-29 are used as raw debug toggles by the camera/object motion and the upscaler.
 };
 inline bool Disabled(std::uint64_t bit) {
@@ -99,10 +102,16 @@ inline std::atomic<std::uint64_t> draws{0}, dispatches{0}, submissions{0}, flips
 inline std::atomic<std::uint64_t> hoisted_copies{0};
 /// bbport: copy-shader copies recorded ahead of their submission, and those that could not be.
 inline std::atomic<std::uint64_t> hoisted_shader_copies{0}, inline_shader_copies{0};
+/// bbport: copy-shader copies deferred to the end of their render pass, and the passes a
+/// command split anyway because it touched their ranges.
+inline std::atomic<std::uint64_t> deferred_shader_copies{0}, deferred_copy_conflicts{0};
 /// bbport: arena ordering requests recorded (Runtime::FlushBarriers: commands waiting for
 /// render passes, and the others), and uploads not hoisted because their ranges were in use by
 /// a submission in flight.
 inline std::atomic<std::uint64_t> arena_barriers{0}, arena_other_barriers{0}, hoists_in_flight{0};
+/// bbport: texture usage upgrades (Runtime::UpgradeUsage: lazy ShaderWrite/PixelFormatView) and
+/// the bytes of the textures they copied.
+inline std::atomic<std::uint64_t> texture_upgrades{0}, texture_upgrade_bytes{0};
 /// bbport: ordering fence waits encoded at encoder opens, those encoders, and the most on one
 /// encoder (Metal::OrderTracker::TakeWaitStats).
 inline std::atomic<std::uint64_t> order_waits{0}, order_encoders{0}, order_max_waits{0};

@@ -36,6 +36,9 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var saveProblem: String?
     @Published private(set) var running = false
     @Published private(set) var exitMessage: String?
+    /// The last session's crash report (the game stopped with an error), shown as a sheet.
+    @Published private(set) var crashReport: CrashReport?
+    @Published var showingCrashReport = false
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -84,7 +87,7 @@ final class LauncherModel: ObservableObject {
 
     func save() {
         config.apply(to: &confFile)
-        settings.apply(to: &settingsFile, includeRenderer: layout.hasMetalRenderer)
+        settings.apply(to: &settingsFile)
         if let port = OnlineSettings.port(from: p2pPortText) {
             online.p2pPort = port
         } else {
@@ -286,12 +289,45 @@ final class LauncherModel: ObservableObject {
     private func finished(_ status: Int32) {
         running = false
         load()
-        exitMessage = status == 0 ? nil : "Bloodborne stopped (status \(status))."
+        if status == 0 {
+            exitMessage = nil
+            crashReport = nil
+        } else {
+            let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development build"
+            let report = CrashReport(status: status, log: log, logName: logURL.lastPathComponent,
+                                     system: .current(appVersion: version), settings: settingsSummary,
+                                     home: NSHomeDirectory())
+            crashReport = report
+            exitMessage = report.summary
+            showingCrashReport = true
+        }
         onExit?(status)
     }
 
+    /// The settings most likely to matter in a crash report.
+    private var settingsSummary: [String] {
+        var items = ["output \(settings.output.iniValue)", "upscaler \(settings.upscaler.rawValue)"]
+        if settings.upscaler.usesPreset { items.append("quality \(Resolution.presetNames[settings.preset])") }
+        items += ["cap \(settings.frameCap.rawValue) FPS", settings.fullscreen ? "full screen" : "windowed"]
+        return items
+    }
+
     func showLog() {
-        GameRunner.run(["/usr/bin/open", "-a", "Console", logURL.path])
+        GameRunner.run(["/usr/bin/open", "-R", logURL.path])
+    }
+
+    func copyCrashReport() {
+        guard let crashReport else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(crashReport.report, forType: .string)
+    }
+
+    /// Copies the report (too long for a link) and opens a new GitHub issue to paste it into.
+    func reportOnGitHub() {
+        guard let crashReport else { return }
+        copyCrashReport()
+        NSWorkspace.shared.open(crashReport.issueURL)
     }
 
     func effect(_ key: String) -> Bool { settings.effects[key] ?? false }

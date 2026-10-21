@@ -24,9 +24,11 @@
 #                            or thd_token=keychain: item service bbport-huntersdream, account = the
 #                            online id (`scripts/online.py signin --keychain` stores it there)
 #   metal_hud=1              Apple's Metal Performance HUD (MTL_HUD_ENABLED=1)
+#   texture_compression=0    textures keep every usage, no lossless compression
+#                            (BB_LAZY_TEXTURE_USAGE=0; default 1, compressed)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
-    local line cap='' full='' hud='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
+    local line cap='' full='' hud='' compress='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
     local pool='' thd_id='' thd_token=''
     [[ -f $1 ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
@@ -45,6 +47,7 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^online_pool=(shadnet|huntersdream)$ ]]; then pool=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_online_id=(.+)$ ]]; then thd_id=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
     done < "$1"
     # Secrets kept in the login keychain instead of the file (`security find-generic-password`;
     # BB_KEYCHAIN_TOOL names another command, for tests). A lookup that finds nothing leaves the
@@ -83,5 +86,6 @@ bb_launch_settings() { # ini file
     if [[ $pool == huntersdream && -z ${BB_NET_BACKEND:-} ]]; then export BB_NET_BACKEND=thd; fi
     if [[ -n $thd_id && -z ${BB_THD_ONLINE_ID:-} ]]; then export BB_THD_ONLINE_ID=$thd_id; fi
     if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi
+    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
     return 0
 }

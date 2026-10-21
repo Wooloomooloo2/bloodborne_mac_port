@@ -2,9 +2,10 @@
 # Builds dist/Bloodborne.app and dist/Bloodborne-macOS-<version>.zip: a self-contained app for
 # release downloads (unlike scripts/macos/make_app.sh, which makes a launcher for this checkout).
 # Contains the built port (x86-64 game process, arm64 GPU host), universal copies of the
-# libraries, the launch scripts and a standalone Python for them. No game files: the player
-# picks their own game folder on first launch. Ad-hoc signed (not notarised): downloaded copies
-# are quarantined, see the README.
+# libraries, the launch scripts and a standalone Python for them. No Vulkan loader or MoltenVK:
+# the GPU host renders with Metal, and packaging stops if a binary still imports a vk* function.
+# No game files: the player picks their own game folder on first launch. Ad-hoc signed (not
+# notarised): downloaded copies are quarantined, see the README.
 #
 # usage: bash scripts/macos/package_app.sh [version]     (build first: bash build_macos.sh)
 #
@@ -13,9 +14,8 @@
 #   MacOS/bb-probe                game process (x86-64, Rosetta 2)
 #   MacOS/bbgpu-host              GPU process (arm64; owns the window, so the Dock shows the app)
 #   MacOS/bbgpu-host-macos27      the same with the guest range as an exec-time segment (macOS 27+)
-#   MacOS/bb-gpu-capabilities     GPU check used by run.sh
-#   Frameworks/*.dylib            universal: libbbgpu, SDL3, Vulkan loader, MoltenVK, FFmpeg
-#   Resources/port/               run.sh, scripts/*.py, patches/, MoltenVK_icd.json
+#   Frameworks/*.dylib            universal: libbbgpu, SDL3, FFmpeg
+#   Resources/port/               run.sh, scripts/*.py, patches/
 #   Resources/python/             standalone CPython (arm64) for the scripts
 #   Resources/licenses/           GPL text and third-party notices
 set -euo pipefail
@@ -28,7 +28,7 @@ py_release=20260924
 py_name=cpython-3.12.14+20260924-aarch64-apple-darwin-install_only_stripped.tar.gz
 py_sha256=c2edb321cd32ec2b170df208db0446dccc4398db602ca27cf2079098fb1f7d9d
 
-for f in out/bb-probe out/bb-gpu-capabilities out/gpu/libbbgpu.dylib out/bbgpu-host out/bbgpu-host-macos27 out/gpu-arm64/libbbgpu.dylib; do
+for f in out/bb-probe out/gpu/libbbgpu.dylib out/bbgpu-host out/bbgpu-host-macos27 out/gpu-arm64/libbbgpu.dylib; do
     [[ -f $f ]] || { echo "Missing $f: build first (bash build_macos.sh)." >&2; exit 1; }
 done
 
@@ -39,7 +39,7 @@ rm -rf "$app"
 mkdir -p "$contents/MacOS" "$contents/Frameworks" "$contents/Resources/port/scripts" "$contents/Resources/licenses"
 
 # Executables: library search goes to Frameworks/ only (the build's rpaths name this checkout).
-install -m755 out/bb-probe out/bb-gpu-capabilities out/bbgpu-host out/bbgpu-host-macos27 "$contents/MacOS/"
+install -m755 out/bb-probe out/bbgpu-host out/bbgpu-host-macos27 "$contents/MacOS/"
 set_rpath() { # file new-rpath
     local file=$1 path
     while read -r path; do
@@ -47,7 +47,7 @@ set_rpath() { # file new-rpath
     done < <(otool -l "$file" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }')
     install_name_tool -add_rpath "$2" "$file"
 }
-for exe in bb-probe bb-gpu-capabilities bbgpu-host bbgpu-host-macos27; do
+for exe in bb-probe bbgpu-host bbgpu-host-macos27; do
     set_rpath "$contents/MacOS/$exe" @executable_path/../Frameworks
 done
 
@@ -58,11 +58,10 @@ universal() { # name x86_64-file arm64-file
 }
 universal libbbgpu.dylib out/gpu/libbbgpu.dylib out/gpu-arm64/libbbgpu.dylib
 set_rpath "$contents/Frameworks/libbbgpu.dylib" @loader_path
-for lib in libSDL3.0 libvulkan.1 libavformat.61 libavcodec.61 libswscale.8 libswresample.5 libavutil.59; do
+for lib in libSDL3.0 libavformat.61 libavcodec.61 libswscale.8 libswresample.5 libavutil.59; do
     universal "$lib.dylib" "deps/x86_64/lib/$lib.dylib" "deps/arm64/lib/$lib.dylib"
 done
-install -m755 deps/arm64/lib/libMoltenVK.dylib "$contents/Frameworks/" # already universal
-# Every @rpath dependency must be in the bundle.
+# Every @rpath dependency must be in the bundle, and nothing may call Vulkan (Metal only).
 for file in "$contents"/MacOS/* "$contents"/Frameworks/*; do
     [[ $file == */MacOS/Bloodborne ]] && continue
     for arch in x86_64 arm64; do
@@ -73,19 +72,11 @@ for file in "$contents"/MacOS/* "$contents"/Frameworks/*; do
         if otool -arch "$arch" -L "$file" | awk 'NR > 1 { print $1 }' | grep -vE '^(@rpath/|/System/|/usr/lib/)'; then
             echo "$file ($arch) links a library outside the bundle and the system" >&2; exit 1
         fi
+        if nm -u -arch "$arch" "$file" 2>/dev/null | grep -q '^_vk'; then
+            echo "$file ($arch) imports Vulkan functions" >&2; exit 1
+        fi
     done
 done
-
-cat > "$contents/Resources/port/MoltenVK_icd.json" <<'EOF'
-{
-    "file_format_version": "1.0.0",
-    "ICD": {
-        "library_path": "../../Frameworks/libMoltenVK.dylib",
-        "api_version": "1.4.0",
-        "is_portability_driver": true
-    }
-}
-EOF
 
 # Launch scripts and patches (run.sh runs them; BB_PREBUILT=1 skips building).
 install -m755 run.sh "$contents/Resources/port/"
@@ -119,12 +110,11 @@ find "$py" -name __pycache__ -type d -prune -exec rm -rf {} +
 lic=$contents/Resources/licenses
 cp LICENSE "$lic/LICENSE-bloodborne-mac-port.txt"
 cp "$stdlib/LICENSE.txt" "$lic/LICENSE-Python.txt"
-for pair in SDL:LICENSE.txt Vulkan-Loader:LICENSE.txt Vulkan-Headers:LICENSE.md FFmpeg:COPYING.LGPLv2.1 \
-            FFmpeg:LICENSE.md VulkanMemoryAllocator:LICENSE.txt fmt:LICENSE magic_enum:LICENSE miniz:LICENSE \
-            robin-map:LICENSE xxHash:LICENSE zydis:LICENSE xbyak:COPYRIGHT; do
+for pair in SDL:LICENSE.txt Vulkan-Headers:LICENSE.md SPIRV-Cross:LICENSE FFmpeg:COPYING.LGPLv2.1 \
+            FFmpeg:LICENSE.md fmt:LICENSE magic_enum:LICENSE miniz:LICENSE robin-map:LICENSE \
+            xxHash:LICENSE; do
     cp "deps/src/${pair%%:*}/${pair#*:}" "$lic/LICENSE-${pair%%:*}-${pair#*:}"
 done
-tar -xOf deps/src/MoltenVK-macos.tar MoltenVK/LICENSE > "$lic/LICENSE-MoltenVK.txt"
 for pair in fsr-vulkan:LICENSE.txt fsr-vulkan:NOTICE.md half:LICENSE.txt imgui:LICENSE.txt sirit:LICENSE.txt \
             fonts:LICENSE-DejaVu.txt; do
     cp "gpu/third_party/${pair%%:*}/${pair#*:}" "$lic/LICENSE-${pair%%:*}-${pair#*:}"
@@ -185,8 +175,6 @@ EOF
 # The launcher window (launcher/, Swift): settings, folders, Play.
 bash scripts/macos/build_launcher.sh
 install -m755 out/launcher/Bloodborne "$contents/MacOS/Bloodborne"
-# The launcher offers the renderer choice only in builds with the Metal renderer.
-if [[ -d gpu/shadps4/video_core/renderer_metal ]]; then touch "$contents/Resources/port/metal-renderer"; fi
 
 # Ad-hoc signature (arm64 code must be signed to run; install_name_tool invalidated the build's).
 find "$contents/MacOS" "$contents/Frameworks" "$py" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) -print0 |

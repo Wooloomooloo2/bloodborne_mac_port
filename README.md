@@ -15,9 +15,9 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-18)
+## Status (2026-10-19)
 
-**Current version: [mac-v0.5.1](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.1)** (download the app, or build it as below).
+**Current version: [mac-v0.5.2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.2)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, or upscaled with
@@ -65,6 +65,20 @@ got it to 60 and beyond, in order:
 
 Also fixed along the way: a MoltenVK crash from two threads sharing one command pool, and
 geometry corruption at 1440p (scenes above 1080p now use live resolution changes).
+
+### New in 0.5.2: 16 GB Macs, controller menu
+
+- **Less GPU memory, for 16 GB Macs** (#19). The game's GPU memory block is now 6 GB on every
+  Mac, sized to what the game actually uses (it was 8 GB on 16 GB Macs and up to 16 GB on larger
+  ones), and textures are budgeted around it. On 16 GB Macs the game sat right at macOS's GPU
+  memory limit, which can make it very slow. With a 16 GB Mac's limits simulated on an M4 Max,
+  peak GPU memory drops from ~11.5 GB to 9.6 GB at a steady 60 FPS.
+- **A possible fix for the black loading screen** (#18): the order of the game's compute
+  submissions could leave the GPU waiting on work that was never queued.
+- **The in-game menu works with a controller again.** L3+R3 opens it, the D-pad and
+  Cross/Circle move around it, and the D-pad moves sliders such as Sharpness.
+- **The launcher can be turned back on from the game**: the in-game menu's Display tab has
+  "Show the launcher when Bloodborne opens".
 
 ### New in 0.5.1: fixes
 
@@ -169,8 +183,9 @@ the log.
 
 ### What's next
 
-- **0.5.2: cleanup.** MoltenVK, the Vulkan loader and the unused FSR 4 code leave the app
-  (smaller download); keyboard and mouse controls.
+- **0.5.3: cleanup** (done): MoltenVK, the Vulkan loader and the unused FSR 4 code are gone
+  from the app, a 4.5 MB smaller download (51.3 → 46.7 MB). Next for 0.5.3: keyboard and mouse
+  controls.
 - **Fewer Metal render passes.** Profiling found ~408 Metal encoders per frame (190 render
   passes). Each extra render pass costs ~13–16 µs of GPU time on Apple GPUs regardless of
   resolution — about 3 ms per frame — and leaves the GPU idle in periodic gaps. Merging passes
@@ -179,6 +194,7 @@ the log.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
 Details:
+- Roadmap (released, next, later): [docs/ROADMAP.md](docs/ROADMAP.md)
 - Plan, design decisions and porting checklist: [docs/MACOS_PORT.md](docs/MACOS_PORT.md)
 - Known issues and planned refinements: [docs/MACOS_BACKLOG.md](docs/MACOS_BACKLOG.md)
 - Every test and measurement: [docs/FINDINGS.md](docs/FINDINGS.md)
@@ -194,10 +210,10 @@ Details:
   PS4 libraries. macOS specifics: guest TLS via a reserved pthread TSD slot, guest-visible
   memory kept below 1 TiB, Mach-based thread inspection.
 - **GPU** (`gpu/`): the shadPS4 video core and shader recompiler, built as
-  `libbbgpu.dylib`, rendering through native Metal (`renderer_metal/`). By default it runs in
+  `libbbgpu.dylib`, rendering through native Metal (`renderer_metal/`). It runs in
   `bbgpu-host`, a **native arm64 process** that maps the game's memory at the same addresses
-  (`host/`, `docs/DESIGN_NATIVE_GPU_PROCESS.md`); `BB_GPU_PROCESS=0` runs everything in one
-  process.
+  (`host/`, `docs/DESIGN_NATIVE_GPU_PROCESS.md`). If it cannot start, the game stops with a
+  "Crash:" line that the launcher shows in a crash report.
 - **Upscalers:** MetalFX temporal upscaling, FSR 3.1 (AMD FidelityFX on a Metal back end,
   `gpu/shim/ffx_metal/`) and TAA. Planned: zero-copy guest memory on unified memory.
 - Inherited from upstream: high-frame-rate community patches, synthetic motion vectors and
@@ -268,7 +284,7 @@ example a 60 FPS patch made for jailbroken consoles) is rejected: this port appl
 git clone --recursive https://github.com/Wooloomooloo2/bloodborne_mac_port.git
 cd bloodborne_mac_port
 
-# 1. Build pinned dependencies (SDL3, Vulkan loader, FFmpeg, ...) and MoltenVK into deps/:
+# 1. Build pinned dependencies (SDL3, FFmpeg, SPIRV-Cross, Vulkan-Headers, ...) into deps/:
 #    x86-64 for the game process, arm64 for the native GPU host (once)
 bash scripts/macos/bootstrap_deps.sh
 BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh
@@ -447,9 +463,8 @@ cd bloodborne_mac_port
 BB_GAME_DIR=/path/to/CUSA03173 bash run.sh
 ```
 
-`run.sh` prepares the game image, rebuilds anything whose sources changed, and points the
-Vulkan loader at the bundled MoltenVK. It uses the same saves and settings as the Finder
-launcher.
+`run.sh` prepares the game image and rebuilds anything whose sources changed. It uses the same
+saves and settings as the Finder launcher.
 
 ### In the game
 
@@ -467,7 +482,7 @@ launcher.
 | Path | Contents |
 |---|---|
 | `src/` | Loader (`probe.c`) and PS4 HLE runtime |
-| `gpu/` | shadPS4-derived Vulkan video core, draw pipeline, upscaler integration |
+| `gpu/` | shadPS4-derived video core with the native Metal renderer, draw pipeline, upscalers |
 | `host/` | Native arm64 GPU host process (`bbgpu-host`) and the shared rings |
 | `scripts/` | Eboot preparation, linking, patch compiler (`patches.py`); `scripts/macos/` dependency bootstrap |
 | `patches/` | Community XML patches for Bloodborne 1.09 |
@@ -492,7 +507,8 @@ This port stands entirely on the work of others:
 - **[shadPS4](https://github.com/shadps4-emu/shadPS4)** project — the Vulkan video core and
   shader recompiler (`gpu/shadps4/`, GPL-2.0-or-later).
 - **FireBurn** — [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan), the native Vulkan
-  FSR 3.1 / FSR 4 runtime (MIT; includes AMD FidelityFX SDK sources under MIT).
+  FSR 3.1 / FSR 4 runtime the port used until 0.5.0; FSR 3.1 is still built from its AMD
+  FidelityFX SDK sources (MIT).
 - **Omar Cornut** — [Dear ImGui](https://github.com/ocornut/imgui), used for the in-game overlay (MIT).
 - **Alex Barney (Thealexbarney)** — [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9),
   AT9 audio decoding (MIT).
@@ -502,9 +518,9 @@ This port stands entirely on the work of others:
   library (MIT).
 - **AMD** — GCN PM4/register headers in `gpu/third_party/gcn/` (MIT-style AMD license).
 - **DejaVu fonts** (Bitstream Vera license) — overlay font.
-- **[MoltenVK](https://github.com/KhronosGroup/MoltenVK)** (Apache-2.0), and the dependencies
-  built by `scripts/macos/bootstrap_deps.sh`: SDL3, Vulkan-Headers / Vulkan-Loader, fmt,
-  xxHash, miniz, Zydis, FFmpeg, magic_enum, robin-map, Vulkan Memory Allocator, xbyak, Boost.
+- **[MoltenVK](https://github.com/KhronosGroup/MoltenVK)** (Apache-2.0), which ran the renderer
+  until 0.5.0, and the dependencies built by `scripts/macos/bootstrap_deps.sh`: SDL3,
+  Vulkan-Headers, SPIRV-Cross, fmt, xxHash, miniz, FFmpeg, magic_enum, robin-map, Boost.
 - **Community patch authors** — Kyo, Lance McDonald, illusion, emoose, auser1337 and others
   for the 60 FPS, camera and engine patches in `patches/Bloodborne.xml`.
 - **zackcage6** — testing and bug reports for the Windows port.

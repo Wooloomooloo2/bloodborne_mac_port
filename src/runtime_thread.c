@@ -54,7 +54,7 @@ static uint64_t tls_offset(void) { return (tls_memsz+tls_align-1)&~(tls_align-1)
 #ifdef __APPLE__
 /* Must equal MACOS_GS_SLOT in scripts/link_modules.py and scripts/link_libc.py. Keys are
  * handed out lowest-free first from 256 (the first is 258 under Rosetta, also with SDL3,
- * AppKit and MoltenVK loaded), so a constructor in the executable, which runs after every
+ * AppKit loaded), so a constructor in the executable, which runs after every
  * linked dylib's initializers, takes spare keys until it holds this one, then frees them. */
 #define TCB_KEY 384
 static int tcb_key_reserved;

@@ -73,6 +73,8 @@ struct LayerConfig {
 /// Configures a CAMetalLayer (void* = CAMetalLayer*, e.g. SDL_Metal_GetLayer): device, pixel
 /// format, sRGB colorspace, maximumDrawableCount, displaySyncEnabled, framebufferOnly.
 void ConfigureLayer(Device& device, void* layer, const LayerConfig& config);
+/// maximumDrawableCount (2 or 3) after ConfigureLayer, e.g. when the window enters full screen.
+void SetMaximumDrawables(void* layer, u32 count);
 
 struct Drawable {
     Object drawable;     ///< id<CAMetalDrawable> (retained)
@@ -119,7 +121,10 @@ public:
     /// presentDrawable (if `drawable`, an id<CAMetalDrawable>, is non-null), then commit;
     /// `on_complete` (may be empty) runs on a Metal completion thread once the command buffer
     /// completed (also on error).
-    void Commit(void* command_buffer, void* drawable, std::function<void()> on_complete);
+    /// `min_duration` > 0 (seconds): presentDrawable:afterMinimumDuration: (the previous drawable
+    /// stays on screen at least that long), for even frame pacing on variable-refresh displays.
+    void Commit(void* command_buffer, void* drawable, std::function<void()> on_complete,
+                double min_duration = 0);
     /// Blocks until nothing is in flight.
     void WaitIdle();
     /// Blocks until nothing is in flight or `milliseconds` passed; true when idle.

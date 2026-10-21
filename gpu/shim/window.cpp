@@ -1,5 +1,5 @@
 #include <cstdio>
-// bbport: SDL3 window for the Vulkan swapchain (X11, Wayland or Metal on macOS).
+// bbport: SDL3 window for the presenter (a CAMetalLayer on macOS; X11 or Wayland elsewhere).
 #include <cstdlib>
 #include <cstring>
 #include <SDL3/SDL.h>
@@ -22,14 +22,17 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
 #ifdef __APPLE__
+    // A Metal window: SDL loads no Vulkan library for it (the app bundles none).
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_METAL_BOOLEAN, true);
     // Retina: the Metal layer gets the display's pixels, not its points (a 1496x938 point full
     // screen is 2992x1876 pixels; without this the picture was presented at half size and
     // stretched). BB_HIGH_DPI=0 keeps point size.
     const char* high_dpi = std::getenv("BB_HIGH_DPI");
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN,
                            !(high_dpi && high_dpi[0] == '0'));
+#else
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
 #endif
     const char* fullscreen = std::getenv("BB_FULLSCREEN");
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen && fullscreen[0] == '1');
@@ -41,7 +44,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     const char* driver = SDL_GetCurrentVideoDriver();
     const SDL_PropertiesID wp = SDL_GetWindowProperties(window);
 #ifdef __APPLE__
-    // MoltenVK presents to a CAMetalLayer (VK_EXT_metal_surface), as in shadPS4.
+    // The presenter draws into the view's CAMetalLayer.
     (void)wp;
     window_info.type = WindowSystemType::Metal;
     metal_view = SDL_Metal_CreateView(window);
@@ -111,6 +114,7 @@ void WindowSDL::UpdateVisible() {
     // NSWindow's occlusionState, OCCLUDED/EXPOSED).
     const SDL_WindowFlags flags = SDL_GetWindowFlags(window);
     const bool now = !(flags & (SDL_WINDOW_MINIMIZED | SDL_WINDOW_HIDDEN | SDL_WINDOW_OCCLUDED));
+    fullscreen.store((flags & SDL_WINDOW_FULLSCREEN) != 0, std::memory_order_relaxed);
     if (now != visible.exchange(now, std::memory_order_relaxed)) {
         std::printf("Window: %s\n", now ? "visible: presenting"
                                          : "minimised, hidden or occluded: frames not presented");
@@ -149,6 +153,12 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
             continue;
         }
+        // SDL sends button events only for opened gamepads. The game reads the pad in bb-probe
+        // (runtime_pad.c), so in the GPU process nothing else opens it: without this the menu
+        // never saw L3+R3 or its gamepad navigation.
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
+            SDL_OpenGamepad(event.gdevice.which);
+        }
         if (BbOverlay::HandleEvent(event)) {
             continue;
         }
@@ -171,6 +181,8 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_SHOWN:
         case SDL_EVENT_WINDOW_OCCLUDED:
         case SDL_EVENT_WINDOW_EXPOSED:
+        case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
+        case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             UpdateVisible();
             break;
         case SDL_EVENT_QUIT:

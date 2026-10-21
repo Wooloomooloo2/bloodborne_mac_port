@@ -141,6 +141,10 @@ void ConfigureLayer(Device& device, void* layer, const LayerConfig& config) {
     l.framebufferOnly = config.framebuffer_only;
 }
 
+void SetMaximumDrawables(void* layer, u32 count) {
+    ((__bridge CAMetalLayer*)layer).maximumDrawableCount = count;
+}
+
 Drawable NextDrawable(void* layer) {
     id<CAMetalDrawable> drawable = [(__bridge CAMetalLayer*)layer nextDrawable];
     if (drawable == nil) {
@@ -275,9 +279,12 @@ void PresentQueue::WaitForDeviceTick(void* command_buffer, u64 device_tick) {
 }
 
 void PresentQueue::Commit(void* command_buffer, void* drawable,
-                          std::function<void()> on_complete) {
+                          std::function<void()> on_complete, double min_duration) {
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)command_buffer;
-    if (drawable != nullptr) {
+    if (drawable != nullptr && min_duration > 0) {
+        [cmd presentDrawable:(__bridge id<CAMetalDrawable>)drawable
+            afterMinimumDuration:min_duration];
+    } else if (drawable != nullptr) {
         [cmd presentDrawable:(__bridge id<CAMetalDrawable>)drawable];
     }
     {

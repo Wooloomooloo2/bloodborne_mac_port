@@ -9,6 +9,7 @@
 #include "video_core/renderer_metal/mtl_texture.h"
 #include "video_core/renderer_metal/vk_to_mtl.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
+#include "video_core/texture_cache/image.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -118,6 +119,17 @@ void SceneTargets::Copy(Entry& e, VideoCore::Image& original, bool to_native) {
     }
     // Joins the texture binding helper; NativeAccess skips the image (copying).
     runtime.AccessImage(&original, to_native);
+    // bbport: the depth resample reads the stencil plane through a stencil view of its source,
+    // which needs PixelFormatView: the native image (lazy usages) and the proxy get it first.
+    if (ShaderResampled(original) &&
+        Metal::VkToMtl::HasStencilPixelFormat(original.backing->desc.pixel_format)) {
+        if (!original.backing->desc.format_views && original.allowed_format_views) {
+            runtime.UpgradeUsage(&original, VideoCore::Image::UsageFormatViews);
+        }
+        if (!e.desc.format_views) {
+            UpgradeProxy(e);
+        }
+    }
     void* const proxy = e.image.Get();
     void* const native = original.GetImage();
     void* const src = to_native ? proxy : native;
@@ -188,6 +200,13 @@ SceneTargets::Entry& SceneTargets::Get(VideoCore::ImageId id, u32 level) {
         desc.layers = 1;
         desc.samples = 1;
         desc.render_target = true;
+        // bbport: proxies are only rendered to, copied and read (storage bindings use the native
+        // image), so no ShaderWrite and Metal compresses them; PixelFormatView as the original's
+        // backing has it, added by View when a view in another pixel format needs it.
+        if (VideoCore::LazyTextureUsage()) {
+            desc.shader_write = false;
+        }
+        entry->desc = desc;
         const auto label = fmt::format("scene proxy {:#x} level {}", original.info.guest_address,
                                        level);
         entry->image = Metal::CreateTexture(device, desc, label, nullptr);
@@ -209,8 +228,13 @@ void* SceneTargets::View(Entry& e, const VideoCore::Image& original,
     vk::Format format = original.info.pixel_format;
     if (!original.info.props.is_depth) {
         const u32 requested = Metal::VkToMtl::PixelFormat(info.format);
+        if (requested && !e.desc.format_views && original.allowed_format_views &&
+            Metal::SafeViewPixelFormat(texture_format, requested, false) != requested &&
+            Metal::SafeViewPixelFormat(texture_format, requested, true) == requested) {
+            UpgradeProxy(e);
+        }
         const u32 safe = requested ? Metal::SafeViewPixelFormat(texture_format, requested,
-                                                                original.backing->desc.format_views)
+                                                                e.desc.format_views)
                                    : texture_format;
         if (safe == requested) {
             pixel_format = requested;
@@ -248,6 +272,28 @@ bool SceneTargets::ProxyCurrent(const VideoCore::Image& image, u32 level, u32 le
     return it != entries.end() && it->second->state.valid;
 }
 void SceneTargets::PrepareSample(const VideoCore::Image&, u32) {}
+void SceneTargets::UpgradeProxy(Entry& e) {
+    // The old texture and views live until the copy's command buffer completes.
+    scheduler.EndRendering();
+    e.desc.format_views = true;
+    Metal::Object fresh = Metal::CreateTexture(device, e.desc, "scene proxy", nullptr);
+    ASSERT_MSG(fresh, "Scene proxy {}x{} not created", e.width, e.height);
+    std::vector<Metal::Object> retired;
+    retired.push_back(std::move(e.image));
+    for (auto& [key, view] : e.views) {
+        retired.push_back(std::move(view));
+    }
+    e.views.clear();
+    scheduler.Record([src = retired.front().Get(), dst = fresh.Get(), w = e.width, h = e.height,
+                      retired = std::move(retired)](Metal::Encoder& enc) mutable {
+        enc.CopyTexture(src, 0, 0, {}, dst, 0, 0, {}, {w, h, 1});
+        for (auto& object : retired) {
+            enc.KeepAlive(std::move(object));
+        }
+    });
+    e.image = std::move(fresh);
+    BbStats::texture_upgrades.fetch_add(1, std::memory_order_relaxed);
+}
 std::optional<SceneTargets::Target> SceneTargets::SampleProxy(
     const VideoCore::Image& image, const VideoCore::ImageViewInfo& info) {
     const u32 level = info.range.base.level;

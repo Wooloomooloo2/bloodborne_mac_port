@@ -603,6 +603,19 @@ void Runtime::CopyRegions(VideoCore::Image* src, VideoCore::Image* dst,
     if (regions.empty() || !HasMetalFormat(*src) || !HasMetalFormat(*dst)) {
         return;
     }
+    // bbport: a copy between pixel formats views one side as the other: an image without its
+    // lazy PixelFormatView usage gets it (as before lazy usages) rather than a staging bounce.
+    for (VideoCore::Image* side : {src, dst}) {
+        const VideoCore::Image* other = side == src ? dst : src;
+        const auto& own = side->backing->desc;
+        const u32 wanted = other->backing->desc.pixel_format;
+        if (own.pixel_format != wanted && !own.format_views && side->allowed_format_views &&
+            Metal::SafeViewPixelFormat(own.pixel_format, wanted, false) != wanted &&
+            Metal::SafeViewPixelFormat(own.pixel_format, wanted, true) == wanted) {
+            UpgradeUsage(side, VideoCore::Image::UsageFormatViews);
+            break;
+        }
+    }
     const Metal::TextureDesc& sd = src->backing->desc;
     const Metal::TextureDesc& dd = dst->backing->desc;
     void* src_texture = src->GetImage();
@@ -1134,6 +1147,51 @@ void Runtime::SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool c
     }
 
     backing = new_backing;
+}
+
+void Runtime::UpgradeUsage(VideoCore::Image* image, u32 needed) {
+    BeforeImageAccess();
+    (void)needed;
+    auto* const old_backing = image->backing;
+    // Both usages at once: an image written by shaders is often read in another pixel format
+    // too (the game's streamed textures: written as RGBA8 uint, sampled as unorm or sRGB), and
+    // each upgrade replaces the texture.
+    image->texture_desc.shader_write = image->allowed_shader_write;
+    image->texture_desc.format_views = image->allowed_format_views;
+    auto& fresh = image->CreateBacking(old_backing->num_samples);
+    scheduler.EndRendering();
+    AccessImage(image, false);
+    const Metal::TextureDesc& d = fresh.desc;
+    // The old backing's texture and views live until the copy's command buffer completes
+    // (commands recorded before it may still use them); the backing is never found again.
+    void* const src = old_backing->texture.Get();
+    std::vector<Metal::Object> retired;
+    retired.push_back(std::move(old_backing->texture));
+    for (const auto view_id : old_backing->image_view_ids) {
+        retired.push_back(std::move((*image->slot_image_views)[view_id].view));
+        image->slot_image_views->erase(view_id);
+    }
+    old_backing->image_view_ids.clear();
+    old_backing->image_view_infos.clear();
+    old_backing->last_view = 0;
+    old_backing->num_samples = 0;
+    scheduler.Record([src, dst = fresh.texture.Get(), d, retired = std::move(retired)](
+                         Metal::Encoder& e) mutable {
+        const bool is_3d = d.type == Metal::TextureType::Tex3D;
+        for (u32 level = 0; level < d.levels; ++level) {
+            const Metal::Size3 size{std::max(d.width >> level, 1u), std::max(d.height >> level, 1u),
+                                    is_3d ? std::max(d.depth >> level, 1u) : 1u};
+            for (u32 slice = 0; slice < d.layers; ++slice) {
+                e.CopyTexture(src, level, slice, {}, dst, level, slice, {}, size);
+            }
+        }
+        for (auto& object : retired) {
+            e.KeepAlive(std::move(object));
+        }
+    });
+    image->backing = &fresh;
+    BbStats::texture_upgrades.fetch_add(1, std::memory_order_relaxed);
+    BbStats::texture_upgrade_bytes.fetch_add(fresh.allocated_size, std::memory_order_relaxed);
 }
 
 void Runtime::AccessBuffer(const VideoCore::Buffer* handle, u64 offset, u64 size, bool write,

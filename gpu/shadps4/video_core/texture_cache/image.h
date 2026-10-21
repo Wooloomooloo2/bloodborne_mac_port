@@ -38,6 +38,9 @@ enum ImageFlagBits : u32 {
 };
 DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 
+/// bbport: lazy texture usages (Image::allowed_shader_write); BB_LAZY_TEXTURE_USAGE=0 turns them off.
+bool LazyTextureUsage();
+
 struct Image {
     explicit Image(Metal::Device& device, Vulkan::Runtime& runtime,
                    Common::SlotVector<ImageView>& slot_image_views, const ImageInfo& info);
@@ -131,6 +134,22 @@ public:
     u32 supported_samples_mask = 1;
     /// The texture description backings are made from (samples are per backing).
     Metal::TextureDesc texture_desc{};
+    /// bbport: the ShaderWrite and PixelFormatView usages the image may need. Metal compresses
+    /// private textures losslessly only without both, so single-sample backings are made without
+    /// them and get both, once, when a storage binding or a view in another pixel format needs
+    /// one (NeededUsage, Runtime::UpgradeUsage). BB_LAZY_TEXTURE_USAGE=0: always both (as before).
+    bool allowed_shader_write = false;
+    bool allowed_format_views = false;
+    static constexpr u32 UsageShaderWrite = 1;
+    static constexpr u32 UsageFormatViews = 2;
+    /// The usages (Usage*) a view `view_info` of the current backing needs and it lacks.
+    [[nodiscard]] u32 NeededUsage(const ImageViewInfo& view_info) const;
+    /// The usages (Usage*) the current backing has.
+    [[nodiscard]] u32 CurrentUsage() const;
+    /// A new image (no contents, no views yet) that needs usages (Usage*): the binding that
+    /// creates it, or the image it replaces (a larger mip chain), needs or had them. Its backing
+    /// is made again with both (no copy, no upgrade later).
+    void ApplyNewUsage(u32 needed);
 
     struct BackingImage {
         Metal::Object texture; ///< id<MTLTexture>

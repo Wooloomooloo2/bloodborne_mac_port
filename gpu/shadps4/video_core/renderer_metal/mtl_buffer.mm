@@ -3,9 +3,12 @@
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <mach/mach.h>
+#include <objc/runtime.h>
 
 #include "video_core/renderer_metal/mtl_buffer.h"
 #include "video_core/renderer_metal/mtl_device.h"
@@ -63,7 +66,60 @@ id<MTLBuffer> NewLazyBuffer(id<MTLDevice> mtl_device, const Device& device, u64 
     return buffer;
 }
 
+constexpr u64 WindowStep = u64{2} << 30;
+constexpr u64 WindowSize = u64{4} << 30;
+/// The key of a buffer's windows (an NSMutableDictionary: window index -> id<MTLBuffer>).
+char windows_key;
+
 } // namespace
+
+bool CanLowerOffsets(void* buffer) {
+    return buffer != nullptr && ((__bridge id<MTLBuffer>)buffer).contents != nullptr;
+}
+
+BufferRef LowOffset(BufferRef ref) {
+    if (ref.offset < WindowStep || !CanLowerOffsets(ref.buffer)) {
+        return ref;
+    }
+    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
+    const u64 index = ref.offset / WindowStep;
+    const u64 start = index * WindowStep;
+    static std::mutex mutex;
+    std::scoped_lock lock{mutex};
+    NSMutableDictionary* windows = objc_getAssociatedObject(buffer, &windows_key);
+    if (windows == nil) {
+        windows = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(buffer, &windows_key, windows, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    id<MTLBuffer> window = windows[@(index)];
+    if (window == nil) {
+        @autoreleasepool {
+            // The buffer owns the memory (its deallocator frees it) and the windows: none outlives it.
+            window = [buffer.device
+                newBufferWithBytesNoCopy:static_cast<u8*>(buffer.contents) + start
+                                  length:std::min<u64>(WindowSize, buffer.length - start)
+                                 options:buffer.resourceOptions
+                             deallocator:nil];
+            if (window == nil) {
+                static bool logged = false;
+                if (!logged) {
+                    logged = true;
+                    std::fprintf(stderr, "Metal: no window at %llu GiB of %s; offset kept\n",
+                                 static_cast<unsigned long long>(start >> 30),
+                                 buffer.label.UTF8String ?: "a buffer");
+                }
+                return ref;
+            }
+            window.label = [NSString stringWithFormat:@"%@ window %llu GiB", buffer.label ?: @"",
+                                                      static_cast<unsigned long long>(start >> 30)];
+            windows[@(index)] = window;
+            std::printf("Metal: window at %llu GiB of %s (32-bit index/indirect offsets)\n",
+                        static_cast<unsigned long long>(start >> 30),
+                        buffer.label.UTF8String ?: "a buffer");
+        }
+    }
+    return {(__bridge void*)window, ref.offset - start};
+}
 
 Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::string_view label,
                     u64* gpu_address, u8** contents) {

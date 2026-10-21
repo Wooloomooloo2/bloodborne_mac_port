@@ -107,7 +107,8 @@ public:
     void InvalidateMemory(VAddr addr, size_t size);
 
     /// Marks an image as dirty if it exists at the provided address.
-    void InvalidateMemoryFromGPU(VAddr address, size_t max_size);
+    /// `writer`: the writing shader's hash (0 for a DMA copy), for BB_LOG_UPLOAD_MB.
+    void InvalidateMemoryFromGPU(VAddr address, size_t max_size, u64 writer = 0);
 
     /// Evicts any images that overlap the unmapped range.
     void UnmapMemory(VAddr cpu_addr, size_t size);
