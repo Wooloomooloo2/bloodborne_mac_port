@@ -16,8 +16,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
 3. Build it in stages, the costliest path first, with MoltenVK kept as the fallback.
 4. Meanwhile: the M2 Max 2–3 FPS report (issue #2), an earlier shader compile start, a native
    Mac launcher built for more than one game.
-5. Later: merge upstream bbport 0.5/0.6 (native game settings, online play, mouse look, aspect
-   ratios).
+5. Later: merge the rest of upstream bbport 0.5/0.6 (native game settings, mouse look, aspect
+   ratios). Online play came in on 2026-10-17 (branch online-shadnet: gpu/bbnet, src/runtime_net.c).
 
 ## 1. Stability
 
@@ -754,6 +754,58 @@ Each item: what was done for now, what the refinement is, and where it lives.
   `OrbisImeOption` PASSWORD (bit 4) masks the text as dots (`bbgpu_text_input_begin` gained the
   flag; `BbGpuTextBegin.flags`). Game input is held neutral while the box is open, so Backspace
   (the touchpad) does not reach the game.
+- **Co-op with Windows-port and mainline shadPS4 players never connected; module replaced
+  2026-10-17 (online-shadnet).** A Beckoning Bell created its room and resolved the peer, but
+  NpSignaling's offers (every 500 ms for 30 s) were never answered (`SIGNALING_ERROR_TIMEOUT`).
+  Upstream bbport's module is the shadp2p tree, which frames P2P datagrams as
+  `[src vport][dst vport] + payload`; mainline shadPS4 v0.20.0 and the Windows port use
+  `core/net/p2p_codec.cpp`'s FramingCodec (`[0xFF][flags|kind][vports][communication id]`, P2P
+  crypto), so the two could not parse each other. `gpu/bbnet/shadps4` is now mainline v0.20.0's
+  network tree (its P2P transport included; macOS uses its kqueue path, epoll-shim is gone),
+  `tests/test_p2p_codec.cpp` pins the frame bytes, `p2p_port=` / `BB_P2P_PORT` picks the UDP port
+  (3658 by default). First try on the new tree: 631 offers out, none in; the user's router is a
+  symmetric NAT (random external port per flow, answers only from the host sent to), so the port
+  the signaling server told the peer (51566) was reachable by the server alone. Now the module
+  also UPnP-forwards the router port the STUN echo reports to the bound port (HandleStunEcho).
+  The router accepted the mapping, but the friend's router randomizes too, so neither side's
+  offers arrive on shadNet. The user's Windows co-op (same router) ran on The Hunter's Dream
+  pool, whose service relays: its backend (`gpu/bbnet/thd`, from the Windows port) is in,
+  `online_pool=huntersdream` with a Discord-linked account (`scripts/online.py signin`).
+  *Open:* a real co-op session on that pool from this port; the shadNet pool stays limited to
+  reachable routers; stream (TCP-over-UDP) traffic if the game uses it beyond signaling and
+  datagrams; the Windows port's live-map patch (`BB_BRIDGE_LIVE_MAP`) is not ported.
+- **The Hunter's Dream pool: summon signs were never requested. Fixed 2026-10-17 (online-shadnet).**
+  As a guest the sign posted fine (`summon_messenger/create` 200) but no host ever requested it:
+  no `guest_invite` event, nothing on the P2P port. The backend's client field (User-Agent,
+  `BB_CLIENT_VERSION`, default "BloodBorneButPc") is what the server tells clients apart by; with
+  the Windows port's "bbport 1.9.1" a bbhost host requested the sign within a minute, the relay
+  handshake ran and the game joined the room (coop8.log). run.sh now sets it for that pool.
+  Still open on that pool: about one in six `sceHttp` calls to thehuntersdream.com:18671 fails
+  with cpp-httplib error 8 (SSL connection failed), intermittently, including sign-ins; the
+  backend's own httplib client (keep-alive) never failed in the same runs.
+  *2026-10-18, The Hunter's Dream operators' feedback (via the user):* the server now supports
+  long polling on `/np/events/poll` and asked clients to use it (99% of their load was empty
+  250 ms polls), to send play logs no more often than the game's default or 45-60 s, and to keep
+  a distinct `User-Agent` per client. Done: `PollerMain` sends `WaitMs` 25000 from the first
+  poll, keeps `min(25000, WaitMaxMs)` from each answer, drops back to the 250 ms pace when an
+  answer carries no `WaitMaxMs`, polls again at once after every answer, backs off 1 s to 30 s
+  with ±20 % jitter on errors, once a minute after a 401, on one kept-alive connection whose read
+  timeout is the wait + 5 s (connect/TLS stays at 5 s); `PollerStop` cuts a held poll short
+  (`httplib::Client::stop`) so a restarted poller never overlaps it. The play log needs nothing:
+  this port sends it at the game's pace (47 uploads in 67 min of coop9.log, median 70 s apart);
+  the 5 s rhythm they see from bbport is the Windows port's live-map bridge, not ported here.
+  Identity: `bbport-mac <latest mac-v tag>` (run.sh), as they asked, instead of the Windows
+  port's string. *Open:* whether a server-side allow-list needs the new name added (the first
+  sign on the new name tells), and the ss.info-driven tuning they plan.
+- **Online play: the review's security points (PR 9, 2026-10-17).** Done on the branch: HTTPS
+  verification stays on where the game loaded Sony's CAs (http.cpp; upstream bypassed it);
+  secrets from the login keychain (`shadnet_password=keychain`, `thd_token=keychain`,
+  `online.py keychain` / `signin --keychain`), owner-only bbport.ini when a secret is in clear and
+  a launch warning otherwise; dependencies pinned to commits / the MoltenVK tarball to a SHA-256;
+  epoll-shim out of the bootstrap; the Discord device name no longer carries the hostname;
+  README section on what is exposed. Not fixable here: shadNet's protocol is plain TCP (the
+  server has only an "Unsecured" listener) and its WebAPI plain HTTP. For the maintainer: the
+  client identity strings, GPL-3 of `gpu/bbnet/thd`, `BB_NET` default and bundling the module.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or

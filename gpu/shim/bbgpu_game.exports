@@ -1,3 +1,15 @@
 _bbgpu_*
 __ZN6Shader12RunSrtWalkerEPKjS1_Pj
 __ZN6Shader18RegisterWalkerCodeEPKhm
+# The online module (gpu/bbnet, libbbnet.dylib) links shadPS4's common code from here.
+__Z16assert_fail_implv
+__ZN6Common2FS11GetUserPathE*
+__ZN6Common15GetLastErrorMsgEv
+__ZN6Common3Log9ShouldLogE*
+__ZN6Common3Log5WriteE*
+__ZN6Common20SetCurrentThreadNameEPKc
+__ZN6Common7ToLowerE*
+__ZN9Libraries6Kernel7__ErrorEv
+__ZN9Libraries6Kernel30sceKernelGetCompiledSdkVersionEPi
+__ZN9Libraries6Kernel23sceKernelGetProcessTimeEv
+__ZN9Libraries6Kernel15sceKernelUsleepEj
