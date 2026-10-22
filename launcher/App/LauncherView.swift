@@ -21,6 +21,18 @@ struct LauncherView: View {
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                Divider().frame(height: 16)
+                if model.isCheckingForUpdates {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Check for Updates…") {
+                        model.checkForUpdates(quiet: false)
+                    }
+                    .controlSize(.small)
+                }
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -120,25 +132,6 @@ struct LauncherView: View {
                               choose: model.chooseGameFolder, reset: model.resetGameFolder)
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
-                }
-                Section("Updates") {
-                    HStack {
-                        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-                            ?? Bundle.main.infoDictionary?["CFBundleVersion"] as? String
-                            ?? "development build"
-                        Text("Current version: \(version)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if model.isCheckingForUpdates {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Button("Check for Updates…") {
-                                model.checkForUpdates(quiet: false)
-                            }
-                            .controlSize(.small)
-                        }
-                    }
                 }
             }
             .formStyle(.grouped)
