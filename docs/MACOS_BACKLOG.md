@@ -599,6 +599,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   hoist the remaining copies; (2) put consecutive dispatches in one compute encoder; (3) the 47
   tessellated draws per frame each split a pass (MoltenVK's emulation): batch them or emulate
   tessellation ourselves; (4) attachment-less vertex-only passes (~20/frame) folded together.
+  *(3) done on Metal (2026-10-21, FINDINGS "Tessellation runs hold plain draws"):* plain draws
+  wait in tessellation runs; the clinic's lighting pass reopened 82 → ~7 times per frame (+14%
+  on an M3 Pro). Left: one reopen per run whose pass drew before its first tessellated draw
+  (hoist the kernels to the pass start).
   *0.5.3 plan (2026-10-18):* the counts above are from MoltenVK; first re-measure encoders and
   render passes per frame on the native Metal renderer (Metal System Trace, 1080p and 1440p
   native) and list which splits are avoidable (a pass reading what the previous one wrote must
@@ -683,7 +687,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
   frame. An empty split costs ~0.05 ms there (48 extra splits: +2.3 ms GPU), so the splits are
   ~4 ms of a 22 ms frame. Skipping the tessellated draws (wrong image) gave +22.5% at the clinic,
   +7% in Hunter's Dream. Fix idea: encode a pass's tessellation kernels before its render encoder
-  (buffer the pass's draws as `Runs` does for patch draws).
+  (buffer the pass's draws as `Runs` does for patch draws). *Done (2026-10-21, FINDINGS
+  "Tessellation runs hold plain draws"):* plain draws wait in the runs, 82 → ~7 reopens per frame
+  at the clinic (+14%), 3.8 in the city.
 - **Area loads stall the renderer.** Entering new parts of Central Yharnam creates 400–700
   textures in one frame (130–230 MB) and waits on the host copy threads: 100–300 ms frames.
   Spread the creation and uploads over frames, or use worker threads.

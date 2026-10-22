@@ -104,6 +104,7 @@ bool Runs::Draw(Encoder& e, const Graphics& g, const DrawState& s, const Resourc
     }
     DrawPipeline view = View(*g.render);
     view.buffers = g.buffers;
+    view.writes_images = g.writes_images;
     return Draw(e, view, s, r, a);
 }
 

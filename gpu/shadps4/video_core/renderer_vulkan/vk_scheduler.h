@@ -739,11 +739,22 @@ public:
     /// Records a draw or dispatch that goes through GetDrawRuns() (which ends a waiting
     /// tessellation run itself before anything else). `leaves_run`: the command may leave patch
     /// draws waiting in the runs (a tessellated draw): the next Record() draws them first.
+    /// With held draws (Runs::HoldsDraws) any draw may continue the run, so it stays open
+    /// until the next Record() (a run the command ended itself leaves that flush nothing).
     template <typename Func>
     void RecordDraw(Func&& func, bool leaves_run) {
         RecordCommand(std::forward<Func>(func));
-        draw_run_open = leaves_run;
+        if (leaves_run && !draw_run_open) {
+            draw_run_first = order_command;
+        }
+        draw_run_open = leaves_run || (draw_run_open && draw_runs.HoldsDraws());
     }
+
+    /// Records Encoder::OrderWait(need) for the command about to be recorded. A waiting
+    /// tessellation run with held draws goes on when `need` names none of the run's commands
+    /// (only earlier ones, or the uploads ahead: a vertex buffer's window over the next draws'
+    /// uploads): Runs::OrderWait applies it. Else the run is drawn first, as by Record().
+    void RecordOrderWait(const Metal::OrderRequest& need);
 
     /// The draw helper of this scheduler's encoder: used by recorded commands only (on the
     /// recording thread), and by the scheduler's pass ends and submissions, which go through
@@ -793,6 +804,9 @@ public:
 
 private:
     u64 order_command{};
+    /// The command of the open tessellation run's first draw (RecordDraw); runs that ended on
+    /// the recording side early only make it older, which ends more runs, never fewer.
+    u64 draw_run_first{};
 
     /// Records the end of the waiting tessellation run (Runs::Flush).
     void EndDrawRun() {
@@ -967,6 +981,8 @@ private:
     /// A recorded tessellated draw may have left patch draws waiting in draw_runs (producer
     /// side; see Record / RecordDraw).
     bool draw_run_open = false;
+    /// The draw runs' counters published to BbStats so far (SubmitExecution).
+    u64 runs_reported = 0, held_reported = 0;
     /// Debug groups pushed in the command buffer being recorded (recording thread; reset by
     /// SubmitExecution after the recording is synced).
     u32 debug_groups = 0;

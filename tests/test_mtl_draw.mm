@@ -531,6 +531,7 @@ void TestTessellationFlushOrder() {
     Encoder encoder{device};
     NullResources null_resources{device};
     Runs runs{device, null_resources.Get()};
+    runs.SetHoldDraws(false); // plain draws end runs (TestHeldDraws: they wait in them)
     Shaders shaders;
     id<MTLLibrary> library = Library(device);
     id<MTLRenderPipelineState> patch_state = PatchPipeline(device, library);
@@ -627,6 +628,108 @@ void TestTessellationFlushOrder() {
            "the patch drawn before the dispatch");
     Expect(static_cast<const u32*>(counter.contents)[0] == 1, "the dispatch ran");
     Expect(device.ErrorCount() == 0, "tessellation runs ran without errors");
+}
+
+void TestHeldDraws() {
+    Device device;
+    Encoder encoder{device};
+    NullResources null_resources{device};
+    Runs runs{device, null_resources.Get()};
+    runs.SetHoldDraws(true);
+    Shaders shaders;
+    id<MTLLibrary> library = Library(device);
+    id<MTLRenderPipelineState> patch_state = PatchPipeline(device, library);
+    id<MTLRenderPipelineState> solid = Pipeline(device, library, @"fullscreen", @"push_color");
+    DrawPipeline patch_pipeline = View(patch_state, nullptr, &shaders.bound);
+    patch_pipeline.tessellation = true;
+    // As the rasterizer's guest pipelines: buffer accesses ordered by the Runtime (Read).
+    DrawPipeline plain = View(solid, &shaders.none, &shaders.push_color);
+    plain.buffers = Access::Read;
+    DrawPipeline storing = plain;
+    storing.writes_images = true;
+
+    // One quad patch over the left half (as in TestTessellationFlushOrder).
+    id<MTLBuffer> scratch = SharedBuffer(device, 256);
+    u16* f = reinterpret_cast<u16*>(static_cast<u8*>(scratch.contents) + 128);
+    for (u32 i = 0; i < 6; ++i) {
+        f[i] = 0x3c00;
+    }
+    PatchDraw patch;
+    patch.control = Ref(scratch, 0);
+    patch.patch = Ref(scratch, 64);
+    patch.factors = Ref(scratch, 128);
+    patch.patches = 1;
+    patch.output_control_points = 4;
+    id<MTLBuffer> blue = ColorBuffer(device, kBlue);
+    id<MTLBuffer> yellow = ColorBuffer(device, kYellow);
+    const std::array<Bound, 1> blue_bound{Bound{Ref(blue), 16}};
+    const std::array<Bound, 1> yellow_bound{Bound{Ref(yellow), 16}};
+    const auto green = PushColor(kGreen);
+    const auto red = PushColor(kRed);
+    DrawState bottom_left = FullState();
+    bottom_left.scissor_y = 32;
+    bottom_left.scissor_width = 32;
+    bottom_left.scissor_height = 32;
+    const Resources green_draw{{}, green, {}, {}, IndexType::U16};
+
+    // 1. A plain draw after a patch draw waits in the run and is drawn after it, in its pass.
+    id<MTLTexture> after = Target(device);
+    encoder.BeginRenderPass(Pass(after));
+    runs.QueuePatchDraw(patch_pipeline, FullState(),
+                        Resources{blue_bound, {}, {}, {}, IndexType::U16}, patch);
+    Expect(runs.Draw(encoder, plain, bottom_left, green_draw, DrawArgs{3}), "held draw");
+    Expect(runs.HasPending(), "the plain draw waits in the run");
+    runs.EndRenderPass(encoder);
+    Expect(!runs.HasPending(), "the pass end drew the run");
+
+    // 2. A patch draw queued after a held draw is drawn after it: the run keeps the order.
+    id<MTLTexture> order = Target(device);
+    encoder.BeginRenderPass(Pass(order));
+    runs.QueuePatchDraw(patch_pipeline, FullState(),
+                        Resources{blue_bound, {}, {}, {}, IndexType::U16}, patch);
+    Expect(runs.Draw(encoder, plain, bottom_left, green_draw, DrawArgs{3}), "held draw");
+    runs.QueuePatchDraw(patch_pipeline, FullState(),
+                        Resources{yellow_bound, {}, {}, {}, IndexType::U16}, patch);
+    runs.Flush(encoder);
+    encoder.EndRenderPass();
+
+    // 3. A draw that stores to images is not held: it ends the run (after it, in order).
+    id<MTLTexture> stored = Target(device);
+    encoder.BeginRenderPass(Pass(stored));
+    runs.QueuePatchDraw(patch_pipeline, FullState(),
+                        Resources{blue_bound, {}, {}, {}, IndexType::U16}, patch);
+    Expect(runs.Draw(encoder, storing, bottom_left, Resources{{}, red, {}, {}, IndexType::U16},
+                     DrawArgs{3}),
+           "draw that stores to images");
+    Expect(!runs.HasPending(), "it ended the run");
+    encoder.EndRenderPass();
+
+    // 4. Without a run waiting, a plain draw is drawn at once.
+    id<MTLTexture> alone = Target(device);
+    encoder.BeginRenderPass(Pass(alone));
+    Expect(runs.Draw(encoder, plain, bottom_left, green_draw, DrawArgs{3}), "plain draw");
+    Expect(!runs.HasPending(), "nothing waits");
+    encoder.EndRenderPass();
+
+    id<MTLBuffer> out_after = Readback(device, encoder, after);
+    id<MTLBuffer> out_order = Readback(device, encoder, order);
+    id<MTLBuffer> out_stored = Readback(device, encoder, stored);
+    id<MTLBuffer> out_alone = Readback(device, encoder, alone);
+    const u64 tick = encoder.Submit();
+    runs.Submitted(tick);
+    device.Wait(tick);
+    Expect(Pixel(out_after, 10, 10) == kBlue, "the patch drawn");
+    Expect(Pixel(out_after, 10, 50) == kGreen, "the held draw drawn after the patch");
+    Expect(Pixel(out_after, 50, 10) == kBlack, "nothing else drawn");
+    Expect(Pixel(out_order, 10, 10) == kYellow, "the second patch drawn last");
+    Expect(Pixel(out_order, 10, 50) == kYellow, "the held draw drawn before the second patch");
+    Expect(Pixel(out_stored, 10, 10) == kBlue && Pixel(out_stored, 10, 50) == kRed,
+           "the storing draw drawn after the run");
+    Expect(Pixel(out_alone, 10, 50) == kGreen && Pixel(out_alone, 10, 10) == kBlack,
+           "the plain draw alone");
+    Expect(runs.GetCounters().held_draws.load() == 2, "two draws were held");
+    Expect(runs.GetCounters().runs.load() == 3, "three runs were drawn");
+    Expect(device.ErrorCount() == 0, "held draws ran without errors");
 }
 
 void TestRunWrappers() {
@@ -969,6 +1072,7 @@ int main() {
         TestSkippedDraws();
         TestIndirectDraws();
         TestTessellationFlushOrder();
+        TestHeldDraws();
         TestRunWrappers();
         TestScratchPool();
         TestMaskDepthStencil();

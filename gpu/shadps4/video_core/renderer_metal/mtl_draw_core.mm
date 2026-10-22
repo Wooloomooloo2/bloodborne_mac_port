@@ -6,6 +6,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -254,7 +255,16 @@ bool Prepare(Encoder& e, const DrawPipeline& p, const DrawState& s) {
 
 // ---- Runs ----
 
-Runs::Runs(Device& device_, const Nulls& nulls_) : device{device_}, nulls{nulls_} {}
+namespace {
+/// BB_HOLD_DRAWS=0: plain draws end tessellation runs (the behaviour before held draws).
+bool HoldDrawsByDefault() {
+    const char* env = std::getenv("BB_HOLD_DRAWS");
+    return !(env && env[0] == '0');
+}
+} // namespace
+
+Runs::Runs(Device& device_, const Nulls& nulls_)
+    : device{device_}, nulls{nulls_}, hold_draws{HoldDrawsByDefault()} {}
 
 Runs::~Runs() = default;
 
@@ -343,9 +353,35 @@ void Runs::EndRun(Encoder& e) {
     Flush(e);
 }
 
+void Runs::EncodeDraw(Encoder& e, const DrawPipeline& p, const Resources& r, const DrawArgs& a) {
+    if (a.indexed) {
+        const u32 size = IndexSize(r.index_type);
+        e.DrawIndexed(p.primitive, a.count, r.index_type,
+                      {r.indices.buffer, r.indices.offset + u64(a.first) * size}, a.instances,
+                      a.vertex_offset, a.first_instance);
+    } else if (p.rect_list) {
+        // Two triangles (6 vertices) per rectangle of 3 (mtl_spirv_rectlist.h).
+        e.Draw(p.primitive, a.count / 3 * 6, a.instances, a.first / 3 * 6, a.first_instance);
+    } else {
+        e.Draw(p.primitive, a.count, a.instances, a.first, a.first_instance);
+    }
+}
+
+Runs::Pending& Runs::NextPending() {
+    if (num_pending == pending.size()) {
+        pending.emplace_back();
+    }
+    return pending[num_pending++];
+}
+
 bool Runs::Draw(Encoder& e, const DrawPipeline& p, const DrawState& s, const Resources& r,
                 const DrawArgs& a) {
-    EndRun(e);
+    // Held: it waits behind the run's patch draws (see the class comment).
+    const bool hold = num_pending && hold_draws && !p.writes_images &&
+                      p.buffers != Access::Write && !p.tessellation && !p.geometry;
+    if (!hold) {
+        EndRun(e);
+    }
     if (p.tessellation || p.geometry) {
         // Their kernels need the cache pipelines (the Graphics form).
         ++counters.unsupported;
@@ -364,20 +400,31 @@ bool Runs::Draw(Encoder& e, const DrawPipeline& p, const DrawState& s, const Res
     if (!a.count || !a.instances) {
         return false;
     }
+    if (hold) {
+        if (!Count(CheckDraw(e, p, s))) {
+            return false;
+        }
+        Pending& entry = NextPending();
+        entry.pipeline = p;
+        entry.state = s;
+        entry.bound.assign(r.bound.begin(), r.bound.end());
+        entry.push.assign(r.push.begin(), r.push.end());
+        entry.patch = {};
+        entry.streams.assign(r.streams.begin(), r.streams.end());
+        entry.indices = r.indices;
+        entry.index_type = r.index_type;
+        entry.args = a;
+        entry.request = request_command == e.OrderCommand() ? next_request : OrderRequest{};
+        next_request = {};
+        last_draw_tess = false;
+        ++counters.draws;
+        ++counters.held_draws;
+        return true;
+    }
     if (!Begin(e, p, s, r)) {
         return false;
     }
-    if (a.indexed) {
-        const u32 size = IndexSize(r.index_type);
-        e.DrawIndexed(p.primitive, a.count, r.index_type,
-                      {r.indices.buffer, r.indices.offset + u64(a.first) * size}, a.instances,
-                      a.vertex_offset, a.first_instance);
-    } else if (p.rect_list) {
-        // Two triangles (6 vertices) per rectangle of 3 (mtl_spirv_rectlist.h).
-        e.Draw(p.primitive, a.count / 3 * 6, a.instances, a.first / 3 * 6, a.first_instance);
-    } else {
-        e.Draw(p.primitive, a.count, a.instances, a.first, a.first_instance);
-    }
+    EncodeDraw(e, p, r, a);
     ++counters.draws;
     return true;
 }
@@ -429,26 +476,49 @@ void Runs::QueuePatchDraw(const DrawPipeline& p, const DrawState& s, const Resou
     // GetTessellationPipeline: the evaluation function reads the kernels' scratch), so the
     // deferred draw binds no vertex streams.
     ASSERT_MSG(p.vertex_slots.empty(), "a patch draw pipeline with vertex attributes");
-    Pending entry;
+    ASSERT_MSG(patch.patches != 0, "a patch draw without patches");
+    Pending& entry = NextPending();
     entry.pipeline = p;
     entry.state = s;
     entry.bound.assign(r.bound.begin(), r.bound.end());
     entry.push.assign(r.push.begin(), r.push.end());
     entry.patch = patch;
-    pending.push_back(std::move(entry));
+    entry.streams.clear();
+    entry.request = {};
+}
+
+void Runs::OrderWait(Encoder& e, const OrderRequest& request) {
+    e.OrderWait(request);
+    if (request_command != e.OrderCommand()) {
+        next_request = {};
+        request_command = e.OrderCommand();
+    }
+    next_request |= request;
 }
 
 void Runs::Flush(Encoder& e) {
-    if (pending.empty()) {
+    if (!num_pending) {
         return;
     }
     // Outside a pass every patch draw would be skipped (lost): the caller ended the pass or
     // submitted without Runs::EndRenderPass / Runs::Submit.
     ASSERT_MSG(e.InRenderPass(), "tessellated draws pending outside a render pass");
-    std::vector<Pending> run = std::move(pending);
-    pending.clear();
-    for (const Pending& d : run) {
-        const Resources r{d.bound, d.push, {}, {}, IndexType::U16};
+    ++counters.runs;
+    const size_t count = num_pending;
+    num_pending = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const Pending& d = pending[i];
+        const Resources r{d.bound, d.push, d.streams, d.indices, d.index_type};
+        if (!d.patch.patches) {
+            // A held draw: its order wait was for encoders of its own command (OrderWait).
+            if (!d.request.Empty()) {
+                e.OrderWait(d.request);
+            }
+            if (Begin(e, d.pipeline, d.state, r)) {
+                EncodeDraw(e, d.pipeline, r, d.args);
+            }
+            continue;
+        }
         if (!Begin(e, d.pipeline, d.state, r)) {
             continue;
         }
@@ -458,6 +528,7 @@ void Runs::Flush(Encoder& e) {
         e.SetBuffer(Stage::Vertex, kTessFactorBuffer, d.patch.factors);
         e.DrawPatches(d.patch.output_control_points, 0, d.patch.patches, {}, 1, d.patch.instance);
     }
+    ASSERT_MSG(num_pending == 0, "draws queued while a run was drawn");
     e.ReleaseOrderCommand();
 }
 
@@ -551,7 +622,7 @@ BufferRef Runs::Scratch(Encoder& e, u64 size) {
 }
 
 void Runs::Submitted(u64 device_tick) {
-    ASSERT_MSG(pending.empty(), "Submit with tessellated draws pending (Runs::Flush first)");
+    ASSERT_MSG(num_pending == 0, "Submit with tessellated draws pending (Runs::Flush first)");
     for (Chunk& c : used) {
         c.tick = device_tick;
         inflight.push_back(std::move(c));
