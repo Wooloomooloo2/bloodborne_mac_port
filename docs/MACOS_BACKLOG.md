@@ -701,6 +701,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Session log times of GPU library lines (2026-10-22, session logs).** The launcher stamps each
+  line when it arrives (`launcher/App/SessionLogWriter.swift`). bb-probe's stdout is unbuffered
+  and bbgpu-host's own lines are single `write`s, but the GPU library inside bbgpu-host prints
+  through stdio, which is block-buffered on a pipe: its `GPU [...]` lines can arrive in batches,
+  later than written, with one time. *Proper fix:* `setvbuf(stdout, NULL, _IOLBF, 0)` at the
+  start of `host/main.c` (one syscall per line; a few thousand lines a session), or the game's
+  processes stamp lines themselves. Also possible later: the severity as a field the game writes
+  instead of the launcher's heuristics (`SessionLog.classify`).
+
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
   text box opens in full screen, takes typing and Escape cancels, but the letters are not
   masked. Masking depends on the game setting `OrbisImeOption` PASSWORD (bit 4,

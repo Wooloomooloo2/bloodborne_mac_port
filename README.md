@@ -303,7 +303,7 @@ game files are included.
 The app contains everything else (the game process, the native GPU process, the libraries and
 a small Python for the launch scripts). Saves and settings go to
 `~/Library/Application Support/Bloodborne` (another save folder can be chosen in the launcher),
-the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
+the logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
 
 **Preparing the game folder from PKG files.** The app needs an unpacked folder, not `.pkg`
@@ -369,8 +369,8 @@ This creates **`Bloodborne.app`** in the repository folder, with the game's own 
 your game folder, so the app is made on your Mac and never uploaded). Double-click it, or drag
 it to the Dock. It opens the same launcher window as the downloadable app (settings, game and
 save folders; see "New in 0.4.0" above), runs the game from this checkout without a Terminal
-window, and writes the game's log to `~/Library/Logs/Bloodborne/game.log` (the session before
-in `game.previous.log`). If the game stops with an error, the launcher offers the log. Run the
+window, and writes the game's logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). If the
+game stops with an error, the launcher offers a crash report and the log. Run the
 script again if you move the repository folder.
 
 ### From Finder with a Terminal window
@@ -409,6 +409,47 @@ before copying saves.
 To keep them elsewhere, set `BB_DATA_DIR=/some/folder` in `launch.conf` (or the environment).
 A checkout that already has saves in its own folder (`user/`, from before this default) keeps
 using them; move `user/` and `bbport.ini` to the folder above to switch.
+
+### Logs
+
+Each game session started from the launcher writes two logs to **`~/Library/Logs/Bloodborne`**,
+named by the time it started; the last 20 sessions are kept:
+
+- `game-2026-10-22_14-03-05.log`: the game's output, each line with its time and a syslog
+  severity (`CRIT`, `ERROR`, `WARN`, `NOTICE`, `INFO`, `DEBUG`):
+
+  ```text
+  2026-10-22T14:03:05.869+03:00 NOTICE launcher: Bloodborne for Mac 0.5.4 on Mac15,8 (Apple M3 Max), 64 GB, ...
+  2026-10-22T14:03:06.284+03:00 WARN   GPU [Render.Vulkan] <Warning> vk_pipeline_serialization.cpp:369 ...
+  2026-10-22T14:09:41.604+03:00 CRIT   Crash: the GPU process crashed (signal 11 in ...)
+  ```
+
+- `game-2026-10-22_14-03-05.jsonl`: the same lines as JSON, one object per line, for Grafana Loki
+  (Alloy/Promtail), Elasticsearch (Filebeat), Vector and similar: `@timestamp` (UTC),
+  `log.level`, `syslog.severity.code`, `log.logger` (who wrote the line: `runtime`, `bbgpu-host`,
+  `gpu.render.vulkan`, ...), `message`, `session.id` and `service.version`.
+
+`game.log` and `game.previous.log` link to the last two sessions' `.log` files. The lines also go
+to the macOS system log (unified logging), with the line's source as its category: open
+**Console.app** and search for `bloodborne-mac-port`, or in Terminal:
+
+```sh
+/usr/bin/log stream --info --predicate 'subsystem == "io.github.wooloomooloo2.bloodborne-mac-port"'
+```
+
+The severity is read from the line itself: `Crash:` lines are critical, `STOP:` and `ERROR:` lines
+errors, the GPU library's own levels (`<Warning>`, `<Error>`) are kept, and lines saying something
+failed are warnings. Your home folder appears as `~` in the system log and in crash reports.
+
+**Crash reports.** When the game stops with an error, the launcher shows what happened and, by
+itself, puts a diagnostics zip in `~/Library/Logs/Bloodborne/Reports` (the last 10 are kept): the
+crash report, the session's `.log` and `.jsonl`, `bbport.ini`, `launch.conf`, and macOS's own
+crash reports (`.ips`) of the game's processes from that session. Their exception and crashed
+thread also go into the report. Your home folder is shown as `~`, and the identifiers macOS puts
+in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. **Report on
+GitHub** opens a new issue with the report already filled in (copied to the clipboard as well,
+for reports too long for the link) and shows the zip in Finder to drag onto the issue. Nothing is
+sent until you submit the issue.
 
 ### Typing text
 

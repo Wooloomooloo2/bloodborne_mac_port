@@ -46,30 +46,28 @@ enum GameRunner {
         return reason.isEmpty ? "The game check failed (status \(result.status))." : reason
     }
 
-    /// Starts the game; `done` gets its exit status on the main queue. The output goes to
-    /// `log` (the previous session's log is kept as game.previous.log).
-    static func start(_ plan: LaunchPlan, log: URL, done: @escaping (Int32) -> Void) throws -> Process {
-        let fm = FileManager.default
-        try fm.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let previous = log.deletingLastPathComponent().appendingPathComponent("game.previous.log")
-        if fm.fileExists(atPath: log.path) {
-            try? fm.removeItem(at: previous)
-            try? fm.moveItem(at: log, to: previous)
-        }
-        fm.createFile(atPath: log.path, contents: nil)
-        let output = try FileHandle(forWritingTo: log)
+    /// Starts the game; `done` gets its exit status on the main queue, after the session log
+    /// (`log`: the game's output, timestamped line by line) is complete.
+    static func start(_ plan: LaunchPlan, log: SessionLogWriter, done: @escaping (Int32) -> Void) throws -> Process {
+        let pipe = Pipe()
         let process = Process()
         process.executableURL = plan.executable
         process.arguments = plan.arguments
         process.environment = plan.environment
         process.currentDirectoryURL = plan.directory
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = output
+        process.standardOutput = pipe
+        process.standardError = pipe
         process.terminationHandler = { finished in
-            try? output.close()
-            DispatchQueue.main.async { done(finished.terminationStatus) }
+            let status = finished.terminationStatus
+            DispatchQueue.global(qos: .userInitiated).async {
+                log.finish(status: status) // waits briefly for the rest of the output
+                DispatchQueue.main.async { done(status) }
+            }
         }
+        log.read(pipe)
+        // (Process closes our copy of the write end once the game started: the pipe ends when
+        // every process of the game has exited. Closing it again could close a reused descriptor.)
         try process.run()
         return process
     }

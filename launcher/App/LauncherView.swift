@@ -241,7 +241,7 @@ private struct CrashReportView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Bloodborne stopped").font(.title2.bold())
             Text(report.summary)
-            Text("Please report it so it can be fixed: Report on GitHub copies this report and opens a new issue to paste it into. The report has no personal files; your home folder is shown as ~.")
+            Text("Please report it so it can be fixed: Report on GitHub opens a new issue with this report filled in, and shows a diagnostics zip (the full log and macOS's crash reports) to drag onto it. Nothing is sent until you submit the issue; your home folder is shown as ~.")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 Text(report.report)
@@ -252,6 +252,17 @@ private struct CrashReportView: View {
             }
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack(spacing: 8) {
+                if model.preparingCrashBundle {
+                    ProgressView().controlSize(.small)
+                    Text("Collecting macOS's crash reports and the log…").font(.caption).foregroundStyle(.secondary)
+                } else if let bundle = model.crashBundle {
+                    Image(systemName: "doc.zipper").foregroundStyle(.secondary)
+                    Text("Diagnostics: \(bundle.lastPathComponent)").font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Button("Show in Finder") { model.showCrashBundle(bundle) }.controlSize(.small)
+                }
+            }
             HStack {
                 Button("Show Log in Finder", action: model.showLog)
                 Spacer()
@@ -266,6 +277,7 @@ private struct CrashReportView: View {
                     model.reportOnGitHub()
                     copied = true
                 }
+                .disabled(model.preparingCrashBundle) // (a few seconds: the zip goes with the issue)
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
