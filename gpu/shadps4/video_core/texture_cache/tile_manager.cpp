@@ -172,8 +172,12 @@ std::pair<const Buffer*, u64> TileManager::DetileImage(const VideoCore::Buffer* 
     scheduler.EndRendering();
 
     const auto dim_x = static_cast<u32>((info.guest_size / (info.num_bits / 8)) / 64);
-    RecordTilingDispatch(GetTilingKernel(info, false), in_buffer, in_offset, staging.buffer,
-                         staging.offset, &params, sizeof(params), dim_x, false, info.guest_size);
+    {
+        const Vulkan::Runtime::TransferMark mark{runtime, "detiling (guest to staging)", info};
+        RecordTilingDispatch(GetTilingKernel(info, false), in_buffer, in_offset, staging.buffer,
+                             staging.offset, &params, sizeof(params), dim_x, false,
+                             info.guest_size);
+    }
     // bbport: the source may be the arena (BB_PREUPLOAD), which later uploads write: a copy into
     // it must wait for this read.
     runtime.AccessBuffer(in_buffer, in_offset, info.guest_size);
@@ -214,8 +218,12 @@ void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buff
     runtime.DownloadImage(&in_image, staging.buffer, buffer_copies);
 
     const auto dim_x = static_cast<u32>((info.guest_size / (info.num_bits / 8)) / 64);
-    RecordTilingDispatch(GetTilingKernel(info, true), out_buffer, out_offset, staging.buffer,
-                         staging.offset, &params, sizeof(params), dim_x, true, info.guest_size);
+    {
+        const Vulkan::Runtime::TransferMark mark{runtime, "tiling (staging to guest)", info};
+        RecordTilingDispatch(GetTilingKernel(info, true), out_buffer, out_offset, staging.buffer,
+                             staging.offset, &params, sizeof(params), dim_x, true,
+                             info.guest_size);
+    }
 
     runtime.AccessBuffer(staging.buffer, staging.offset, info.guest_size);
     runtime.AccessBuffer(out_buffer, out_offset, info.guest_size, true);

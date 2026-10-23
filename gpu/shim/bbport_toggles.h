@@ -53,6 +53,9 @@ enum : std::uint64_t {
     OrderedGuestWrites = 1ull << 49,
     SceneHalfRes = 1ull << 50, ///< live scaling also reduces the 960x540 post targets
     UpdateImageFastPath = 1u << 30,
+    /// A draw whose attachments are a subset of the open render pass's draws in it
+    /// (Rasterizer::MergeIntoOpenPass; BB_MERGE_PASSES=0: off); bit set: it begins its own pass.
+    PassMerge = 1ull << 31,
     // TAA A/B in one run: optional techniques, off by default (no measured gain, 2026-10-02).
     TaaTonemapBlend = 1ull << 51,
     TaaClip = 1ull << 52,
@@ -61,6 +64,9 @@ enum : std::uint64_t {
     // On by default (bit set: off): history of a thin feature this jitter phase missed is kept
     // when nothing moves. Static-camera flicker of railings/window bars p99.9 -45% (2026-10-03).
     TaaKeepNearerHistory = 1ull << 55,
+    /// Draws that can have no effect are not recorded (BB_SKIP_NOOP_DRAWS=0: they are); bit set:
+    /// they are.
+    NoOpDrawSkip = 1ull << 56,
     SceneMipBias = 1ull << 57, ///< negative LOD bias of G-buffer samplers at reduced scene sizes
     /// Scene textures use BB_ANISO (16) times anisotropic filtering instead of the game's
     /// ratio; bit set: the game's own samplers (A/B while the game runs).
@@ -105,6 +111,11 @@ inline std::atomic<std::uint64_t> hoisted_shader_copies{0}, inline_shader_copies
 /// bbport: copy-shader copies deferred to the end of their render pass, and the passes a
 /// command split anyway because it touched their ranges.
 inline std::atomic<std::uint64_t> deferred_shader_copies{0}, deferred_copy_conflicts{0};
+/// bbport: draws not recorded because they can have no effect (SkipNoOpDraws).
+inline std::atomic<std::uint64_t> noop_draws{0};
+/// bbport: draws recorded into the open render pass with a pipeline variant (MergeIntoOpenPass),
+/// and the variants built.
+inline std::atomic<std::uint64_t> merged_draws{0}, pass_variants{0};
 /// bbport: arena ordering requests recorded (Runtime::FlushBarriers: commands waiting for
 /// render passes, and the others), and uploads not hoisted because their ranges were in use by
 /// a submission in flight.

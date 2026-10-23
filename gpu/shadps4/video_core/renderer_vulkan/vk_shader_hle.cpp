@@ -91,7 +91,12 @@ static void RecordMultiCopy(Rasterizer& rasterizer, const VideoCore::Buffer* src
     auto& runtime = rasterizer.GetRuntime();
     auto& scheduler = runtime.GetScheduler();
     const auto& kernel = MultiCopyKernel(runtime.GetDevice());
-    if (auto* profiler = GpuProfiler::Get()) {
+    // BB_GPU_PROFILE: the copy gets its own segment, and the interrupted one continues after it.
+    // Deferred copies are flushed between a pass's mark and its BeginRendering: without the
+    // resume, the next pass was booked as copy-shader time.
+    auto* const profiler = GpuProfiler::Get();
+    const u64 resume = profiler ? profiler->Current() : 0;
+    if (profiler) {
         profiler->Mark(0xC0B1ull, [] { return std::string{"copy shader HLE: dispatch"}; });
     }
     scheduler.EndRendering();
@@ -121,6 +126,9 @@ static void RecordMultiCopy(Rasterizer& rasterizer, const VideoCore::Buffer* src
     for (const auto& copy : copies) {
         runtime.MarkAccess(src, copy.src_offset, copy.size, false);
         runtime.MarkAccess(dst, copy.dst_offset, copy.size, true);
+    }
+    if (profiler && resume) {
+        profiler->Resume(resume);
     }
 }
 

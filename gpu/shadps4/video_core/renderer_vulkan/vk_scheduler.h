@@ -882,6 +882,11 @@ public:
         return is_rendering && render_state == state;
     }
 
+    /// bbport: the state of the open render pass, or null.
+    [[nodiscard]] const RenderState* OpenRenderState() const {
+        return is_rendering ? &render_state : nullptr;
+    }
+
     /// Whether BeginRendering(state) would start a new render pass.
     [[nodiscard]] bool WillBeginRendering(const RenderState& state) const {
         return !(is_rendering && render_state == state);

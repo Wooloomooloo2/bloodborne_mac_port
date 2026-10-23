@@ -1752,3 +1752,60 @@ The fix (src/runtime_hooks.c, observer hooks: no lock):
 - Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
   frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
   spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
+
+## Where the city frame's GPU time goes, with copies labelled right (M3 Pro, 2026-10-23)
+
+`BB_GPU_PROFILE=1` booked the render pass after a deferred copy-shader flush under "copy shader HLE"
+(the copy marked its label and never gave the interrupted one back), and the tiling kernels of image
+downloads/uploads under whatever dispatch bound the image. Now a copy resumes the label it
+interrupted and the tiling kernels have labels of their own.
+
+Central Yharnam (the player's save, 1080p native, upscaler off, uncapped, standing; 1,404 draws/frame):
+- **The copy-shader segment stays at 5.3-5.5 ms/frame** (73 encoders/frame, ~0.9 ms of encoder time).
+  It is not mislabelling: it is time between the copies and the passes that follow them (waits).
+- **The per-frame whole-surface copies cost about 2.3 ms of segments:** two 1080p colour targets
+  (RGBA16F, RGBA8) are downloaded (0.22 + 0.11), tiled into guest memory (0.55 + 0.31) and copied by the
+  game's memcpy shader 3d5ebf4e (0.66); the depth is tiled (0.11-0.13) and copied into an R32F texture
+  that is detiled (0.24) and uploaded again (0.10-0.14). Nothing in the frame reads the two colour
+  copies.
+- cs e2c27f0c (one workgroup) spans 1.3-1.8 ms with 0.07 ms of its own work: a dependency bubble.
+
+## Draws that can have no effect are skipped (M3 Pro, 2026-10-23)
+
+A draw with no pixel shader, no colour/depth/stencil target, no object motion, no tessellation or
+geometry stage and no stage that writes a buffer or an image (or uses DMA or GDS) is not recorded.
+Each still cost a render pass of its own: it ended the open pass, flushed its deferred copies and
+opened a 16x16 one. In the city they are 12 per frame, all vs 89cda9e4. `BB_SKIP_NOOP_DRAWS=0` (or
+toggle bit 56) turns it off.
+
+City, one session, switched every 30 s by the toggle file (2x30 s each): **60.85 -> 61.56 FPS
+(+1.2%), GPU busy 16.34 -> 16.08 ms/frame**, encoders with fence waits 286 -> 273 per frame, CPU the
+same (~453% for both processes, 74 ms/frame). Snapshots 0.7 s apart: 0.45 between the modes, 0.64
+within one mode (mean absolute difference per channel, 0-255): no visible change.
+
+## Render passes merged when a draw uses a subset of the open pass's targets (M3 Pro, 2026-10-23)
+
+Lit passes and the HUD alternate between subsets of the same targets (lighting: colour + depth, then
+colour + a second colour + depth; HUD stencil masks: depth only, colour + depth, colour only). Each
+change stored and reloaded full 1080p targets. Now a draw whose attachments are a subset of the open
+pass (the same textures, levels and slices at the same slots, no clears, the same size and sample
+count, no object motion, no tessellation or geometry, no image stores, no feedback loop, none of the
+pass's targets sampled) is drawn in that pass with a variant of its pipeline: the pass's other
+attachments get their formats, an empty write mask and no blending; depth and stencil tests stay off
+through the draw's own state (`DynamicState::SetAttachments`). Variants are built on the pipeline
+creation pool; until one is ready the draw begins its own pass as before (no hitch).
+`BB_MERGE_PASSES=0` (or toggle bit 31) turns it off.
+
+One session per scene, switched every 30 s (2x30 s each), the no-op draw skip on in both:
+
+| Scene | Off | On | GPU busy ms/frame | Encoders with fence waits | CPU, both processes | Snapshots: between modes / within one |
+|---|---|---|---|---|---|---|
+| Central Yharnam, 1080p uncapped | 62.64 | **65.72 (+4.9%)** | 15.92 -> 15.16 | 272 -> 244 | 472% -> 501%, 75.3 -> 76.2 ms/frame | 0.44 / 0.63 |
+| Iosefka's Clinic lamp, 1080p | 48.75 | **51.10 (+4.8%)** | 20.51 -> 19.52 | 504 -> 482 | 365% -> 386%, 74.9 -> 75.5 ms/frame | 1.14 / 1.33 |
+
+- 57 variants in the city, 52 at the clinic; 350-860 draws per frame go into an open pass.
+- Metal API validation (`MTL_DEBUG_LAYER=1`, city, both modes): no errors.
+- Play session (the player's save copy, 4 min, uncapped, both on): 66.7 FPS on average, 180 variants,
+  no errors and no problems reported by the player.
+- CPU per frame +0.6-0.9 ms: merged draws miss the render-state memo and take the full
+  `BeginRendering` path.

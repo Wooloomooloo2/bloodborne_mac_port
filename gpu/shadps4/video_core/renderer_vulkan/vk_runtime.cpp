@@ -355,14 +355,17 @@ void Runtime::AccessImage(VideoCore::Image* image, bool write) {
 }
 
 Runtime::TransferMark::TransferMark(Runtime& runtime, const char* what,
-                                    const VideoCore::Image& image) {
+                                    const VideoCore::Image& image)
+    : TransferMark(runtime, what, image.info) {}
+
+Runtime::TransferMark::TransferMark(Runtime& runtime, const char* what,
+                                    const VideoCore::ImageInfo& info) {
     profiler = GpuProfiler::Get();
     if (!profiler || !profiler->Records(&runtime.scheduler)) {
         profiler = nullptr;
         return;
     }
     resume = profiler->Current();
-    const auto& info = image.info;
     const u64 key = (u64(reinterpret_cast<uintptr_t>(what)) << 20) ^
                     (u64(info.pixel_format) << 40) ^ (u64(info.size.width) << 16) ^
                     info.size.height ^ 0x7A5Full;

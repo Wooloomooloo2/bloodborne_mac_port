@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <mutex>
+#include <unordered_set>
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "bbport_toggles.h"
@@ -166,6 +168,78 @@ Metal::Draw::ComputeView ComputeView(const ComputePipeline& pipeline) {
 /// known from the stages before the pipeline is built).
 bool IsTessellated(const GraphicsPipeline& pipeline) {
     return pipeline.GetStages()[u32(Shader::SwStage::TessellationControl)] != nullptr;
+}
+
+/// bbport: draws that can have no effect are not recorded (BB_SKIP_NOOP_DRAWS=0 or the toggle
+/// NoOpDrawSkip: they are). Each such draw (no pixel shader, no attachments: the city's 12 per
+/// frame of vs 89cda9e4) still cost a render pass of its own: it ended the open pass, flushed its
+/// deferred copies and opened a 16x16 one (NoOutputPassArea).
+bool SkipNoOpDraws() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_SKIP_NOOP_DRAWS");
+        return !env || env[0] != '0';
+    }();
+    return on && !BbToggle::Disabled(BbToggle::NoOpDrawSkip);
+}
+
+/// bbport: Rasterizer::MergeIntoOpenPass (BB_MERGE_PASSES=0 or the toggle PassMerge: off).
+bool MergePasses() {
+    static const bool on = [] {
+        const char* env = std::getenv("BB_MERGE_PASSES");
+        return !env || env[0] != '0';
+    }();
+    return on && !BbToggle::Disabled(BbToggle::PassMerge);
+}
+
+/// The same image level and slice (clear flags aside).
+bool SameTarget(const RenderAttachment& a, const RenderAttachment& b) {
+    return a.texture == b.texture && a.level == b.level && a.slice == b.slice &&
+           a.depth_plane == b.depth_plane;
+}
+
+/// No fragments and no memory writes: no pixel shader, no colour, depth or stencil target, no
+/// object motion attachment, no tessellation or geometry stage, and no stage that writes a buffer
+/// or an image, or reaches memory by address (DMA) or through GDS.
+bool IsNoOpDraw(const GraphicsPipeline& pipeline, const AmdGpu::Regs& regs) {
+    const auto& key = pipeline.GetGraphicsKey();
+    const auto stages = pipeline.GetStages();
+    if (key.mrt_mask != 0 || key.motion_vectors || stages[u32(Shader::SwStage::Fragment)] ||
+        BoundDepthAttachment(regs).Bound() || IsTessellated(pipeline) ||
+        stages[u32(Shader::SwStage::Geometry)]) {
+        return false;
+    }
+    for (const auto* stage : stages) {
+        if (!stage) {
+            continue;
+        }
+        if (stage->uses_dma || stage->has_storage_images) {
+            return false;
+        }
+        for (const auto& buffer : stage->buffers) {
+            if (buffer.is_written || buffer.buffer_type == Shader::BufferType::GdsBuffer ||
+                buffer.buffer_type == Shader::BufferType::BdaPagetable ||
+                buffer.buffer_type == Shader::BufferType::FaultBuffer) {
+                return false;
+            }
+        }
+        for (const auto& image : stage->images) {
+            if (image.is_written || image.is_atomic) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/// Logs the first skipped draw of each vertex shader.
+void NoteNoOpDraw(const GraphicsPipeline& pipeline) {
+    static std::mutex mutex;
+    static std::unordered_set<u64> logged;
+    const u64 hash = pipeline.GetStage(Shader::SwStage::Vertex).pgm_hash;
+    std::scoped_lock lock{mutex};
+    if (logged.insert(hash).second) {
+        std::printf("No-op draws skipped: vs %016llx\n", static_cast<unsigned long long>(hash));
+    }
 }
 } // namespace
 
@@ -1057,6 +1131,11 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         scene_debug_frame = scene_debug && std::remove(scene_debug) == 0;
         scene_targets->debug = scene_debug_frame;
     }
+    if (SkipNoOpDraws() && IsNoOpDraw(*pipeline, regs)) {
+        NoteNoOpDraw(*pipeline);
+        BbStats::noop_draws.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     bind_prepared = used_prepared;
     motion_draw = pipeline->GetGraphicsKey().motion_vectors;
     motion_geometry = 0;
@@ -1186,8 +1265,12 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
         draw_jitter = upscaler->Jitter();
     }
     const Metal::Draw::DrawState draw_state = UpdateDynamicState(pipeline, is_indexed, state);
-    MarkPass(pipeline, state);
-    scheduler.BeginRendering(state);
+    const Metal::RenderPipeline* merged = MergeIntoOpenPass(pipeline, state);
+    if (!merged) {
+        MarkPass(pipeline, state);
+        scheduler.BeginRendering(state);
+        NoteOpenPass(pipeline, state);
+    }
 
     const auto& vs_info = pipeline->GetStage(Shader::SwStage::Vertex);
     const auto& fetch_shader = pipeline->GetFetchShader();
@@ -1213,7 +1296,11 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // waits for it as late as possible (failed: the draw helper skips and counts it).
     scheduler.RecordDraw(
         [=, runs = &scheduler.GetDrawRuns()](Metal::Encoder& e) {
-            runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
+            auto pipelines = DrawPipelines(*pipeline);
+            if (merged && pipelines.render) {
+                pipelines.render = merged; // the open pass's attachments (MergeIntoOpenPass)
+            }
+            runs->Draw(e, pipelines, draw_state, resources, draw_args);
         },
         IsTessellated(*pipeline));
     if (FrameCapture::Active()) {
@@ -1275,6 +1362,11 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
     if (DrawPipe::OnStageB()) {
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
+    }
+    if (SkipNoOpDraws() && IsNoOpDraw(*pipeline, Regs())) {
+        NoteNoOpDraw(*pipeline);
+        BbStats::noop_draws.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
@@ -3668,6 +3760,139 @@ static int PassLabels() {
         return env ? std::atoi(env) : 0;
     }();
     return mode;
+}
+
+const Metal::RenderPipeline* Rasterizer::MergeIntoOpenPass(const GraphicsPipeline* pipeline,
+                                                       const RenderState& state) {
+    if (!MergePasses() || !open_pass.valid) {
+        return nullptr;
+    }
+    const RenderState* open = scheduler.OpenRenderState();
+    if (!open || *open == state) {
+        return nullptr; // nothing open, or the draw's own pass (BeginRendering keeps it)
+    }
+    // The pass the draw path opened last (ResumeRendering reopens it without clears).
+    const RenderState& noted = open_pass.state;
+    bool same_pass = open->num_colors == noted.num_colors && SameTarget(open->depth, noted.depth) &&
+                     open->has_depth == noted.has_depth && open->has_stencil == noted.has_stencil &&
+                     open->width == noted.width && open->height == noted.height &&
+                     open->vertex_rw_buffer == noted.vertex_rw_buffer;
+    for (u32 i = 0; same_pass && i < open->num_colors; ++i) {
+        same_pass = SameTarget(open->colors[i], noted.colors[i]);
+    }
+    if (!same_pass) {
+        open_pass.valid = false;
+        return nullptr;
+    }
+    // The draw: a plain draw with no image stores, no object motion and no feedback loop.
+    const auto& key = pipeline->GetGraphicsKey();
+    const auto stages = pipeline->GetStages();
+    if (key.motion_vectors || attachment_feedback_loop || state.vertex_rw_buffer ||
+        open->vertex_rw_buffer || IsTessellated(*pipeline) ||
+        stages[u32(Shader::SwStage::Geometry)] || key.num_samples != open_pass.num_samples ||
+        state.width != open->width || state.height != open->height ||
+        state.num_colors > open->num_colors) {
+        return nullptr;
+    }
+    for (const auto* stage : stages) {
+        if (!stage) {
+            continue;
+        }
+        if (stage->has_storage_images) {
+            return nullptr;
+        }
+        for (const auto& image : stage->images) {
+            if (image.is_written || image.is_atomic) {
+                return nullptr;
+            }
+        }
+    }
+    // Its attachments: the pass's, at the same slots, not cleared.
+    for (u32 i = 0; i < state.num_colors; ++i) {
+        if (state.colors[i].texture &&
+            (state.colors[i].clear || !SameTarget(state.colors[i], open->colors[i]))) {
+            return nullptr;
+        }
+    }
+    if (state.has_depth || state.has_stencil) {
+        if (state.depth.clear || state.depth.clear_stencil ||
+            !SameTarget(state.depth, open->depth) || (state.has_depth && !open->has_depth) ||
+            (state.has_stencil && !open->has_stencil)) {
+            return nullptr;
+        }
+    }
+    // The pass's attachments must not be sampled by the draw (a store and reload between them
+    // made that work before).
+    for (const auto id : open_pass.images) {
+        if (id && texture_cache.GetImage(id).binding.is_bound) {
+            return nullptr;
+        }
+    }
+    if (!pipeline->IsReady() || pipeline->Failed() || !pipeline->Render()) {
+        return nullptr;
+    }
+    // The variant: the pass's other attachments with their formats and nothing written.
+    GraphicsPipelineKey pass_key = pipeline->Render()->key;
+    for (u32 i = 0; i < open->num_colors; ++i) {
+        if (open->colors[i].texture && (i >= state.num_colors || !state.colors[i].texture)) {
+            pass_key.color_buffers[i] = open_pass.color_buffers[i];
+            pass_key.mrt_mask |= 1u << i;
+            pass_key.write_masks[i] = {};
+            pass_key.blend_controls[i] = {};
+        }
+    }
+    pass_key.num_color_attachments = std::max(pass_key.num_color_attachments, open->num_colors);
+    if (open->has_depth && !state.has_depth) {
+        pass_key.z_format = open_pass.z_format;
+    }
+    if (open->has_stencil && !state.has_stencil) {
+        pass_key.stencil_format = open_pass.stencil_format;
+    }
+    const u64 hash = XXH3_64bits_withSeed(&pass_key, sizeof(pass_key),
+                                          reinterpret_cast<uintptr_t>(pipeline));
+    auto& variant = pass_variants[hash];
+    if (!variant) {
+        variant = std::make_shared<PassVariant>();
+        BbStats::pass_variants.fetch_add(1, std::memory_order_relaxed);
+        auto build = [pipeline, pass_key, variant] {
+            variant->render.store(pipeline->BuildRenderVariant(pass_key),
+                                  std::memory_order_relaxed);
+            variant->built.store(true, std::memory_order_release);
+        };
+        if (PipelineBuilder::Enabled()) {
+            PipelineBuilder::Submit(std::move(build));
+        } else {
+            build();
+        }
+    }
+    if (!variant->built.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+    const Metal::RenderPipeline* render = variant->render.load(std::memory_order_relaxed);
+    if (render) {
+        BbStats::merged_draws.fetch_add(1, std::memory_order_relaxed);
+    }
+    return render;
+}
+
+void Rasterizer::NoteOpenPass(const GraphicsPipeline* pipeline, const RenderState& state) {
+    if (!MergePasses()) {
+        open_pass.valid = false;
+        return;
+    }
+    const auto& key = pipeline->GetGraphicsKey();
+    open_pass.valid = true;
+    open_pass.state = state;
+    open_pass.images = {};
+    for (u32 i = 0; i < state.num_colors && i < AmdGpu::NUM_COLOR_BUFFERS; ++i) {
+        open_pass.images[i] = state.colors[i].texture ? cb_descs[i].first : VideoCore::ImageId{};
+    }
+    open_pass.images[AmdGpu::NUM_COLOR_BUFFERS] =
+        state.has_depth || state.has_stencil ? db_desc.first : VideoCore::ImageId{};
+    open_pass.color_buffers = key.color_buffers;
+    open_pass.z_format = key.z_format;
+    open_pass.stencil_format = key.stencil_format;
+    open_pass.num_samples = key.num_samples;
 }
 
 void Rasterizer::MarkPass(const GraphicsPipeline* pipeline, const RenderState& state) {
