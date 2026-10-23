@@ -188,7 +188,14 @@ private:
         std::unique_ptr<u16[]> tick; ///< low 16 bits of the submission tick that used the page
         u64 pages;
         mutable u16 whole_tick{}; ///< ... that used the whole buffer (direct memory access)
+        /// bbport: ... that used a whole 64 KiB granule (NoteSubmissionUse tags granules a range
+        /// covers instead of their 64 pages). A page counts as used at a tick when its own tag
+        /// or its granule's says so: a stale granule tag can only make a page look used.
+        std::unique_ptr<u16[]> granule_tick;
+        u64 granules;
     };
+    /// Whether `page` of `hp` was used at `tick` (own or granule tag).
+    [[nodiscard]] static u16 PageTag(const HoistPages& hp, u64 page, bool granule);
     std::unordered_map<const VideoCore::Buffer*, HoistPages> hoist_targets;
     /// Whether a hoisted copy's ranges were used by a submission still running (the upload then
     /// waits for all work before it).

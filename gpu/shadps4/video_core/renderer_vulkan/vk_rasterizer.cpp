@@ -1951,6 +1951,7 @@ void Rasterizer::ResolveIndexBuffer(u32 index_offset) {
 }
 
 void Rasterizer::ResetBindings() {
+    scheduler.NoteCommandRecorded(); // the draw or dispatch is recorded (direct read-backs)
     for (auto& image_id : bound_images) {
         texture_cache.GetImage(image_id).binding = {};
     }
@@ -3243,6 +3244,19 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
 
 bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks) {
     DrainDrawPipe();
+    if (!assume_locks) {
+        // bbport: the fault thread: the buffer side and the fault window in one protect relay
+        // (BufferCache::InvalidateWriteFault); the texture side as before.
+        if (!IsMapped(addr, 8)) {
+            return false;
+        }
+        const bool extended = buffer_cache.InvalidateWriteFault(addr, 8);
+        texture_cache.InvalidateMemory(addr, 8);
+        if (!extended) {
+            buffer_cache.ExtendWriteFault(addr);
+        }
+        return true;
+    }
     if (!InvalidateMemory(addr, 8, assume_locks)) {
         return false;
     }

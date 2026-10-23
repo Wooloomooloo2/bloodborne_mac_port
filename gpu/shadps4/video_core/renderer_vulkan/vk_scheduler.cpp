@@ -20,6 +20,7 @@
 #include "bbport_cpu.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -461,6 +462,7 @@ void Scheduler::SyncRecording() {
 void Scheduler::RecorderThread(std::stop_token stoken) {
     Common::SetCurrentThreadName("bb:MtlRecorder");
     while (true) {
+        BbStutter::ApplyQos(); // user-interactive unless switched off (stutter plan phase 2)
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
         // and a sleeping recorder costs the GPU thread a wake-up syscall per kick. With few
         // hardware threads (Steam Deck: 8) the spin would take time from guest threads.
@@ -586,6 +588,9 @@ u64 Scheduler::SubmitExecution() {
     // handed to this submission's tick.
     draw_run_open = false;
     const u64 tick = timeline.Committed(draw_runs.Submit(encoder));
+    if (gpu_write_unrecorded.load(std::memory_order_relaxed)) {
+        BbStutter::MarkSplit(tick); // a bound write lands in a later command buffer
+    }
     debug_groups = 0; // Encoder::Submit closed them
     draw_runs.ReportSkips(); // dropped draws by reason, every 5 s when there are any
     BbStats::queue_submit_ns.fetch_add(bbport::CyclesToNs(bbport::CpuCycles() - submit_start),

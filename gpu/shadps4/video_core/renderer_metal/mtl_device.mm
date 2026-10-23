@@ -10,6 +10,7 @@
 #include <thread>
 #include <unistd.h>
 #include "common/assert.h"
+#include "bbport_stutter.h"
 #include "common/logging/log.h"
 #include "video_core/renderer_metal/mtl_device_impl.h"
 
@@ -188,9 +189,10 @@ void Device::TrackGpuTime(void* command_buffer) {
           if (gpu_ms >= long_ms || idle_ms >= long_ms) {
               LOG_WARNING(Render,
                           "Metal command buffer '{}': GPU {:.2f} ms, scheduled {:.2f} ms after "
-                          "the kernel saw it, GPU idle {:.2f} ms before it",
+                          "the kernel saw it, GPU idle {:.2f} ms before it | t={:.3f}",
                           done.label ? done.label.UTF8String : "", gpu_ms,
-                          (start - done.kernelStartTime) * 1e3, idle_ms);
+                          (start - done.kernelStartTime) * 1e3, idle_ms,
+                          BbStutter::WallSeconds());
           }
       }
       std::scoped_lock lock{shared->busy_mutex};
@@ -228,6 +230,9 @@ u64 Device::Commit(void* command_buffer) {
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)command_buffer;
     const u64 tick = current_tick.fetch_add(1, std::memory_order_acq_rel);
     counters->committed.store(tick, std::memory_order_release);
+    if (BbStats::enabled) {
+        BbStutter::NoteCommit(tick); // the tick timeline (bbport_stutter.h)
+    }
     [cmd encodeSignalEvent:impl->event value:tick];
     // Before the tick handler: when Wait(tick) returns, this command buffer's time is counted.
     TrackGpuTime(command_buffer);
@@ -237,6 +242,9 @@ u64 Device::Commit(void* command_buffer) {
             shared->errors.fetch_add(1, std::memory_order_relaxed);
             LOG_ERROR(Render, "Metal command buffer of tick {} failed: {}", tick,
                       done.error ? done.error.localizedDescription.UTF8String : "unknown error");
+        }
+        if (BbStats::enabled) {
+            BbStutter::NoteDone(tick, done.GPUEndTime - done.GPUStartTime);
         }
         RaiseTo(shared->gpu_tick, tick);
         shared->gpu_tick.notify_all();

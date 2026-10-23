@@ -15,6 +15,7 @@
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -342,16 +343,16 @@ struct FrameTrace {
     // What the GPU process did between the previous flip and this one.
     double gpu_cpu_ms, rec_busy_ms, rec_idle_ms, ahead_ms, drain_ms, host_copies_ms,
         compile_wait_ms, game_fault_ms, game_main_cpu_ms, game_flip_cpu_ms, game_cpu_ms,
-        game_busiest_ms;
+        game_busiest_ms, rec_cpu_ms, readback_ms;
     char game_busiest[32];
-    u64 preempted, draws, compiles, gpu_done, game_faults;
+    u64 preempted, draws, compiles, gpu_done, game_faults, readbacks;
 };
 
 /// Counter deltas between flips. Counters the 5 s summary resets are re-based by Rebase().
 struct SpikeCounters {
     enum : u32 { GpuCpu, Preempted, Draws, RecBusy, RecIdle, Ahead, Drain, HostCopies,
                  CompileWait, Compiles, GpuDone, GameFaults, GameFaultNs, GameMainCpu,
-                 GameFlipCpu, Count };
+                 GameFlipCpu, RecCpu, Readbacks, ReadbackNs, Count };
     u64 last[Count]{};
     static void Read(u64* v) {
         v[GpuCpu] = BbStats::gpu_user_us.load() + BbStats::gpu_sys_us.load();
@@ -370,6 +371,9 @@ struct SpikeCounters {
         v[GameFaultNs] = shared ? __atomic_load_n(&shared->game_fault_ns, __ATOMIC_RELAXED) : 0;
         v[GameMainCpu] = shared ? __atomic_load_n(&shared->game_main_cpu_ns, __ATOMIC_RELAXED) : 0;
         v[GameFlipCpu] = shared ? __atomic_load_n(&shared->game_flip_cpu_ns, __ATOMIC_RELAXED) : 0;
+        v[RecCpu] = BbStutter::StageBCpuUs();
+        v[Readbacks] = BbStutter::readback_count.load(std::memory_order_relaxed);
+        v[ReadbackNs] = BbStutter::readback_ns.load(std::memory_order_relaxed);
     }
     void Fill(FrameTrace& t) {
         u64 now[Count];
@@ -394,6 +398,9 @@ struct SpikeCounters {
         t.game_fault_ms = d[GameFaultNs] / 1e6;
         t.game_main_cpu_ms = d[GameMainCpu] / 1e6;
         t.game_flip_cpu_ms = d[GameFlipCpu] / 1e6;
+        t.rec_cpu_ms = d[RecCpu] / 1e3;
+        t.readbacks = d[Readbacks];
+        t.readback_ms = d[ReadbackNs] / 1e6;
         // Per-frame values from the game's last flip submit (not counters).
         BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr;
         t.game_cpu_ms = shared ? __atomic_load_n(&shared->game_frame_cpu_ns, __ATOMIC_ACQUIRE) / 1e6 : 0;
@@ -500,7 +507,8 @@ private:
                 "preempted, %llu draws; recording busy %.1f idle %.1f, frames-ahead wait %.1f, "
                 "recorder waits %.1f, host copies %.1f; %llu GPU frames done; %llu compiles "
                 "(%.1f ms waited) | game: %llu GPU page faults, %.1f ms waited; on CPU: main "
-                "thread %.1f ms, flip thread %.1f ms, all threads %.1f ms, busiest %s %.1f ms\n",
+                "thread %.1f ms, flip thread %.1f ms, all threads %.1f ms, busiest %s %.1f ms | "
+                "recording thread on CPU %.1f ms; read-backs %llu, %.1f ms | t=%.3f\n",
                 t.id, t.id - prev.id, prev.id, game, mark(late_game), flip, mark(late_flip),
                 present, mark(late_present), display, mark(late_display),
                 gap(t.arrival_ns, t.game_ns), gap(t.flip_packet_ns, t.arrival_ns),
@@ -516,7 +524,8 @@ private:
                 static_cast<unsigned long long>(t.compiles), t.compile_wait_ms,
                 static_cast<unsigned long long>(t.game_faults), t.game_fault_ms,
                 t.game_main_cpu_ms, t.game_flip_cpu_ms, t.game_cpu_ms, t.game_busiest,
-                t.game_busiest_ms);
+                t.game_busiest_ms, t.rec_cpu_ms, static_cast<unsigned long long>(t.readbacks),
+                t.readback_ms, BbStutter::WallSeconds());
         }
         prev = t;
     }
@@ -649,6 +658,25 @@ void VideoOutDriver::Flip(const Request& req) {
         last_rf = rf;
         last_trf = trf;
         last_twf = twf;
+        // bbport: read-backs in the stalled frame (bbport_stutter.h).
+        static u64 last_rb, last_rb_ns, last_rb_finish;
+        const u64 rb = BbStutter::readback_count.load(), rb_ns = BbStutter::readback_ns.load(),
+                  rb_finish = BbStutter::readback_finish_ns.load();
+        if (frame_ms > 40.0 && last_gpu_ns != 0 && rb > last_rb) {
+            std::printf("       read-backs %llu, %.1f ms waited (%.1f ms in Finish)\n",
+                        static_cast<unsigned long long>(rb - last_rb), (rb_ns - last_rb_ns) / 1e6,
+                        (rb_finish - last_rb_finish) / 1e6);
+        }
+        last_rb = rb;
+        last_rb_ns = rb_ns;
+        last_rb_finish = rb_finish;
+        static u64 last_burst;
+        const u64 burst = BbStutter::burst_copy_bytes.load(std::memory_order_relaxed);
+        if (frame_ms > 40.0 && last_gpu_ns != 0 && burst > last_burst) {
+            std::printf("       %.1f MB of small copies sent to the copy threads (burst)\n",
+                        (burst - last_burst) / 1e6);
+        }
+        last_burst = burst;
         const u64 copy_ns = BbStats::t_copy.load(), copy_bytes = BbStats::copy_bytes.load();
         u64 proc_flt = 0;
 #ifndef _WIN32
@@ -680,11 +708,11 @@ void VideoOutDriver::Flip(const Request& req) {
         const u64 buffer_bytes = BbStats::buffer_upload_bytes.load();
         if (frame_ms > 40.0 && last_gpu_ns != 0) {
             std::printf("Stall: %.1f ms frame; GPU thread on CPU %.1f ms; %llu images registered, "
-                        "%.1f MB image uploads, %.1f MB buffer uploads\n",
+                        "%.1f MB image uploads, %.1f MB buffer uploads | t=%.3f\n",
                         frame_ms, (gpu_ns - last_gpu_ns) / 1e6,
                         static_cast<unsigned long long>(images - last_images),
                         (image_bytes - last_image_bytes) / 1e6,
-                        (buffer_bytes - last_buffer_bytes) / 1e6);
+                        (buffer_bytes - last_buffer_bytes) / 1e6, BbStutter::WallSeconds());
             std::printf("       %llu draws, %llu dispatches, %llu submissions; GPU thread user %.1f ms, "
                         "kernel %.1f ms, %llu preempted, %llu waits\n",
                         static_cast<unsigned long long>(draws - last_draws),
@@ -771,7 +799,7 @@ void VideoOutDriver::Flip(const Request& req) {
                         "%.0f draws/frame, idle %.1f%%; blocked: recorder %.1f%%, host copies "
                         "%.1f%% (%.0f/frame), copy threads %.1f%%, GPU ticks %.1f%%; "
                         "reduced-size draws %.0f/frame of %.0f in the scene; GPU busy %.2f "
-                        "ms/frame (%.1f%%)\n",
+                        "ms/frame (%.1f%%) | t=%.3f\n",
                         frames / window, worst_ms, EmulatorSettings.GetVblankFrequency(), compiles,
                         compile_ns / 1e6, static_cast<unsigned long long>(direct),
                         faults / window, static_cast<long long>(BbStats::hot_pages.load()),
@@ -784,7 +812,27 @@ void VideoOutDriver::Flip(const Request& req) {
                         BbStats::tick_wait_ns.exchange(0) / (window * 1e7),
                         frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0, gpu_ms,
-                        gpu_share);
+                        gpu_share, BbStutter::WallSeconds());
+            BbStutter::PrintWindow(window, frames);
+            // bbport: the game's total wait on relayed faults against the fault thread's handling
+            // time: the difference is queueing behind the single fault thread and transit.
+            if (BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr) {
+                static u64 last_faults = 0, last_fault_ns = 0;
+                const u64 faults = __atomic_load_n(&shared->game_faults, __ATOMIC_RELAXED);
+                const u64 fault_ns = __atomic_load_n(&shared->game_fault_ns, __ATOMIC_RELAXED);
+                if (last_fault_ns) {
+                    std::printf("Game fault waits (%.1f s): %llu relayed faults, %.1f ms waited "
+                                "(%.1f us each) | t=%.3f\n",
+                                window, static_cast<unsigned long long>(faults - last_faults),
+                                (fault_ns - last_fault_ns) / 1e6,
+                                faults > last_faults
+                                    ? (fault_ns - last_fault_ns) / 1e3 / double(faults - last_faults)
+                                    : 0.0,
+                                BbStutter::WallSeconds());
+                }
+                last_faults = faults;
+                last_fault_ns = fault_ns;
+            }
             // Texture-cache collector input: Metal's allocation minus the resident guest
             // buffers (the arena) against the trigger.
             // And where this session's pipelines came from (binary archive or compiler).

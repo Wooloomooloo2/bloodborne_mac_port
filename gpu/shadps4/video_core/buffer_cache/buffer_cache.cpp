@@ -13,6 +13,7 @@
 #include <sys/sysctl.h>
 #endif
 #include "bbport_copy.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/alignment.h"
 #include "core/memory.h"
@@ -127,6 +128,8 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
         address_space[first_page + page] = arena;
     }
     runtime.RegisterHoistTarget(arena, arena_bytes);
+    // Writer ticks per page: direct read-backs and their diagnostics (bbport_stutter.h).
+    BbStutter::page_ticks.Init(MacArenaBase, arena_bytes);
     // Shaders reach the arena by address (page table): resident, and declared on every encoder
     // (the declaration survives Submit).
     device.MakeResident(arena->Handle());
@@ -155,12 +158,45 @@ void BufferCache::RunGuestCopy(const BbCopy::Item& item) {
 
 // Small guest copies run on the recording thread (it spins for work: no wakeup, and it is
 // idle most of the time); PoolSmallCopies (toggle 524288) batches them for the copy threads.
+// bbport: an area entry brings ~900 new textures and ~250 MB of buffer data in one frame, mostly
+// as copies under 1 MB: bb:MtlRecorder copied them alone at ~0.5 GB/s (first-touch faults) while
+// the copy threads idled, and the recording thread waited 150 ms (stutter plan phase 4). Once a
+// submission's small copies pass 8 MB, the rest go to the copy threads. Both routes complete
+// before the submission (WaitHostCopies) and before deferred signals (BbCopy::AfterCopies).
 void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
     if (scheduler.IsRecordingDeferred() && !BbToggle::Disabled(BbToggle::PoolSmallCopies)) {
-        scheduler.RecordHostCopy([item] { item.run(item); });
-        return;
+        constexpr u64 BurstBytes = 8_MB;
+        const u64 tick = scheduler.CurrentTick();
+        if (tick != small_copy_tick) {
+            small_copy_tick = tick;
+            small_copy_bytes = 0;
+        }
+        small_copy_bytes += item.size;
+        if (small_copy_bytes <= BurstBytes || BbStutter::CopyBurstsOff()) {
+            scheduler.RecordHostCopy([item] { item.run(item); });
+            return;
+        }
+        BbStutter::burst_copy_bytes.fetch_add(item.size, std::memory_order_relaxed);
     }
     BbCopy::QueueCopy(item);
+}
+
+bool BufferCache::InvalidateWriteFault(VAddr device_addr, u64 size) {
+    static const u64 window = [] {
+        const char* env = std::getenv("BB_FAULT_WINDOW");
+        const u64 kib = env ? std::strtoull(env, nullptr, 10) : 256;
+        return std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+    }();
+    if (window <= TRACKER_BYTES_PER_PAGE || BbToggle::Disabled(BbToggle::FaultWindow) ||
+        BbStutter::MergedFaultRelayOff() ||
+        (device_addr >> TRACKER_HIGHER_PAGE_BITS) !=
+            ((device_addr + size - 1) >> TRACKER_HIGHER_PAGE_BITS)) {
+        InvalidateMemory(device_addr, size, false);
+        return false;
+    }
+    return memory_tracker->InvalidateWriteFault(
+        device_addr, size, Common::AlignDown(device_addr, window), window,
+        [this, device_addr, size] { ReadMemory(device_addr, size, true, false); });
 }
 
 void BufferCache::ExtendWriteFault(VAddr device_addr) {
@@ -176,7 +212,38 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
-    const auto flush_request = [this, device_addr, size, is_write] {
+    // bbport: BB_FRAME_STATS times each read-back and records the writer of the faulting page
+    // (bbport_stutter.h).
+    BbStutter::Readback record;
+    BbStutter::Readback* const stats = BbStats::enabled ? &record : nullptr;
+    if (stats) {
+        record.start_ns = BbStutter::NowNs();
+        record.page_tick = BbStutter::page_ticks.Max(device_addr, std::max<u64>(size, 1));
+        record.caller = assume_locks ? BbStutter::Inline
+                        : BbStutter::CurrentClass() == BbStutter::Fault ? BbStutter::FromFault
+                                                                        : BbStutter::FromOther;
+    }
+    // bbport: the fault thread copies the data itself when its writers completed (phase 1).
+    std::vector<VerifyEntry> snapshot;
+    if (!assume_locks) {
+        const int mode = BbStutter::DirectReadbackMode();
+        if (mode == BbStutter::DirectOff) {
+            BbStutter::direct.fallbacks[BbStutter::FbOff].fetch_add(1, std::memory_order_relaxed);
+        } else if (TryDirectReadBack(device_addr, size, is_write,
+                                     mode == BbStutter::DirectVerify ? &snapshot : nullptr)) {
+            if (stats) {
+                record.direct = true;
+                record.total_ns = BbStutter::NowNs() - record.start_ns;
+                BbStutter::NoteReadback(record);
+            }
+            return;
+        }
+    }
+    const auto flush_request = [this, device_addr, size, is_write, stats] {
+        if (stats) {
+            stats->pickup_ns = BbStutter::NowNs() - stats->start_ns;
+            BbStutter::tls_readback = stats;
+        }
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
@@ -193,11 +260,181 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
+        BbStutter::tls_readback = nullptr;
     };
     if (assume_locks) {
         flush_request();
     } else {
         liverpool->SendCommand<true>(std::move(flush_request));
+    }
+    if (stats) {
+        record.total_ns = BbStutter::NowNs() - record.start_ns;
+        BbStutter::NoteReadback(record);
+    }
+    if (!snapshot.empty()) {
+        CheckDirectReadBack(snapshot);
+    }
+}
+
+extern "C" int runtime_memory_write_backing_locked(uintptr_t address, const void* data,
+                                                   uint64_t size);
+extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_t size);
+
+bool BufferCache::TryDirectReadBack(VAddr device_addr, u64 size, bool is_write,
+                                    std::vector<VerifyEntry>* verify) {
+    auto& stats = BbStutter::direct;
+    const auto fallback = [&stats](u32 reason) {
+        stats.fallbacks[reason].fetch_add(1, std::memory_order_relaxed);
+        return false;
+    };
+    // A guest fault: a few bytes in one tracker region (ring-thread range invalidations, which
+    // mark the whole range CPU-modified, keep the old path).
+    if (size == 0 || size > 64 ||
+        (device_addr >> TRACKER_HIGHER_PAGE_BITS) !=
+            ((device_addr + size - 1) >> TRACKER_HIGHER_PAGE_BITS)) {
+        return fallback(BbStutter::FbShape);
+    }
+    const u32 first_block = device_addr >> block_shift;
+    const u32 last_block = (device_addr + size - 1) >> block_shift;
+    const auto* arena = GetArena(first_block, last_block);
+    u8* const view = arena ? arena->buffer.HostView() : nullptr;
+    if (!view) {
+        return fallback(BbStutter::FbNoView); // private arena (BB_ARENA_LAZY=0)
+    }
+    // The same window as the old path (ReadMemory), inside the faulting address's region.
+    constexpr u64 WindowSize = 512_KB;
+    const VAddr region_start = Common::AlignDown(device_addr, TRACKER_HIGHER_PAGE_SIZE);
+    const VAddr window_start = std::max<VAddr>(
+        {Common::AlignDown(device_addr, WindowSize), arena->cpu_addr, region_start});
+    const VAddr window_end = std::min<VAddr>(
+        {std::max<VAddr>(window_start + WindowSize, device_addr + size),
+         arena->cpu_addr + arena->size_bytes, region_start + TRACKER_HIGHER_PAGE_SIZE});
+    const u64 start_ns = BbStutter::NowNs();
+    u32 reason = BbStutter::NumFallbacks;
+    bool handled = false;
+    u64 pages_copied = 0, bytes = 0, pages_left = 0;
+    const auto complete = [this](u64 stamp) {
+        return stamp != 0 && scheduler.IsFree(BbStutter::EffectiveTick(stamp));
+    };
+    std::scoped_lock readback_lock{readback_mutex};
+    const bool tracked = memory_tracker->WithRegionLocked(device_addr, [&](RegionManager& region) {
+        if (!region.IsRegionModified<Type::GPU>(device_addr - region.GetCpuAddr(), size)) {
+            // Downloaded since the fault handler looked: only the fault's CPU state is left.
+            if (verify) {
+                reason = BbStutter::FbVerify;
+                return true;
+            }
+            if (is_write) {
+                region.ChangeRegionState<Type::CPU, true>(device_addr, size);
+            }
+            handled = true;
+            return true;
+        }
+        const VAddr page_start = Common::AlignDown(device_addr, TRACKER_BYTES_PER_PAGE);
+        const VAddr page_end = Common::AlignUp(device_addr + size, TRACKER_BYTES_PER_PAGE);
+        const u64 stamp = BbStutter::page_ticks.Max(page_start, page_end - page_start);
+        if (stamp == 0) {
+            reason = BbStutter::FbUnstamped;
+            return true;
+        }
+        if (!complete(stamp)) {
+            reason = BbStutter::FbNotComplete;
+            return true;
+        }
+        // The window's GPU-modified pages whose writers completed (the faulting ones included);
+        // the others stay GPU-modified and protected, and fault on their own later.
+        boost::container::small_vector<std::pair<VAddr, VAddr>, 16> runs;
+        region.ForEachModifiedRange<Type::GPU, false>(
+            window_start, s64(window_end - window_start), [&](VAddr address, u64 length) {
+                for (VAddr page = address; page < address + length;
+                     page += TRACKER_BYTES_PER_PAGE) {
+                    if (!complete(BbStutter::page_ticks.Max(page, TRACKER_BYTES_PER_PAGE))) {
+                        ++pages_left;
+                        continue;
+                    }
+                    if (!runs.empty() && runs.back().second == page) {
+                        runs.back().second = page + TRACKER_BYTES_PER_PAGE;
+                    } else {
+                        runs.emplace_back(page, page + TRACKER_BYTES_PER_PAGE);
+                    }
+                }
+            });
+        {
+            std::scoped_lock ranges_lock{gpu_ranges_mutex};
+            for (const auto& [run_start, run_end] : runs) {
+                gpu_modified_ranges.ForEachInRange(
+                    run_start, run_end - run_start, [&](VAddr start, VAddr end) {
+                        const u8* source = view + (start - arena->cpu_addr);
+                        if (verify) {
+                            verify->push_back(
+                                {start, BbStutter::page_ticks.Max(start, end - start),
+                                 std::vector<u8>(source, source + (end - start))});
+                            return;
+                        }
+                        // Guest bytes first, then the GPU bits (stage B reads them lock-free).
+                        runtime_memory_write_backing_locked(start, source, end - start);
+                        bytes += end - start;
+                    });
+                if (!verify) {
+                    gpu_modified_ranges.Subtract(run_start, run_end - run_start);
+                }
+            }
+        }
+        if (verify) {
+            reason = BbStutter::FbVerify;
+            return true;
+        }
+        for (const auto& [run_start, run_end] : runs) {
+            region.ChangeRegionState<Type::GPU, false>(run_start, run_end - run_start);
+            pages_copied += (run_end - run_start) / TRACKER_BYTES_PER_PAGE;
+        }
+        if (is_write) {
+            region.ChangeRegionState<Type::CPU, true>(device_addr, size);
+        }
+        handled = true;
+        return true;
+    });
+    if (!tracked) {
+        return fallback(BbStutter::FbNoRegion);
+    }
+    if (!handled) {
+        return fallback(reason);
+    }
+    stats.count.fetch_add(1, std::memory_order_relaxed);
+    stats.ns.fetch_add(BbStutter::NowNs() - start_ns, std::memory_order_relaxed);
+    stats.pages.fetch_add(pages_copied, std::memory_order_relaxed);
+    stats.bytes.fetch_add(bytes, std::memory_order_relaxed);
+    stats.other_pages_left.fetch_add(pages_left, std::memory_order_relaxed);
+    return true;
+}
+
+void BufferCache::CheckDirectReadBack(const std::vector<VerifyEntry>& snapshot) {
+    auto& stats = BbStutter::direct;
+    std::vector<u8> guest;
+    for (const auto& entry : snapshot) {
+        // A newer GPU write recorded meanwhile legitimately changes the bytes: skip.
+        if (BbStutter::page_ticks.Max(entry.address, entry.bytes.size()) != entry.stamp) {
+            stats.verify_skipped.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        guest.resize(entry.bytes.size());
+        if (!runtime_memory_read_backing(entry.address, guest.data(), guest.size())) {
+            stats.verify_skipped.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        stats.verified.fetch_add(1, std::memory_order_relaxed);
+        if (std::memcmp(guest.data(), entry.bytes.data(), guest.size()) != 0) {
+            static std::atomic<u32> logged{0};
+            if (stats.verify_mismatches.fetch_add(1, std::memory_order_relaxed) < 20 &&
+                logged.fetch_add(1) < 20) {
+                std::printf("Direct read-back verify: MISMATCH at %#llx, %zu bytes, stamp %llu "
+                            "(effective %llu), now %llu\n",
+                            static_cast<unsigned long long>(entry.address), entry.bytes.size(),
+                            static_cast<unsigned long long>(entry.stamp),
+                            static_cast<unsigned long long>(BbStutter::EffectiveTick(entry.stamp)),
+                            static_cast<unsigned long long>(scheduler.CurrentTick()));
+            }
+        }
     }
 }
 
@@ -213,6 +450,7 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     boost::container::small_vector<Download, 1> downloads;
     u64 total_size_bytes = 0;
     const VAddr arena_base = arena->cpu_addr;
+    std::scoped_lock readback_lock{readback_mutex};
     memory_tracker->ForEachDownloadRange<false>(device_addr, size, [&](u64 address, u64 size) {
         const auto add_download = [&](VAddr start, VAddr end) {
             const VAddr word_start = Common::AlignDown(start, 4);
@@ -228,8 +466,13 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
             constexpr u64 mask = ~(align - 1ULL);
             total_size_bytes += (word_end - word_start + align - 1) & mask;
         };
+        std::scoped_lock ranges_lock{gpu_ranges_mutex};
         gpu_modified_ranges.ForEachInRange(address, size, add_download);
         gpu_modified_ranges.Subtract(address, size);
+        if (auto* stats = BbStutter::tls_readback) {
+            stats->window_tick =
+                std::max(stats->window_tick, BbStutter::page_ticks.Max(address, size));
+        }
     });
     if (total_size_bytes == 0) {
         return;
@@ -241,7 +484,12 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
     }
     runtime.CopyBuffer(*arena, *download.buffer, copies);
     // Shared storage is coherent: the data is readable once the copy completed.
+    const u64 finish_start = BbStutter::tls_readback ? BbStutter::NowNs() : 0;
     scheduler.Finish();
+    if (auto* stats = BbStutter::tls_readback) {
+        stats->finish_ns += BbStutter::NowNs() - finish_start;
+        stats->bytes += total_size_bytes;
+    }
 
     for (const auto& d : downloads) {
         memory->TryWriteBacking(std::bit_cast<u8*>(d.address), download.mapped + d.staging_offset,
@@ -382,6 +630,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
             BbStats::buffer_upload_bytes.load(std::memory_order_relaxed) - uploaded_before;
     }
     if (is_written) {
+        std::scoped_lock lock{gpu_ranges_mutex};
         gpu_modified_ranges.Add(device_addr, size);
     }
     // bbport: index and vertex reads are not tracked as accesses; every use is (upload hoisting).
@@ -533,13 +782,21 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     boost::container::small_vector<BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};
+    // bbport: the command buffer being recorded writes this range: its tick is stamped on the
+    // pages as they are marked GPU-modified, and a submission before the writing command is
+    // recorded marks the tick as split (direct read-backs, bbport_stutter.h).
+    u64 write_tick = 0;
+    if (is_written) {
+        write_tick = scheduler.CurrentTick();
+        scheduler.NoteGpuWriteBound();
+    }
     memory_tracker->ForEachUploadRange(
         device_addr, size, is_written,
         [&](u64 addr, u64 size) {
             copies.emplace_back(total_size_bytes, addr, size);
             total_size_bytes += size;
         },
-        [&] { src_buffer = UploadCopies(arena, copies, total_size_bytes); });
+        [&] { src_buffer = UploadCopies(arena, copies, total_size_bytes); }, write_tick);
 
     if (src_buffer && !runtime.HoistCopy(src_buffer, arena, copies)) {
         runtime.CopyBuffer(*src_buffer, *arena, copies);

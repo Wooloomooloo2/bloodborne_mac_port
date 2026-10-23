@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/debug.h"
 #include "common/types.h"
@@ -96,9 +97,12 @@ public:
             });
     }
 
-    /// Call 'func' for each CPU modified range and unmark those pages as CPU modified
+    /// Call 'func' for each CPU modified range and unmark those pages as CPU modified.
+    /// bbport: `write_tick` (is_written) is the tick of the command buffer being recorded; it is
+    /// stamped on the pages in the same critical section that marks them GPU-modified, which
+    /// is where the direct read-back reads it (bbport_stutter.h).
     void ForEachUploadRange(VAddr query_cpu_range, u64 query_size, bool is_written, auto&& func,
-                            auto&& on_upload) {
+                            auto&& on_upload, u64 write_tick = 0) {
         IteratePages<true>(query_cpu_range, query_size,
                            [&func, is_written](RegionManager* manager, u64 offset, size_t size) {
                                // bbport: read-only bindings skip the region lock when no page
@@ -122,11 +126,48 @@ public:
             return;
         }
         IteratePages<false>(query_cpu_range, query_size,
-                            [&func, is_written](RegionManager* manager, u64 offset, size_t size) {
+                            [write_tick](RegionManager* manager, u64 offset, size_t size) {
                                 manager->template ChangeRegionState<Type::GPU, true>(
                                     manager->GetCpuAddr() + offset, size);
+                                BbStutter::page_ticks.Stamp(manager->GetCpuAddr() + offset, size,
+                                                            write_tick);
                                 manager->lock.unlock();
                             });
+    }
+
+    /// bbport: InvalidateRegion for a guest write fault inside one region, with its fault window
+    /// in the same protection update (RegionManager::InvalidateWithWindow). False: the region
+    /// holds GPU data there (on_flush ran; the caller extends the window separately) or is not
+    /// tracked.
+    bool InvalidateWriteFault(VAddr cpu_addr, u64 size, VAddr window_addr, u64 window_size,
+                              auto&& on_flush) noexcept {
+        auto* manager = top_tier[cpu_addr >> TRACKER_HIGHER_PAGE_BITS];
+        if (!manager) {
+            return false;
+        }
+        {
+            std::scoped_lock lk{manager->lock};
+            const u64 offset = cpu_addr - manager->GetCpuAddr();
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Disabled ||
+                !manager->template IsRegionModified<Type::GPU>(offset, size)) {
+                manager->InvalidateWithWindow(cpu_addr, size, window_addr, window_size);
+                return true;
+            }
+        }
+        on_flush();
+        return false;
+    }
+
+    /// bbport: runs `func(RegionManager&)` under the lock of the region holding `cpu_addr`
+    /// (direct read-backs). False without calling it when the region was never tracked.
+    template <typename Func>
+    bool WithRegionLocked(VAddr cpu_addr, Func&& func) {
+        auto* manager = top_tier[cpu_addr >> TRACKER_HIGHER_PAGE_BITS];
+        if (!manager) {
+            return false;
+        }
+        std::scoped_lock lk{manager->lock};
+        return func(*manager);
     }
 
     /// Call 'func' for each GPU modified range and unmark those pages as GPU modified

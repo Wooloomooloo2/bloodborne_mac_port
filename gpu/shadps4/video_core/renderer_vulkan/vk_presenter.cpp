@@ -11,6 +11,7 @@
 #include "bbport_gpu_capture.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -282,8 +283,21 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
             if (recent_frame_ticks.size() == frames_ahead) {
                 const u64 wait_start = bbport::CpuCycles();
                 draw_scheduler.Wait(tick);
-                BbStats::frames_ahead_ns.fetch_add(
-                    bbport::CyclesToNs(bbport::CpuCycles() - wait_start), std::memory_order_relaxed);
+                const u64 waited_ns = bbport::CyclesToNs(bbport::CpuCycles() - wait_start);
+                BbStats::frames_ahead_ns.fetch_add(waited_ns, std::memory_order_relaxed);
+                // bbport: a GPU frame that finished late (bbport_stutter.h): when the waited
+                // tick was committed and how long the GPU ran it.
+                if (BbStats::enabled && waited_ns > 20'000'000) {
+                    const auto info = BbStutter::GetTick(tick);
+                    const u64 now = BbStutter::NowNs();
+                    std::printf("GPU late: waited %.1f ms for tick %llu, committed %.1f ms ago, "
+                                "GPU %.1f ms, done %.1f ms ago | t=%.3f\n",
+                                waited_ns / 1e6, static_cast<unsigned long long>(tick),
+                                info.known && info.commit_ns ? (now - info.commit_ns) / 1e6 : -1.0,
+                                info.gpu_us / 1e3,
+                                info.known && info.done_ns ? (now - info.done_ns) / 1e6 : -1.0,
+                                BbStutter::WallSeconds());
+                }
             }
         }
     }

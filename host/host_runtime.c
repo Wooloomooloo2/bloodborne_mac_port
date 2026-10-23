@@ -215,6 +215,16 @@ int runtime_memory_write_backing(uintptr_t address, const void *data, uint64_t s
     store_once((unsigned char *)address, data, size);
     return 1;
 }
+/* The same with the view table locked across the store, for threads that run concurrently with
+ * the ring thread's map/unmap events (the fault thread's direct read-backs): the view cannot be
+ * removed between the check and the store. */
+int runtime_memory_write_backing_locked(uintptr_t address, const void *data, uint64_t size) {
+    pthread_rwlock_rdlock(&table_lock);
+    const int covered = covered_locked(address, address + size);
+    if (covered) store_once((unsigned char *)address, data, size);
+    pthread_rwlock_unlock(&table_lock);
+    return covered;
+}
 /* Game threads live in bb-probe: the spike log's CPU times come through the control block. */
 uint64_t runtime_thread_cpu_ns(int which) {
     (void)which;
@@ -288,6 +298,17 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
     const BbGpuProtect record = {{BBGPU_REC_PROTECT, sizeof record}, address, size, (uint32_t)read, (uint32_t)write, seq, 0};
     while (bbgpu_ring_push(g_shared, &g_shared->protect, &record, UINT64_C(1000000000))) game_alive_or_exit();
     pthread_mutex_unlock(&protect_lock);
+    /* bbport: opt-in (second toggle word bit 6): spin up to 30 us for the answer before the wait
+     * below may sleep. Measured standing in the city (2026-10-23): the round trip went only from
+     * 23.0 to 21.6 us while the waiting threads burned CPU (+0.4 ms per frame on the recording
+     * thread), so it stays off. */
+    if (bbgpu_toggle_word2() & 64) {
+        const uint64_t until = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + 30000;
+        while ((int32_t)(__atomic_load_n(&g_shared->protect_done, __ATOMIC_ACQUIRE) - seq) < 0 &&
+               clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < until) {
+            bbgpu_cpu_relax();
+        }
+    }
     for (;;) {
         const uint32_t done = __atomic_load_n(&g_shared->protect_done, __ATOMIC_ACQUIRE);
         if ((int32_t)(done - seq) >= 0) return;

@@ -1752,3 +1752,81 @@ The fix (src/runtime_hooks.c, observer hooks: no lock):
 - Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
   frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
   spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
+
+## Microstutters while moving: GPU read-backs, protect relays, recording CPU, area entries (M3 Pro, 2026-10-23)
+
+The player's settings (1080p native, upscaler off, fps_cap 60), moving through Central Yharnam:
+**25.5 frames per minute over 24 ms** (a missed 60 Hz deadline shows a frame one 120 Hz refresh
+late), a 40-100 ms hitch about every 12 s, and 100-370 ms area entries. New `BB_FRAME_STATS` lines
+(`Read-backs`, `Protect relays`, `Fault thread`, `Game protect`, `GPU late`, and `t=` on every
+line) split them up:
+
+- **GPU read-backs on game write faults: the main cause.** A guest write to a page that holds
+  GPU-written data made stage A drain the draw pipe, copy on the GPU and run `Finish()`. The frame
+  stopped, and every later fault queued behind it on the one fault thread. 490 read-backs in 5
+  minutes waited 8.3 ms each (up to 147 ms), behind 72% of the late frames. In 93% of them the
+  command buffer that wrote the faulting page had already completed.
+  - **Now** the fault thread copies such pages straight from the lazy arena's CPU view
+    (`BufferCache::TryDirectReadBack`): 0.15 ms each.
+  - The writer of each 4 KiB page is stamped where the page is marked GPU-modified. A page whose
+    writer has not completed keeps the old path.
+  - `BB_DIRECT_READBACK=verify` byte-compares each decision with the old path: 0 mismatches in
+    874 checks over three moving sessions.
+- **The recording thread's own CPU.** Arena range tracking was ~42% of bb:DrawRec in the city:
+  - `Runtime::NoteSubmissionUse` 18%: a u16 tag store per KiB over ~3.6 GB of vertex-pool
+    ranges per frame;
+  - `BufferBarriers::Conflicts` 15%: every page of every live chunk.
+
+  Hoist tags are now per 64 KiB granule (page tags at the edges), and buffer barriers keep an
+  index of written pages: **12.0-12.9 -> 7.0-7.1 ms per frame**. Both processes 77.9 -> 66.4 ms of
+  CPU per frame; the same ordering waits; images unchanged.
+- **Protect relays.** The recording and the fault thread each send ~3,000 per second, ~20 µs of
+  round trip each. That is thread wake-ups, not locks: the game's mprotect takes 7 µs and its
+  table-lock wait 0.2 µs.
+  - A write fault's state change and its 256 KB window now go out as one relay: fault-thread
+    relays -44%, the game's wait per relayed fault 70 -> 48 µs.
+  - The relay path runs at user-interactive QoS.
+- **Area entries.** ~900 new textures and ~250 MB of copies under 1 MB came in one frame, all on
+  bb:MtlRecorder at ~0.5 GB/s while the copy threads idled. The recording thread waited ~150 ms
+  for them.
+  - Past 8 MB of small copies per submission, the rest now go to the copy threads.
+  - The level entry: 360/373 -> 284/293 ms. The host-copy wait in streaming frames: 43 -> 0.7 ms
+    on average.
+- **GPU-late frames are memory pressure.** Command buffers that take 37-112 ms of GPU time line
+  up with compression bursts (21k/s against a 1.9k median) and swap-outs. The game takes ~8-9 GB;
+  other apps took 5-6 GB of the 18 GB.
+  - The page manager's page-state table (256 MiB, all of it written at startup) is now lazily
+    committed memory: 256 MB less.
+
+Moving sessions, A/B within one session (switched every 30 s by the toggle file; level time only):
+
+| Late frames per minute | > 24 ms | > 33 ms | > 40 ms | > 60 ms |
+|---|---|---|---|---|
+| Read-backs + recording CPU: off / on | 32.7 / **21.1** | 14.5 / **9.1** | 5.8 / 5.8 | 3.3 / 2.5 |
+| The same plus relays: all off / all on | 19.4 / **7.6** | 3.7 / 3.1 | 1.2 / 2.2 | 0.0 / 1.3 |
+| Small-copy bursts: off / on (new areas) | 17.8 / **14.8** | 7.4 / **4.8** | 5.0 / **2.8** | 2.7 / **1.6** |
+
+- **The second session's on arm** had its frames over 40 ms from area streaming (23-64 new
+  textures, 77-90 MB): the copy bursts came after it.
+- **In that session:**
+  - recording CPU 10.3 -> 6.1 ms per frame (median);
+  - fault thread 106 -> 46 ms/s;
+  - the game's fault waits 39.0 -> 17.1 s.
+- **Everything on** (a lighter route, 6 area loads instead of 13): about 3 frames per minute over
+  24 ms, 0.4 over 40 ms, none over 60 ms.
+- No errors in any session.
+
+**Switches:** the second number in `BB_TOGGLE_FILE` (read while the game runs). Bits:
+
+| Bit | Effect |
+|---|---|
+| 1 | direct read-backs off |
+| 2 | verify |
+| 4 | per-KiB hoist tags |
+| 8 | full barrier walks |
+| 16 | QoS off |
+| 32 | two relays per fault |
+| 64 | a 30 µs spin before a relay wait sleeps (off by default: 1.4 µs saved per relay, for CPU) |
+| 128 | no copy bursts |
+
+`BB_DIRECT_READBACK=0/1/verify` sets the read-back mode at start.

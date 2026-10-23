@@ -26,6 +26,10 @@ int bbgpu_host_start(const BbGpuConfig *config, void *shared);
 /* GPU host: a fault the game took on a GPU-protected page (M4): 1 when the renderer handled it
  * (the game retries the access), 0 when the address is not GPU memory. */
 int bbgpu_host_fault(uint64_t address, int write);
+/* bbport (stutter plan phase 2): the second word of BB_TOGGLE_FILE, and user-interactive QoS for
+ * the calling thread unless that word switches it off (bit 16). */
+uint64_t bbgpu_toggle_word2(void);
+void bbgpu_apply_qos(void);
 /* GPU host: asks the game to restart (the settings menu's Restart, through runtime_restart). */
 void bbgpu_split_post_restart(void);
 /* Before an _exit (no destructors run): writes the Metal pipeline archive if pipelines are
