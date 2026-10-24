@@ -48,14 +48,16 @@ static std::vector<u8> MakeProtoPayload(const T& msg) {
 
 // Read a u32-LE-prefixed proto blob starting at pos in p.
 // Returns the raw bytes ready for ParseFromString.
+// bbport: bounds in size_t. As int, a length of 2 GiB or more went negative, passed the check
+// and copied past the payload (the server's length field is not to be trusted).
 std::string ShadNetClient::ExtractBlob(const std::vector<u8>& p, int pos) {
-    if (pos + 4 > static_cast<int>(p.size()))
+    if (pos < 0 || static_cast<std::size_t>(pos) > p.size() || p.size() - pos < 4)
         return {};
+    const std::size_t at = static_cast<std::size_t>(pos) + 4;
     const u32 len = GetLE32(p.data() + pos);
-    pos += 4;
-    if (pos + static_cast<int>(len) > static_cast<int>(p.size()))
+    if (len > p.size() - at)
         return {};
-    return std::string(reinterpret_cast<const char*>(p.data() + pos), len);
+    return std::string(reinterpret_cast<const char*>(p.data() + at), len);
 }
 
 ShadNetClient::ShadNetClient() {
