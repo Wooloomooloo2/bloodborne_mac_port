@@ -99,6 +99,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     @objc func showAbout(_ sender: Any?) { About.show() }
 
+    @objc func showAchievements(_ sender: Any?) {
+        model.page = .achievements
+        showWindow()
+    }
+
     @objc func checkForUpdates(_ sender: Any?) {
         showWindow()
         model.checkForUpdatesNow()
@@ -141,6 +146,9 @@ MainActor.assumeIsolated {
     let appMenu = NSMenu()
     appMenu.addItem(withTitle: "About Bloodborne", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "").target = delegate
     appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "").target = delegate
+    let achievements = appMenu.addItem(withTitle: "Achievements…", action: #selector(AppDelegate.showAchievements(_:)), keyEquivalent: "t")
+    achievements.target = delegate
+    achievements.keyEquivalentModifierMask = [.command, .shift]
     appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Hide Bloodborne", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
     appMenu.addItem(.separator())
