@@ -1,5 +1,73 @@
 # Temporal upscaling and frame generation — frame analysis and plan
 
+## Experimental MetalFX frame generation on macOS (2026-10-24)
+
+`BB_METAL_FRAMEGEN=1` enables an experimental intermediate image between each pair
+of real frames. It requires macOS 26+, a build with the macOS 26 SDK or newer, a
+device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, and an active
+temporal upscaler (`metalfx`, `fsr3`, or `taa`). It is off by default and has no saved
+setting. For example, with your existing game/data configuration:
+
+```sh
+BB_METAL_FRAMEGEN=1 BB_UPSCALER=metalfx bash run.sh
+```
+
+Keep the existing game FPS cap at the desired **real** frame rate. The presenter
+attempts two images per real frame; simulation, physics, input polling and guest
+completion signals keep their existing rates. A 120 Hz display can show a 60 FPS
+real-frame stream plus intermediates. Generating images adds GPU work and latency;
+it does not make the game simulate faster or guarantee a higher delivered rate.
+The existing FPS overlay continues to measure real-frame cadence.
+
+The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
+tonemapped scene/UI boundary. A second pass identifies changes made by the HUD.
+Interpolation reads through the actual video-out view after the game's gamma LUT,
+so its channel swizzle and sRGB decode match the real frame. A dilated HUD mask
+restores current real-frame colors after interpolation. At native 1080p this
+opt-in mode uses the existing output-size UI path and reconstructs the tonemapped
+scene, rather than the default HDR reconstruction before game post-processing.
+
+Snapshots belong to individual frames and travel with the display buffer to the
+presenter. Four reusable snapshot sets bound allocation; busy slots skip generation
+without waiting. Deferred closures, GPU completion handlers, interpolation history,
+and the final real-frame present pin the relevant sets until all reads complete.
+The two presents wait on the same render tick. A three-drawable layer admits the
+pair; a missing second drawable presents the real frame alone. The same overlay
+draw data is rendered over both images without advancing UI/input/FPS timing twice.
+
+Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
+timing, and gaps in real-frame sequence reset history. Menus/loading screens with
+no matching scene use real frames. Unsupported devices/SDKs retain normal
+presentation. The legacy FSR 1 presenter pass and 10-bit video-out conversion use
+real frames alone. The MetalFX effect is encoded on the existing render queue;
+there is no extra interpolation queue or CPU wait per generated frame.
+
+This remains experimental: interpolation currently sees the composited display
+image, and the mask restores the current HUD footprint rather than reconstructing
+the scene hidden by the previous HUD. Moving/fading HUD elements, transparency and
+disocclusions can still leave artifacts. Actual game captures, delivered display
+cadence, input latency, GPU cost, and long-session behavior require gameplay QA.
+
+Offscreen checks (no game/window):
+
+```sh
+cmake --build out/gpu-arm64 --target framegen-test
+out/gpu-arm64/framegen-test
+MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
+```
+
+The fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
+through GPU completion, bounded-pool fallback, warmup/cut/gap resets and moving
+geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
+pixels interpolated to the expected midpoint 49.5. These are fixture results,
+not gameplay or FPS measurements. The existing present and overlay fixtures also
+cover paired drawable retirement and identical overlay pixels.
+
+API reference: [Apple's frame interpolator documentation](https://developer.apple.com/documentation/metalfx/mtlfxframeinterpolatorbase).
+Snapshot/presentation ideas were adapted from the direct-Metal `bloodborne_mac`
+port's `gpu/metal/frame_generation.mm` at `b395cf4`; the implementation here uses
+this project's scheduler, camera/object motion, and independent present queue.
+
 ## Native TAA and missing FSR 4 assets (2026-10-01)
 
 `upscaler=taa` / `BB_UPSCALER=taa` is a separate native-resolution temporal AA
