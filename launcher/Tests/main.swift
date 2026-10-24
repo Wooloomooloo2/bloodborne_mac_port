@@ -940,6 +940,39 @@ do {
     try? fm.removeItem(at: dir)
 }
 
+// Achievement catalog, compatible history, filtering inputs and banner preference.
+do {
+    check(Achievement.catalog.map(\.id) == Array(0..<40), "all trophy IDs")
+    check(Achievement.catalog.filter(\.dlc).count == 6, "six DLC trophies")
+    let history = AchievementHistory.parse("14 200\n14 100\nbroken\n40 4\n30 -1\n31 10junk\n32 253402300800\n21 300 extra\n")
+    check(history.count == 2 && history[14]?.timeIntervalSince1970 == 100 && history[21]?.timeIntervalSince1970 == 300, "earliest valid history")
+    check(AchievementArtwork.parse(Data()).isEmpty, "missing trophy artwork")
+    var archive = [UInt8](repeating: 0, count: 184)
+    func put(_ value: UInt64, at offset: Int, count: Int) {
+        for i in 0..<count { archive[offset+i] = UInt8(truncatingIfNeeded: value >> ((count-1-i)*8)) }
+    }
+    put(0xdca24d00, at: 0, count: 4); put(184, at: 8, count: 8)
+    put(1, at: 16, count: 4); put(64, at: 20, count: 4)
+    for (i, c) in Array("TROP030.PNG".utf8).enumerated() { archive[96+i] = c }
+    put(160, at: 128, count: 8); put(24, at: 136, count: 8)
+    for (i, c) in [UInt8(137),80,78,71,13,10,26,10].enumerated() { archive[160+i] = c }
+    put(1, at: 176, count: 4); put(1, at: 180, count: 4)
+    check(AchievementArtwork.parse(Data(archive))[30]?.count == 24, "bounded trophy PNG directory")
+    put(513, at: 176, count: 4)
+    check(AchievementArtwork.parse(Data(archive)).isEmpty, "oversized PNG rejected")
+    put(1, at: 176, count: 4); put(1, at: 144, count: 4)
+    check(AchievementArtwork.parse(Data(archive)).isEmpty, "encrypted entry rejected")
+    put(0, at: 144, count: 4); put(UInt64.max, at: 128, count: 8)
+    check(AchievementArtwork.parse(Data(archive)).isEmpty, "invalid PNG offset rejected")
+    check(GameSettings().achievementBanners, "banners default on")
+    var settings = GameSettings(ini: IniFile(text: "achievement_banners=0\n"))
+    check(!settings.achievementBanners, "load banner setting")
+    settings.achievementBanners = true
+    var ini = IniFile(text: "future_option=keep\n")
+    settings.apply(to: &ini)
+    check(ini["achievement_banners"] == "1" && ini["future_option"] == "keep", "banner setting preserves unrelated keys")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)

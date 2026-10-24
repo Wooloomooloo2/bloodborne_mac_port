@@ -43,9 +43,15 @@ int main() {
     std::fclose(f);
     Load();
     assert(Get().upscaler == UpscalerFsr3 && Get().preset == 2);
+    assert(Get().achievement_banners);
+    Get().achievement_banners = false;
     Get().preset = 3;
     Save();
     std::string text = Read(path);
+    assert(Count(text, "achievement_banners=0") == 1);
+    Get().achievement_banners = true;
+    Load();
+    assert(!Get().achievement_banners);
     assert(Count(text, "fps_cap=40") == 1 && Count(text, "fullscreen=1") == 1);
     assert(Count(text, "renderer=") == 0); // the removed renderer setting is dropped
     assert(Count(text, "preset=3") == 1 && Count(text, "preset=2") == 0);

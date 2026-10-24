@@ -18,6 +18,8 @@ namespace BbOverlay::MetalBackend {
 
 /// ImGui_ImplMetal_Init for `device`; targets are expected in `pixel_format` (MTLPixelFormat).
 bool Init(Metal::Device& device, u32 pixel_format);
+// Uses the user's unencrypted trophy PNG when present. False: draw the grade cup instead.
+bool TrophyImage(int id, float size);
 
 /// One ImGui frame drawn over `target` (id<MTLTexture>, contents loaded and stored) on
 /// `command_buffer` (id<MTLCommandBuffer>): ImGui_ImplMetal_NewFrame for the pass, then `build`

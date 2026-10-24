@@ -85,6 +85,14 @@ else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
 fi
 if [[ ${1:-} == --test ]]; then
+    "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_macos_trophies.c "${runtime[@]}" \
+        out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/trophies-test
+    out/trophies-test
+    /usr/bin/clang -arch arm64 -arch x86_64 -std=c11 -O2 -Wall -Wextra -Werror -I. \
+        tests/test_trophy_bridge.c -o out/trophy-bridge-test
+    arch -arm64 out/trophy-bridge-test
+    arch -x86_64 out/trophy-bridge-test
+    python3 -m unittest discover -s tests -p test_trophies.py
     python3 tests/test_launcher_stop.py
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_bindings.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
     out/pad-test
