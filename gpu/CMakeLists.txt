@@ -330,7 +330,8 @@ target_link_options(motion-shader-test PRIVATE -Wl,-export_dynamic)
 if (APPLE)
     # No game/runtime dependency: scene snapshots, MetalFX interpolation and history/pool rules.
     add_executable(framegen-test EXCLUDE_FROM_ALL ../tests/test_framegen.mm
-        shim/bbport_framegen.mm shim/common/logging/log.cpp shim/common/assert.cpp)
+        shim/bbport_framegen.mm shim/bbport_settings.cpp
+        shim/common/logging/log.cpp shim/common/assert.cpp)
     target_include_directories(framegen-test PRIVATE shim shadps4)
     target_compile_features(framegen-test PRIVATE cxx_std_20)
     target_compile_options(framegen-test PRIVATE -Wall -Wextra -Werror -UNDEBUG)

@@ -14,7 +14,7 @@ class Encoder;
 
 namespace BbFrameGen {
 
-bool Requested();                      // BB_METAL_FRAMEGEN=1; off by default
+bool Requested();                      // launch setting; menu changes need a restart
 bool Supported(Metal::Device& device); // macOS 26+, queried on the actual device
 
 struct Description {

@@ -4,6 +4,7 @@
 // sRGB, warmup/cuts/gaps, and bounded pool fallback. No game files or window
 // required.
 #include "bbport_framegen.h"
+#include "bbport_settings.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #include "video_core/renderer_metal/mtl_texture.h"
@@ -39,6 +40,15 @@ BbFrameGen::Description Description() {
             .vertical_fov = 1.f};
 }
 void Policy() {
+    auto& settings = BbSettings::Get();
+    Expect(!BbFrameGen::Requested(), "frame generation starts disabled");
+    settings.framegen = true;
+    Expect(!BbFrameGen::Requested(), "menu changes cannot enable an unprepared presenter");
+    settings.startup_framegen = true;
+    Expect(BbFrameGen::Requested(), "saved launch setting enables generation");
+    settings.framegen = false;
+    Expect(BbFrameGen::Requested(), "menu changes keep in-flight frame ownership until restart");
+    settings.startup_framegen = false;
     const auto previous = Description();
     auto next = previous;
     ++next.sequence;

@@ -135,6 +135,8 @@ TemporalUpscaler::TemporalUpscaler(Metal::Device& device_, Scheduler& scheduler_
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
+    BbSettings::Get().framegen_supported =
+        enabled && !EmulatorSettings.IsFsrEnabled() && BbFrameGen::Supported(device);
     if (enabled && BbFrameGen::Requested()) {
         if (EmulatorSettings.IsFsrEnabled()) {
             std::printf("Frame generation: legacy FSR 1 presentation is not supported\n");

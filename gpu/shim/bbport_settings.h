@@ -76,6 +76,11 @@ struct Values {
     /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};
+    /// Experimental MetalFX interpolation; creates presentation resources at launch.
+    std::atomic<bool> framegen{false};
+    std::atomic<bool> framegen_supported{false}; ///< device and launch path can interpolate
+    bool startup_framegen = false;
+    bool framegen_forced = false; ///< BB_METAL_FRAMEGEN overrides the menu at launch
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity (0.1-10),
     /// mouse_vertical (vertical speed relative to horizontal, 0.25-4), mouse_invert_y.
     /// Off by default: on, the first left click in the window captures the cursor, for gamepad
@@ -141,6 +146,7 @@ void ChooseUpscaler(int upscaler);
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
+bool FrameGenerationNeedsRestart();
 /// Writes the file (menu changes).
 void Save();
 

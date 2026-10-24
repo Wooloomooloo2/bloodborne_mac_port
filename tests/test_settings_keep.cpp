@@ -37,11 +37,14 @@ int main() {
     unsetenv("BB_UPSCALER");
     unsetenv("BB_UPSCALE_PRESET");
     unsetenv("BB_RENDER_RES");
+    unsetenv("BB_METAL_FRAMEGEN");
     FILE* f = std::fopen(path, "w");
     assert(f);
     std::fprintf(f, "# a comment\nupscaler=fsr3\nfps_cap=40\nfullscreen=1\nrenderer=metal\npreset=2\n");
     std::fclose(f);
     Load();
+    assert(!Get().framegen && !Get().startup_framegen && !Get().framegen_forced);
+    assert(!FrameGenerationNeedsRestart());
     assert(Get().upscaler == UpscalerFsr3 && Get().preset == 2);
     Get().preset = 3;
     Save();
@@ -74,6 +77,27 @@ int main() {
     Load();
     assert(Get().ultrawide_width == 0);
     unsetenv("BB_ULTRAWIDE_RES");
+    // Frame generation is saved once, waits for restart, and the environment can
+    // force either launch state. Unsupported hardware keeps the saved preference.
+    Get().framegen = true;
+    assert(FrameGenerationNeedsRestart() && !Get().startup_framegen);
+    Save(); Save();
+    assert(Count(Read(path), "framegen=1") == 1);
+    Load();
+    assert(Get().framegen && Get().startup_framegen && !FrameGenerationNeedsRestart());
+    Get().framegen_supported = false;
+    Save();
+    assert(Count(Read(path), "framegen=1") == 1);
+    setenv("BB_METAL_FRAMEGEN", "0", 1);
+    Load();
+    assert(!Get().framegen && !Get().startup_framegen && Get().framegen_forced);
+    setenv("BB_METAL_FRAMEGEN", "1", 1);
+    Load();
+    assert(Get().framegen && Get().startup_framegen && Get().framegen_forced);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Get().framegen = false;
+    Save(); Load();
+    assert(!Get().framegen && !Get().startup_framegen && !Get().framegen_forced);
     std::remove(path);
     std::puts("PASS: settings menu keeps the launcher's keys");
     return 0;
