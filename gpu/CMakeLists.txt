@@ -415,6 +415,11 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+add_executable(frame-rates-test EXCLUDE_FROM_ALL ../tests/test_frame_rates.cpp)
+target_include_directories(frame-rates-test PRIVATE shim)
+target_compile_features(frame-rates-test PRIVATE cxx_std_20)
+target_compile_options(frame-rates-test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+
 
 # Opt-in synthetic regression: no game files or runtime diagnostics required.
 # bbport: the guest memory buffers' lookup (header-only; also run with -fsanitize=thread).
