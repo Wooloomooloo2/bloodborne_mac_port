@@ -351,6 +351,27 @@ struct UdpPort {
     std::condition_variable stun_cv;
     std::map<std::uint64_t, std::chrono::steady_clock::time_point> heard; // addr | port << 32
 };
+// Bounds on what peers can make this process keep: datagrams the game has not read yet (per
+// socket; the oldest goes first, as a full kernel buffer would drop), and the sources heard from
+// (hole punching looks at the last 20 s; older entries go first once there are too many).
+constexpr std::size_t kMaxQueued = 256, kMaxHeard = 1024;
+constexpr auto kHeardKeep = std::chrono::seconds(60);
+// Under port->mu.
+void note_heard(UdpPort& port, std::uint64_t key) {
+    const auto now = std::chrono::steady_clock::now();
+    port.heard[key] = now;
+    if (port.heard.size() <= kMaxHeard) return;
+    for (auto it = port.heard.begin(); it != port.heard.end();) {
+        it = now - it->second > kHeardKeep ? port.heard.erase(it) : std::next(it);
+    }
+    while (port.heard.size() > kMaxHeard) {
+        auto oldest = port.heard.begin();
+        for (auto it = port.heard.begin(); it != port.heard.end(); ++it) {
+            if (it->second < oldest->second) oldest = it;
+        }
+        port.heard.erase(oldest);
+    }
+}
 // A hole-punch probe: not a P2P datagram (no 0xff); the receiving port drops it.
 constexpr std::uint8_t kProbe[8] = {0xfe, 'b', 'b', 'h', 'p', 0, 0, 0};
 
@@ -452,7 +473,7 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
             // A peer's hole-punch probe or the STUN server's answer: neither is the game's.
             if (n >= 8 && std::memcmp(buf, kProbe, 5) == 0) {
                 std::lock_guard lk(port->mu);
-                port->heard[source_key(sa.sin_addr.s_addr, sa.sin_port)] = std::chrono::steady_clock::now();
+                note_heard(*port, source_key(sa.sin_addr.s_addr, sa.sin_port));
                 continue;
             }
             if (n >= 20 && buf[0] == 0x01 && buf[1] == 0x01) {
@@ -475,12 +496,15 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
         bool forwarded = false;
         {
             std::lock_guard lk(port->mu);
-            port->heard[source_key(sa.sin_addr.s_addr, sa.sin_port)] = std::chrono::steady_clock::now();
+            note_heard(*port, source_key(sa.sin_addr.s_addr, sa.sin_port));
             auto it = hdr ? port->by_vport.find(dst) : port->by_vport.end();
             if (it != port->by_vport.end()) {
                 q = it->second;
             } else if (!port->by_vport.empty()) {
                 // No socket on that vport (or no header): the first bound vport takes it.
+                // TODO(bbport): drop these when the source is neither a room member nor the relay
+                // server. First contact (STUN answers, the relay, a peer's first datagram after
+                // hole punching) must still get through, which needs testing with live players.
                 q = port->by_vport.begin()->second;
                 forwarded = true;
             }
@@ -499,6 +523,7 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
         }
         {
             std::lock_guard lk(q->mu);
+            if (q->q.size() >= kMaxQueued) q->q.pop_front();
             q->q.push_back(std::move(dg));
         }
         q->cv.notify_all();
