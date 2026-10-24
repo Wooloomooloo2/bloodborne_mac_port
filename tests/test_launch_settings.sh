@@ -118,7 +118,8 @@ check_pool $'online=1\nshadnet_npid=hunter\nthd_online_id=hunter\n' "thd hunter 
 fake=$(mktemp -d); trap 'rm -rf "$ini" "$fake"' EXIT
 cat > "$fake/security" <<'FAKE'
 #!/bin/bash
-# find-generic-password -s SERVICE -a ACCOUNT -w
+# find-generic-password -s SERVICE -a ACCOUNT -w; every call is counted in calls.
+echo "$3/$5" >> "$(dirname "$0")/calls"
 case "$3/$5" in
     bbport-shadnet/hunter) echo 'pw-from-keychain' ;;
     bbport-huntersdream/dreamer) echo 'tok-from-keychain' ;;
@@ -136,12 +137,21 @@ check_secret() { # ini text, expected "PASSWORD TOKEN" (- = unset), extra enviro
         exit 1
     fi
 }
-check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\n' "pw-from-keychain -"
-check_secret $'shadnet_npid=hunter\n' "pw-from-keychain -"                      # no line: the keychain is tried
-check_secret $'shadnet_npid=hunter\nshadnet_password=inline\n' "inline -"       # the file's value wins over the keychain
-check_secret $'shadnet_npid=nobody\nshadnet_password=keychain\n' "- -"          # nothing stored: unset, not "keychain"
-check_secret $'thd_online_id=dreamer\nthd_token=keychain\n' "- tok-from-keychain"
-check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\n' "env -" BB_SHADNET_PASSWORD=env
+check_secret $'online=1\nshadnet_npid=hunter\nshadnet_password=keychain\n' "pw-from-keychain -"
+check_secret $'online=1\nshadnet_npid=hunter\n' "pw-from-keychain -"                      # no line: the keychain is tried
+check_secret $'online=1\nshadnet_npid=hunter\nshadnet_password=inline\n' "inline -"       # the file's value wins over the keychain
+check_secret $'online=1\nshadnet_npid=nobody\nshadnet_password=keychain\n' "- -"          # nothing stored: unset, not "keychain"
+check_secret $'online=1\nthd_online_id=dreamer\nthd_token=keychain\n' "- tok-from-keychain"
+check_secret $'online=1\nshadnet_npid=hunter\nshadnet_password=keychain\n' "env -" BB_SHADNET_PASSWORD=env
+check_secret $'shadnet_npid=hunter\nthd_online_id=dreamer\nthd_token=keychain\n' "pw-from-keychain tok-from-keychain" BB_ONLINE=1  # the environment turns it on
+# Offline (online=0 or no online line, unless BB_ONLINE=1): no lookup, no secret exported, from
+# the keychain or from the file.
+rm -f "$fake/calls"
+check_secret $'shadnet_npid=hunter\nshadnet_password=keychain\nthd_online_id=dreamer\nthd_token=keychain\n' "- -"
+check_secret $'online=0\nshadnet_npid=hunter\nthd_online_id=dreamer\n' "- -"
+check_secret $'online=0\nshadnet_npid=hunter\nshadnet_password=inline\nthd_online_id=dreamer\nthd_token=abcdef\n' "- -"
+check_secret $'online=1\nshadnet_npid=hunter\nshadnet_password=inline\nthd_online_id=dreamer\nthd_token=abcdef\n' "- -" BB_ONLINE=0
+[[ ! -e $fake/calls ]] || { echo "FAIL: offline launch settings looked in the keychain: $(tr '\n' ' ' < "$fake/calls")"; exit 1; }
 echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, game_timing, online, p2p_port, online_pool, keychain secrets)"
 
 # In-game restart inherits the old environment: disabling wide mode must clear only our

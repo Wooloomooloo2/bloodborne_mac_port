@@ -11,7 +11,8 @@
 #                            2026-10-23). Caps without a fixed-step patch (40, 120) are variable.
 #   fullscreen=1             the window opens full screen (BB_FULLSCREEN=1)
 # Online play (the online module, gpu/bbnet; run.sh):
-#   online=1                 online play on (BB_ONLINE=1)
+#   online=1                 online play on (BB_ONLINE=1); the secrets below are read (file or
+#                            keychain) and exported only then
 #   shadnet_server=host:port the shadNet server (BB_SHADNET_SERVER; default srv.shadps4.net:31313)
 #   shadnet_webapi=url       its WebAPI (BB_SHADNET_WEBAPI; default http://<server host>:31315)
 #   shadnet_npid=name        the shadNet account (BB_SHADNET_NPID) ...
@@ -59,18 +60,21 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^game_timing=(fixed|variable)$ ]]; then timing=${BASH_REMATCH[1]}; fi
     done < "$1"
+    # The password and the token are looked up and exported only for online play (online=1, or
+    # BB_ONLINE=1 from the environment, which wins): offline, no secret enters the environment.
+    if [[ ${BB_ONLINE:-$online} != 1 ]]; then password='' thd_token=''; fi
     # Secrets kept in the login keychain instead of the file (`security find-generic-password`;
     # BB_KEYCHAIN_TOOL names another command, for tests). A lookup that finds nothing leaves the
     # value empty; an explicit "keychain" that finds nothing is reported.
     local tool=${BB_KEYCHAIN_TOOL:-security}
-    if [[ -n $npid && -z ${BB_SHADNET_PASSWORD:-} && ( -z $password || $password == keychain ) ]]; then
+    if [[ ${BB_ONLINE:-$online} == 1 && -n $npid && -z ${BB_SHADNET_PASSWORD:-} && ( -z $password || $password == keychain ) ]]; then
         local want=$password
         password=$("$tool" find-generic-password -s bbport-shadnet -a "$npid" -w 2>/dev/null) || password=''
         if [[ $want == keychain && -z $password ]]; then
             echo "Online: no keychain item bbport-shadnet for $npid (python3 scripts/online.py keychain shadnet --npid $npid)" >&2
         fi
     fi
-    if [[ -n $thd_id && -z ${BB_THD_TOKEN:-} && ( -z $thd_token || $thd_token == keychain ) ]]; then
+    if [[ ${BB_ONLINE:-$online} == 1 && -n $thd_id && -z ${BB_THD_TOKEN:-} && ( -z $thd_token || $thd_token == keychain ) ]]; then
         local want_token=$thd_token
         thd_token=$("$tool" find-generic-password -s bbport-huntersdream -a "$thd_id" -w 2>/dev/null) || thd_token=''
         if [[ $want_token == keychain && -z $thd_token ]]; then
