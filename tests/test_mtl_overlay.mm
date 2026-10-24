@@ -86,6 +86,46 @@ SDL_Event Key(SDL_Keycode key, SDL_Keymod mod, bool down) {
     return event;
 }
 
+void StickChord() {
+    for (const bool down : {true, false}) {
+        for (const u8 button : {SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_BUTTON_RIGHT_STICK}) {
+            SDL_Event event{};
+            event.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+            event.gbutton.button = button;
+            event.gbutton.down = down;
+            BbOverlay::HandleEvent(event);
+        }
+    }
+}
+
+void Click(Target& t, float x, float y) {
+    SDL_Event event{};
+    event.type = SDL_EVENT_MOUSE_MOTION;
+    event.motion.x = x; event.motion.y = y;
+    BbOverlay::HandleEvent(event);
+    Present(t, true);
+    for (const bool down : {true, false}) {
+        event = {};
+        event.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+        event.button.button = SDL_BUTTON_LEFT;
+        event.button.down = down;
+        event.button.x = x; event.button.y = y;
+        BbOverlay::HandleEvent(event);
+        Present(t, true);
+    }
+}
+
+void PadButton(Target& t, u8 button) {
+    for (const bool down : {true, false}) {
+        SDL_Event event{};
+        event.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP;
+        event.gbutton.button = button;
+        event.gbutton.down = down;
+        BbOverlay::HandleEvent(event);
+        Present(t, true);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -100,6 +140,7 @@ int main() {
     setenv("BB_CONFIG", config, 1);
     unsetenv("BB_OVERLAY");
     unsetenv("BB_MENU_OPEN");
+    unsetenv("BB_METAL_FRAMEGEN");
     @autoreleasepool {
         Metal::Device device;
         id<MTLDevice> mtl = (__bridge id<MTLDevice>)device.NativeDevice();
@@ -233,6 +274,52 @@ int main() {
                    "the saved ini says upscaler=metalfx");
         }
         BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true));
+
+        // The L3+R3 menu's frame-generation choice saves immediately, but the
+        // current renderer retains its launch state until Apply and Restart.
+        s.framegen = s.startup_framegen = false;
+        s.framegen_supported = true;
+        s.framegen_forced = false;
+        StickChord();
+        Expect(BbOverlay::CapturesInput(), "L3+R3 opens the settings menu");
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        // The Frame generation row, below the upscaler card, at this drawable size.
+        constexpr float fx = 1300.0f, fy = 548.0f;
+        Click(t, fx, fy);
+        Expect(s.framegen && BbSettings::FrameGenerationNeedsRestart() && !s.startup_framegen,
+               "framegen toggle requests a restart without changing the running mode");
+        StickChord();
+        Expect(!BbOverlay::CapturesInput(), "L3+R3 closes the settings menu");
+        {
+            char saved[4096] = {};
+            FILE* file = std::fopen(config, "r");
+            if (file) { std::fread(saved, 1, sizeof(saved) - 1, file); std::fclose(file); }
+            Expect(std::strstr(saved, "\nframegen=1\n") != nullptr,
+                   "closing the menu persists the frame-generation preference");
+        }
+        StickChord();
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(!s.framegen && !BbSettings::FrameGenerationNeedsRestart(),
+               "reverting the toggle clears its restart requirement");
+        // The clicked row is also a controller navigation target.
+        PadButton(t, SDL_GAMEPAD_BUTTON_DPAD_DOWN);
+        PadButton(t, SDL_GAMEPAD_BUTTON_DPAD_UP);
+        PadButton(t, SDL_GAMEPAD_BUTTON_SOUTH);
+        Expect(s.framegen, "Cross activates the focused frame-generation row");
+        PadButton(t, SDL_GAMEPAD_BUTTON_SOUTH);
+        Expect(!s.framegen, "Cross can turn frame generation off again");
+        s.framegen_supported = false;
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(!s.framegen, "unsupported interpolation cannot be enabled from the menu");
+        s.framegen_supported = true;
+        s.framegen_forced = true;
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(!s.framegen, "a launch environment override disables the menu toggle");
+        s.framegen_forced = false;
+        StickChord();
     }
     std::remove(config);
     if (failures) {

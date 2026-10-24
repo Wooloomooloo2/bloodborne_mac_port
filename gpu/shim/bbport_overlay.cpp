@@ -719,6 +719,23 @@ void DisplayTab(BbSettings::Values& s) {
     }
     EndCard();
 
+    BeginCard("Frame generation", int(BbSettings::FrameGenerationNeedsRestart()));
+    const bool framegen_available = s.framegen_supported;
+    ImGui::BeginDisabled(!framegen_available || s.framegen_forced);
+    Toggle("MetalFX 2x (experimental)", s.framegen);
+    ImGui::EndDisabled();
+    HintBelow("Adds an intermediate image between real frames. Requires an active temporal "
+              "upscaler; the FPS cap still controls real frames. Adds GPU work and latency.");
+    if (!framegen_available) {
+        Note("Unavailable in this session. Requires macOS 26 or newer, a supported GPU, "
+             "and the temporal renderer.");
+    } else if (s.framegen_forced) {
+        Note("Set by BB_METAL_FRAMEGEN at launch. Remove that override to change it here.");
+    } else if (s.framegen && !upscaler_on) {
+        Note("Choose MetalFX, FSR 3.1, or TAA above to provide depth and motion inputs.");
+    }
+    EndCard();
+
     // Everything below depends on an upscaler: say so instead of only dimming it.
     BeginCard("Quality");
     if (!upscaler_on) {
@@ -1118,7 +1135,8 @@ void Menu() {
         bool restart = s.object_motion != s.startup_object_motion ||
                        s.model_lod != s.startup_model_lod ||
                        s.live_resolution != s.startup_live_resolution ||
-                       BbSettings::ResolutionNeedsRestart();
+                       BbSettings::ResolutionNeedsRestart() ||
+                       BbSettings::FrameGenerationNeedsRestart();
         for (int e = 0; e < BbSettings::EffectCount; ++e) {
             restart |= s.effects[e] != s.startup_effects[e];
         }
