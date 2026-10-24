@@ -162,10 +162,11 @@ if (APPLE)
     target_sources(bbgpu PRIVATE shim/bbport_gpu_capture.mm)
     # MetalFX temporal upscaling on native textures (shim/bbport_metalfx.h), used by the upscaler.
     target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm)
+    target_sources(bbgpu PRIVATE shim/bbport_framegen.mm)
     # The settings overlay's Metal side and ImGui's Metal backend (both ARC).
     target_sources(bbgpu PRIVATE shim/bbport_overlay_metal.mm
                    third_party/imgui/backends/imgui_impl_metal.mm)
-    set_source_files_properties(shim/bbport_gpu_capture.mm shim/bbport_metalfx.mm
+    set_source_files_properties(shim/bbport_gpu_capture.mm shim/bbport_metalfx.mm shim/bbport_framegen.mm
                                 shim/bbport_overlay_metal.mm
                                 third_party/imgui/backends/imgui_impl_metal.mm
                                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -327,6 +328,16 @@ target_link_libraries(scene-resolution-test PRIVATE bbgpu)
 target_link_options(scene-resolution-test PRIVATE -Wl,-export_dynamic)
 target_link_options(motion-shader-test PRIVATE -Wl,-export_dynamic)
 if (APPLE)
+    # No game/runtime dependency: scene snapshots, MetalFX interpolation and history/pool rules.
+    add_executable(framegen-test EXCLUDE_FROM_ALL ../tests/test_framegen.mm
+        shim/bbport_framegen.mm shim/common/logging/log.cpp shim/common/assert.cpp)
+    target_include_directories(framegen-test PRIVATE shim shadps4)
+    target_compile_features(framegen-test PRIVATE cxx_std_20)
+    target_compile_options(framegen-test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
+    target_link_libraries(framegen-test PRIVATE bbmetal_core fmt::fmt
+        "-framework Metal" "-framework MetalFX" "-framework Foundation")
+    set_source_files_properties(../tests/test_framegen.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
     # Metal::BuildHostKernel (SPIR-V -> MSL through the renderer's ShaderCompiler, in libbbgpu):
     # sampler slots and a linear sample through a combined image sampler.
     add_executable(host-kernel-test EXCLUDE_FROM_ALL ../tests/test_mtl_host_kernel.mm ../tests/test_gpu_runtime_stubs.cpp)

@@ -164,6 +164,10 @@ if [[ ${1:-} == --test ]]; then
             -framework Metal -framework MetalFX -framework Foundation -o out/metalfx-test
         out/metalfx-test
         MTL_DEBUG_LAYER=1 out/metalfx-test
+        # Experimental MetalFX frame interpolation: snapshots, history resets, HUD and pool bounds.
+        cmake --build out/gpu-arm64 --target framegen-test >/dev/null
+        out/gpu-arm64/framegen-test
+        MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
     fi
     # Metal-native M4: what an MTLBinaryArchive can serialize (pure Metal), plain and under
     # validation.
