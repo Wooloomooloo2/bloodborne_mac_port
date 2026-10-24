@@ -28,8 +28,16 @@ enum HuntersDream {
         case approved(onlineId: String, token: String)
     }
 
-    /// The game server as scheme://host (online.py community_address): the game picks the ports.
-    static func communityAddress(_ value: String?) -> String {
+    /// Plain http is accepted only for a server on this Mac (online.py LOCAL_HOSTS).
+    static let localHosts: Set<String> = ["localhost", "127.0.0.1"]
+    /// Between polls, and the most the sign-in waits: the server's numbers within reason.
+    static let intervalRange: ClosedRange<TimeInterval> = 1...60
+    static let maxExpiresIn: TimeInterval = 1800
+
+    /// The game server as https://host (online.py community_address): the game picks the ports.
+    /// Fails for another scheme, or http:// to a host that is not this Mac: the account token
+    /// goes there.
+    static func communityAddress(_ value: String?) throws -> String {
         let value = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return defaultCommunityServer }
         let scheme: String, rest: String
@@ -42,23 +50,43 @@ enum HuntersDream {
         }
         let host = rest.split(separator: "/", omittingEmptySubsequences: false).first.map(String.init) ?? ""
         let bare = host.split(separator: ":", omittingEmptySubsequences: false).first.map(String.init) ?? ""
-        return "\(scheme.isEmpty ? "https" : scheme)://\(bare)"
+        let checked = scheme.isEmpty ? "https" : scheme.lowercased()
+        guard !bare.isEmpty else { throw Failure(description: "no host in the community server address \(value)") }
+        guard checked == "https" || (checked == "http" && localHosts.contains(bare.lowercased())) else {
+            throw Failure(description: "the community server must be https:// (got \(value); plain http only for localhost)")
+        }
+        return "\(checked)://\(bare)"
     }
 
-    private static func request(_ url: String, body: [String: String]) -> URLRequest {
-        var request = URLRequest(url: URL(string: url)!, timeoutInterval: 15)
+    /// The community server's own page (its scheme, and its host or one under it): the only
+    /// page the sign-in opens in the browser.
+    static func onCommunityHost(_ url: URL, community: String) -> Bool {
+        guard let base = URLComponents(string: community), let baseHost = base.host?.lowercased(),
+              let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased() else { return false }
+        return scheme == base.scheme?.lowercased() && (host == baseHost || host.hasSuffix("." + baseHost))
+    }
+
+    /// An online id as The Hunter's Dream gives them (online.py ONLINE_ID): it goes into
+    /// bbport.ini and the keychain item's name.
+    static func validOnlineId(_ id: String) -> Bool {
+        id.range(of: "^[A-Za-z0-9_-]{3,16}$", options: .regularExpression) != nil
+    }
+
+    private static func request(_ url: String, body: [String: String]) throws -> URLRequest {
+        guard let address = URL(string: url) else { throw Failure(description: "not an address: \(url)") }
+        var request = URLRequest(url: address, timeoutInterval: 15)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         return request
     }
 
-    static func startRequest(community: String) -> URLRequest {
-        request(community + "/auth/device/start", body: ["DeviceName": deviceName])
+    static func startRequest(community: String) throws -> URLRequest {
+        try request(community + "/auth/device/start", body: ["DeviceName": deviceName])
     }
 
-    static func pollRequest(community: String, deviceCode: String) -> URLRequest {
-        request(community + "/auth/device/poll", body: ["DeviceCode": deviceCode])
+    static func pollRequest(community: String, deviceCode: String) throws -> URLRequest {
+        try request(community + "/auth/device/poll", body: ["DeviceCode": deviceCode])
     }
 
     /// The reply's fields, or why the service refused (ResKind other than 0) or is not there.
@@ -80,9 +108,12 @@ enum HuntersDream {
               let code = reply["UserCode"] as? String, !code.isEmpty else {
             throw Failure(description: "no code in the reply")
         }
-        let page = (reply["VerificationUri"] as? String).flatMap { URL(string: $0) } ?? URL(string: community + "/link")!
-        let interval = max(1, (reply["Interval"] as? Double) ?? 5)
-        let expires = (reply["ExpiresIn"] as? Double) ?? 600
+        // A page elsewhere than the community server is not opened: its own /link instead.
+        guard let fallback = URL(string: community + "/link") else { throw Failure(description: "not an address: \(community)") }
+        let offered = (reply["VerificationUri"] as? String).flatMap { URL(string: $0) }
+        let page = offered.flatMap { onCommunityHost($0, community: community) ? $0 : nil } ?? fallback
+        let interval = min(max((reply["Interval"] as? Double) ?? 5, intervalRange.lowerBound), intervalRange.upperBound)
+        let expires = min(max((reply["ExpiresIn"] as? Double) ?? 600, 0), maxExpiresIn)
         return DeviceStart(deviceCode: device, userCode: code, page: page, interval: interval, expiresIn: expires)
     }
 
@@ -93,6 +124,10 @@ enum HuntersDream {
             guard let id = reply["OnlineId"] as? String, !id.isEmpty,
                   let token = reply["Token"] as? String, !token.isEmpty else {
                 throw Failure(description: "no token in the reply")
+            }
+            guard validOnlineId(id) else { throw Failure(description: "the reply has an invalid online id") }
+            guard token.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value != 0x7f }) else {
+                throw Failure(description: "the reply has an invalid token")
             }
             return .approved(onlineId: id, token: token)
         case "slow_down": return .slowDown

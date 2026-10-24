@@ -7,7 +7,7 @@ enum HuntersDreamClient {
     /// the website. Cancelling the task stops the polling.
     static func signIn(community: String,
                        onCode: @escaping @MainActor (HuntersDream.DeviceStart) -> Void) async throws -> (onlineId: String, token: String) {
-        let startData = try await fetch(HuntersDream.startRequest(community: community))
+        let startData = try await fetch(try HuntersDream.startRequest(community: community))
         let start = try HuntersDream.deviceStart(startData, community: community)
         await onCode(start)
         var interval = start.interval
@@ -17,7 +17,7 @@ enum HuntersDreamClient {
             try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
             let data: Data
             do {
-                data = try await fetch(HuntersDream.pollRequest(community: community, deviceCode: start.deviceCode))
+                data = try await fetch(try HuntersDream.pollRequest(community: community, deviceCode: start.deviceCode))
                 failures = 0
             } catch let error as HuntersDream.Failure {
                 // One poll lost to the network (the server's HTTPS fails now and then) is
@@ -28,7 +28,7 @@ enum HuntersDreamClient {
             }
             switch try HuntersDream.poll(data, community: community) {
             case let .approved(onlineId, token): return (onlineId, token)
-            case .slowDown: interval += 5
+            case .slowDown: interval = min(interval + 5, HuntersDream.intervalRange.upperBound)
             case .denied: throw HuntersDream.Failure(description: "the sign-in was denied")
             case .expired: throw HuntersDream.Failure(description: "the code expired; try again")
             case .pending: break

@@ -131,9 +131,13 @@ final class LauncherModel: ObservableObject {
 
     /// The community game server (also the account service): BB_COMMUNITY_SERVER from the
     /// environment or launch.conf, else bbport.ini's community_server, else The Hunter's Dream.
+    private var communitySetting: String? {
+        env["BB_COMMUNITY_SERVER"] ?? confFile["BB_COMMUNITY_SERVER"].map(Shell.unquote) ?? settingsFile["community_server"]
+    }
+
+    /// The community server as shown; an address the sign-in refuses (not https) as written.
     var communityServer: String {
-        HuntersDream.communityAddress(env["BB_COMMUNITY_SERVER"] ?? confFile["BB_COMMUNITY_SERVER"].map(Shell.unquote)
-                                      ?? settingsFile["community_server"])
+        (try? HuntersDream.communityAddress(communitySetting)) ?? communitySetting ?? HuntersDream.defaultCommunityServer
     }
 
     /// Links a Discord account: the window shows the page and the code until the service
@@ -141,8 +145,14 @@ final class LauncherModel: ObservableObject {
     func startSignIn() {
         signInTask?.cancel()
         onlineProblem = nil
+        let community: String
+        do {
+            community = try HuntersDream.communityAddress(communitySetting)
+        } catch {
+            signIn = .failed((error as? HuntersDream.Failure)?.description ?? error.localizedDescription)
+            return
+        }
         signIn = .starting
-        let community = communityServer
         signInTask = Task { [weak self] in
             do {
                 let account = try await HuntersDreamClient.signIn(community: community) { [weak self] start in

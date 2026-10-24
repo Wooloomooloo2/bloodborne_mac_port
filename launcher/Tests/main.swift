@@ -404,16 +404,22 @@ do {
 
 // HuntersDream: the device sign-in protocol (scripts/online.py thd_sign_in).
 do {
-    check(HuntersDream.communityAddress(nil) == "https://thehuntersdream.com" && HuntersDream.communityAddress("  ") == "https://thehuntersdream.com", "default game server")
-    check(HuntersDream.communityAddress("https://example.org:20443/bb-eu/ss.info") == "https://example.org", "scheme and host only")
-    check(HuntersDream.communityAddress("example.org") == "https://example.org" && HuntersDream.communityAddress("http://x.test/") == "http://x.test", "scheme added or kept")
+    check((try? HuntersDream.communityAddress(nil)) == "https://thehuntersdream.com" && (try? HuntersDream.communityAddress("  ")) == "https://thehuntersdream.com", "default game server")
+    check((try? HuntersDream.communityAddress("https://example.org:20443/bb-eu/ss.info")) == "https://example.org", "scheme and host only")
+    check((try? HuntersDream.communityAddress("example.org")) == "https://example.org", "scheme added")
+    check((try? HuntersDream.communityAddress("http://localhost:8080/")) == "http://localhost" && (try? HuntersDream.communityAddress("http://127.0.0.1")) == "http://127.0.0.1", "plain http for this Mac")
+    check((try? HuntersDream.communityAddress("http://x.test/")) == nil && (try? HuntersDream.communityAddress("ftp://x.test")) == nil && (try? HuntersDream.communityAddress("https://")) == nil, "plain http elsewhere refused")
     let community = "https://example.org"
-    let start = HuntersDream.startRequest(community: community)
+    check(HuntersDream.onCommunityHost(URL(string: "https://www.example.org/link")!, community: community)
+          && !HuntersDream.onCommunityHost(URL(string: "http://example.org/link")!, community: community)
+          && !HuntersDream.onCommunityHost(URL(string: "https://example.org.evil.test/")!, community: community), "sign-in page on the community host")
+    check(HuntersDream.validOnlineId("dreamer_1") && !HuntersDream.validOnlineId("ab") && !HuntersDream.validOnlineId(String(repeating: "a", count: 17)) && !HuntersDream.validOnlineId("a b\nc"), "online id rule")
+    let start = try! HuntersDream.startRequest(community: community)
     check(start.url?.absoluteString == "https://example.org/auth/device/start" && start.httpMethod == "POST", "start request")
     check(start.value(forHTTPHeaderField: "Content-Type") == "application/json", "JSON request")
     let startBody = start.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
     check(startBody == ["DeviceName": "bbport on macOS"], "the device name, not the hostname")
-    let poll = HuntersDream.pollRequest(community: community, deviceCode: "dev-1")
+    let poll = try! HuntersDream.pollRequest(community: community, deviceCode: "dev-1")
     let pollBody = poll.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: String] }
     check(poll.url?.absoluteString == "https://example.org/auth/device/poll" && pollBody == ["DeviceCode": "dev-1"], "poll request")
 
@@ -422,6 +428,11 @@ do {
     check(started == HuntersDream.DeviceStart(deviceCode: "dev-1", userCode: "ABCD-EFGH", page: URL(string: "https://example.org/link")!, interval: 3, expiresIn: 120), "start reply: \(String(describing: started))")
     let bare = try? HuntersDream.deviceStart(data(#"{"ResKind":0,"DeviceCode":"d","UserCode":"C"}"#), community: community)
     check(bare?.page.absoluteString == "https://example.org/link" && bare?.interval == 5 && bare?.expiresIn == 600, "start reply defaults")
+    let wild = try? HuntersDream.deviceStart(data(#"{"ResKind":0,"DeviceCode":"d","UserCode":"C","VerificationUri":"https://evil.test/link","Interval":1e300,"ExpiresIn":1e300}"#), community: community)
+    check(wild?.page.absoluteString == "https://example.org/link" && wild?.interval == 60 && wild?.expiresIn == 1800, "foreign page replaced, numbers clamped: \(String(describing: wild))")
+    let fast = try? HuntersDream.deviceStart(data(#"{"ResKind":0,"DeviceCode":"d","UserCode":"C","Interval":0,"ExpiresIn":-5}"#), community: community)
+    check(fast?.interval == 1 && fast?.expiresIn == 0, "numbers clamped from below")
+    check(failure { try HuntersDream.poll(data(#"{"ResKind":0,"Status":"approved","OnlineId":"a\nthd_token=x","Token":"tok"}"#), community: community) } == "the reply has an invalid online id", "approved with an invalid online id")
     func failure(_ body: () throws -> Any) -> String? {
         do { _ = try body(); return nil } catch { return (error as? HuntersDream.Failure)?.description ?? "other error" }
     }
