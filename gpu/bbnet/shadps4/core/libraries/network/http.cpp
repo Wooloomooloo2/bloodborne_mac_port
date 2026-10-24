@@ -368,6 +368,8 @@ static const HostOverrideState& GetHostOverrideState() {
 // bbport: The Hunter's Dream backend (gpu/bbnet/thd).
 extern "C" bool bbthd_enabled();
 extern "C" void bbthd_add_game_headers(std::vector<std::pair<std::string, std::string>>* headers);
+extern "C" bool bbthd_game_token(const std::string* host, bool verified_https, std::string* token);
+extern "C" bool bbthd_community_host(const std::string* host);
 
 bool ApplyHostOverride(std::string& scheme, std::string& host, u16& port, bool& is_secure) {
     const auto& state = GetHostOverrideState();
@@ -876,12 +878,17 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
             }
         }
 
+        bool verified_https = false; // bbport: the account token goes only where this holds
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         if (plan.scheme == "https") {
             const bool config_disabled_verify = EmulatorSettings.IsForcedHttpsDisabled();
             const bool game_disabled_verify =
                 (plan.settings.ssl_flags & ORBIS_HTTPS_FLAG_SERVER_VERIFY) == 0;
             bool verify_server = !config_disabled_verify && !game_disabled_verify;
+            // bbport: the community server's certificate is checked whatever the game asked
+            // (it is the one host that gets the account token).
+            const bool community = bbthd_enabled() && bbthd_community_host(&plan.host);
+            if (community && !config_disabled_verify) verify_server = true;
             // bbport: the game loads Sony's CAs with sceHttpsLoadCert for servers this port
             // redirects to the community server anyway, so those CAs cannot verify the
             // redirected host. Upstream turned verification off here; we keep it on against
@@ -894,10 +901,11 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
                          plan.scheme, plan.host);
             }
             cli.enable_server_certificate_verification(verify_server);
+            verified_https = verify_server;
             if (config_disabled_verify) {
                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled by configuration",
                          plan.scheme, plan.host);
-            } else if (game_disabled_verify) {
+            } else if (game_disabled_verify && !community) {
                 LOG_INFO(Lib_Http, "{}://{}: server cert verification disabled (ssl_flags={:#x})",
                          plan.scheme, plan.host, plan.settings.ssl_flags);
             }
@@ -910,6 +918,11 @@ static s32 RunRealHttpRequest(const SendRequestPlan& plan_in, HttpResponse& out_
         }
         if (plan.settings.accept_encoding_gzip && !game_set_accept_encoding) {
             headers.emplace("Accept-Encoding", "gzip");
+        }
+        // bbport: The Hunter's Dream's account token, for this hop's host (after the overrides
+        // and any redirect) when it is the community server over checked HTTPS.
+        if (std::string token; bbthd_enabled() && bbthd_game_token(&plan.host, verified_https, &token)) {
+            headers.emplace("X-BB-Token", token);
         }
 
         const char* body_ptr =

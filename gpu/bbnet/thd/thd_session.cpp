@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstdarg>
@@ -56,6 +57,14 @@ std::string HostOf(std::string base) {
     if (const auto colon = base.find(':'); colon != std::string::npos) base = base.substr(0, colon);
     return base;
 }
+bool SameHost(const std::string& a, const std::string& b) {
+    return !a.empty() && a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+}
+bool LoopbackHost(const std::string& host) {
+    return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]";
+}
 } // namespace
 
 bool Trace() {
@@ -84,6 +93,11 @@ const Config& Cfg() {
         c.p2p_port = port.empty() ? 3658 : std::atoi(port.c_str());
         if (c.p2p_port <= 0 || c.p2p_port > 65535) c.p2p_port = 3658;
         c.verify_tls = Env("BB_THD_VERIFY_TLS") != "0";
+        if (!c.verify_tls) {
+            // A test switch only: anyone on the network path can then read the account token.
+            Log("WARNING: BB_THD_VERIFY_TLS=0: the server certificate of %s is NOT checked; the "
+                "account token can be intercepted. Never play like this.", c.np_base.c_str());
+        }
         return c;
     }();
     return c;
@@ -218,8 +232,9 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
     httplib::Headers headers{{"Accept", "application/json"},
                              {"User-Agent", Cfg().client},
                              {"X-BBHost-Ruleset", Cfg().ruleset}};
-    if (const std::string token = AccountToken(); !token.empty()) {
-        headers.emplace("X-BB-Token", token);
+    // The token only over HTTPS (or to a local server): never in clear on the network.
+    if (base.rfind("https://", 0) == 0 || LoopbackHost(HostOf(base))) {
+        if (const std::string token = AccountToken(); !token.empty()) headers.emplace("X-BB-Token", token);
     }
     auto send = [&] {
         cli->set_connection_timeout(connect_timeout);
@@ -286,11 +301,8 @@ bool NpGet(const std::string& path, Json& out, std::string& error, int timeout_m
 }
 
 void AddGameHeaders(std::vector<std::pair<std::string, std::string>>& headers) {
-    // The game's own traffic carries the token too, so the server's game sessions map to the
-    // account, and the ruleset, so its messages and bloodstains stay among the same rules.
-    if (const std::string token = AccountToken(); !token.empty()) {
-        headers.emplace_back("X-BB-Token", token);
-    }
+    // The ruleset, so the server's messages and bloodstains stay among the same rules. The token
+    // is added per connection (GameToken): the game's requests go to other hosts too.
     headers.emplace_back("X-BBHost-Ruleset", Cfg().ruleset);
     for (auto& [name, value] : headers) {
         if (name.size() == 10 && std::equal(name.begin(), name.end(), "user-agent", [](char a, char b) {
@@ -300,6 +312,17 @@ void AddGameHeaders(std::vector<std::pair<std::string, std::string>>& headers) {
             break;
         }
     }
+}
+
+bool CommunityHost(const std::string& host) {
+    return SameHost(host, HostOf(Cfg().auth_base)) || SameHost(host, HostOf(Cfg().np_base));
+}
+
+std::string GameToken(const std::string& host, bool verified_https) {
+    // The game's own traffic carries the token, so the server's game sessions map to the account;
+    // only the community server gets it, and only where nobody on the way can read it.
+    if (!CommunityHost(host) || !(verified_https || LoopbackHost(host))) return "";
+    return AccountToken();
 }
 
 // ---- the dispatcher -------------------------------------------------------------------------------
@@ -960,4 +983,12 @@ extern "C" bool bbthd_enabled() {
 }
 extern "C" void bbthd_add_game_headers(std::vector<std::pair<std::string, std::string>>* headers) {
     if (headers) BbThd::AddGameHeaders(*headers);
+}
+extern "C" bool bbthd_community_host(const std::string* host) {
+    return host && BbThd::CommunityHost(*host);
+}
+extern "C" bool bbthd_game_token(const std::string* host, bool verified_https, std::string* token) {
+    if (!host || !token) return false;
+    *token = BbThd::GameToken(*host, verified_https);
+    return !token->empty();
 }

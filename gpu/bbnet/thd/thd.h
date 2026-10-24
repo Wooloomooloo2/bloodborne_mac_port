@@ -27,7 +27,15 @@ void Register(Core::Loader::SymbolsResolver* sym);
 // The game's image (Binary Ninja 0x400000 at image[0]), for the NpMatching2 signaling gate and the
 // host's area, level and position on create_room. Ignored unless the executable is 1.09.
 void SetImage(std::uint8_t* image, std::uint64_t size);
-// sceHttp: the headers the game server binds a request to the account and ruleset with.
+// sceHttp: the headers the game server binds a request to the ruleset with (and the client's name
+// in the User-Agent).
 void AddGameHeaders(std::vector<std::pair<std::string, std::string>>& headers);
+// sceHttp, per request and redirect: the account token for X-BB-Token, only when the final host
+// (after the host overrides) is the community server and the connection is HTTPS with the
+// certificate checked (or a loopback host, for a local server). Empty otherwise.
+std::string GameToken(const std::string& host, bool verified_https);
+// The community server (The Hunter's Dream's game and session host): its certificate is always
+// checked.
+bool CommunityHost(const std::string& host);
 
 } // namespace BbThd
