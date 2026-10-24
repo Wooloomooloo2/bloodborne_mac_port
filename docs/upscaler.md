@@ -2,11 +2,19 @@
 
 ## Experimental MetalFX frame generation on macOS (2026-10-24)
 
-`BB_METAL_FRAMEGEN=1` enables an experimental intermediate image between each pair
-of real frames. It requires macOS 26+, a build with the macOS 26 SDK or newer, a
+Open the in-game menu with **L3+R3** (or **Cmd+,**) and select **Display → Frame
+generation → MetalFX 2x (experimental)** to enable an intermediate image between
+each pair of real frames. The choice is saved as `framegen=0|1` in `bbport.ini` and
+is **off by default**. Use **Apply and Restart Game** after changing it; toggling
+back to the running choice clears the restart notice. The current session keeps
+its existing presentation resources until restart.
+
+It requires macOS 26+, a build with the macOS 26 SDK or newer, a
 device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, and an active
-temporal upscaler (`metalfx`, `fsr3`, or `taa`). It is off by default and has no saved
-setting. For example, with your existing game/data configuration:
+temporal upscaler (`metalfx`, `fsr3`, or `taa`). The control explains when generation
+is unavailable. `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
+disables the menu switch for that session; remove it to use the menu. For example,
+with your existing game/data configuration:
 
 ```sh
 BB_METAL_FRAMEGEN=1 BB_UPSCALER=metalfx bash run.sh
@@ -54,9 +62,18 @@ Offscreen checks (no game/window):
 cmake --build out/gpu-arm64 --target framegen-test
 out/gpu-arm64/framegen-test
 MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
+cmake --build out/gpu-arm64 --target overlay-test
+out/gpu-arm64/overlay-test
+MTL_DEBUG_LAYER=1 out/gpu-arm64/overlay-test
 ```
 
-The fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
+The overlay fixture covers L3+R3 opening/closing, D-pad/Cross activation of the new
+row, saved preferences, reverting a pending restart, and unavailable/overridden
+controls. The settings round-trip fixture checks launch overrides and preservation
+of the launcher's other keys. These are offscreen input events, not a physical
+controller gameplay test.
+
+The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
 through GPU completion, bounded-pool fallback, warmup/cut/gap resets and moving
 geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
 pixels interpolated to the expected midpoint 49.5. These are fixture results,
