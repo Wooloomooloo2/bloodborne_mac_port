@@ -1506,6 +1506,24 @@ VMA, Zydis, xbyak, FSR 4's tools and the `renderer` setting left the build and t
   MoltenVK, VMA, Zydis and xbyak (symlink overlay) succeeds.
 
 
+2026-10-20 — opt-in audio dropout diagnostics (split from PR #26). BB_AUDIO_STATS=1
+adds converted-PCM peak/RMS, non-finite samples and SDL output failure counts to the
+existing per-port five-second reports. Measure minimum queued bytes/starvation before
+silence refill, rather than after submission. BB_AUDIO_TRACE=1 reserves a separate
+100-error budget for unexpected AJM results; expected partial-input/output-full results
+can exhaust the original trace budget before a later real failure appears. Samples,
+gain, clipping and scheduling are unchanged; diagnostics stay disabled by default.
+
+An earlier combined M2 Max 64 GB playtest lost music/effects, with menu effects still
+working. The next session with existing trace flags did not reproduce it; the user
+reported correct audio. Initial output had about 938 buffers/5s (937 expected), a
+6.7 ms maximum gap and a non-empty queue. This is instrumentation, not an audio fix.
+If reproduced, retain Audio stats/Audio trace lines and whether it followed travel/death
+or ordinary play. No reproducible dropout or causal claim is asserted in this split.
+
+Split validation: build_macos.sh completes for the x86 guest/library and both arm64
+host variants. The extraction changes only runtime_audio.c, runtime_ajm.c and this note;
+no playback algorithm, renderer default or launcher setting is changed.
 2026-10-20 — launcher validation fixes (split from PR #26): the duplicate-launch
 guard now recognizes bbgpu-host-macos27 as well as bbgpu-host/bb-probe. Game-folder
 validation passes Python -B in both checkout and packaged layouts; importing prepare.py

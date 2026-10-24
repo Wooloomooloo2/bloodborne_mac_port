@@ -80,6 +80,13 @@ static int ajm_trace(void) {
     if (trace_left<0) { const char *e=getenv("BB_AUDIO_TRACE"); trace_left=e && e[0]=='1' ? 400 : 0; }
     return trace_left>0 && trace_left--;
 }
+/* Expected partial-input/output-full statuses must not exhaust diagnostics for a
+ * later real decoder failure. Keep a separate bounded budget for those errors. */
+static int ajm_error_trace(uint32_t result) {
+    static unsigned errors;
+    const char *env=getenv("BB_AUDIO_TRACE");
+    return (result & ~(RESULT_PARTIAL_INPUT|RESULT_NOT_ENOUGH_ROOM)) && env && env[0]=='1' && errors++<100;
+}
 static uint32_t ident(uint32_t word) { return word & 0x3f; }
 static uint32_t payload(uint32_t word) { return (word>>6) & 0xfffff; }
 static uint32_t header(uint32_t id, uint32_t value) { return (id & 0x3f) | ((value & 0xfffff)<<6); }
@@ -339,7 +346,7 @@ static void run_job(Context *ctx, uint32_t id, Job *job) {
         if (!RUN_MULTIPLE_FRAMES(f)) break;
     }
     if (joined && joined != scratch) free(joined);
-    if (flags_result && ajm_trace())
+    if (flags_result && (ajm_error_trace(flags_result) || ajm_trace()))
         printf("Audio trace: Ajm job instance %u flags %#llx -> result %#x internal %d; input %llu/%llu used, output %llu/%llu written, frames %u\n",
                id,(unsigned long long)f,flags_result,internal,(unsigned long long)(in_start-in_size),(unsigned long long)in_start,
                (unsigned long long)(out_start-output_room(&out)),(unsigned long long)out_start,frames);
