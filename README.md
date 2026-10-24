@@ -555,8 +555,12 @@ connection, backing off on errors), and the game's play log goes out at the game
   `python3 scripts/online.py keychain shadnet --npid NAME --ini <bbport.ini>` puts the password
   in the login keychain (item `bbport-shadnet`) and writes `shadnet_password=keychain`;
   `scripts/online.py signin --keychain` does the same for the token (`bbport-huntersdream`,
-  `thd_token=keychain`). `run.sh` reads them with `security find-generic-password` at launch (a
-  keychain prompt may appear once). A secret written in clear makes the file owner-only
+  `thd_token=keychain`). Neither passes the secret on a command line (the launcher uses the
+  Security framework, `online.py` feeds `security -i` on its standard input). `run.sh` reads
+  them with `security find-generic-password` at launch, and only for online play (a keychain
+  prompt may appear once), so the items' access list trusts `/usr/bin/security`: any program
+  that runs it as you can read them, as with any item `security` makes. Offline launches never
+  look them up, and the GPU process never gets them. A secret written in clear makes the file owner-only
   (`chmod 600`); `run.sh` warns when one is readable by other users. Neither is ever logged
   (the game's `X-BB-Token` header is filtered from the HTTP log).
 - **In transit.** The game's own traffic and The Hunter's Dream backend go over HTTPS and the
