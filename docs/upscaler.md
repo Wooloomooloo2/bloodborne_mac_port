@@ -25,7 +25,18 @@ attempts two images per real frame; simulation, physics, input polling and guest
 completion signals keep their existing rates. A 120 Hz display can show a 60 FPS
 real-frame stream plus intermediates. Generating images adds GPU work and latency;
 it does not make the game simulate faster or guarantee a higher delivered rate.
-The existing FPS overlay continues to measure real-frame cadence.
+The FPS counter and settings footer show **Real** and **Displayed** rates separately.
+Real FPS counts new game frames supplied to the presenter, excluding reused and
+blank frames. Displayed FPS counts distinct, positive Metal drawable presentation
+timestamps for real and generated images, rather than assuming a 2x multiplier or
+counting GPU completions. Missing generated frames, refresh limits and real-only
+fallback therefore affect the displayed reading. Both rates use bounded one-second
+cadence windows and expire after a pause; the milliseconds are frame intervals,
+not GPU execution times. The generated/real pair replays the same counter snapshot.
+Presentation callbacks are requested only while the FPS counter or settings menu
+is visible. The counter reserves a fixed width with extra room when frame generation
+is active, and right-aligns the FPS and millisecond columns so changing digit counts
+cannot resize the box or shift the columns.
 
 The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
 tonemapped scene/UI boundary. A second pass identifies changes made by the HUD.
@@ -53,8 +64,16 @@ there is no extra interpolation queue or CPU wait per generated frame.
 This remains experimental: interpolation currently sees the composited display
 image, and the mask restores the current HUD footprint rather than reconstructing
 the scene hidden by the previous HUD. Moving/fading HUD elements, transparency and
-disocclusions can still leave artifacts. Actual game captures, delivered display
-cadence, input latency, GPU cost, and long-session behavior require gameplay QA.
+disocclusions can still leave artifacts. Extended gameplay, input latency, GPU cost,
+and long-session behavior still require QA.
+
+A short DLC-enabled smoke check on an M4 Max (macOS 27, 1920x1080 MetalFX Native AA,
+30 FPS real-frame cap, private save clone) showed 30 real / 30 displayed FPS on a
+real-only menu and approximately 20 real / 40 displayed FPS in the fixed city-gate
+scene with interpolation active. The wider counter and aligned columns were also
+checked in that scene. This verifies the counter and presentation path; it is not
+a controlled performance comparison or a latency/long-session test. Frame generation
+can lower the real-frame rate through its additional GPU work.
 
 Offscreen checks (no game/window):
 
@@ -65,6 +84,8 @@ MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
 cmake --build out/gpu-arm64 --target overlay-test
 out/gpu-arm64/overlay-test
 MTL_DEBUG_LAYER=1 out/gpu-arm64/overlay-test
+cmake --build out/gpu-arm64 --target frame-rates-test
+out/gpu-arm64/frame-rates-test
 ```
 
 The overlay fixture covers L3+R3 opening/closing, D-pad/Cross activation of the new
@@ -72,6 +93,12 @@ row, saved preferences, reverting a pending restart, and unavailable/overridden
 controls. The settings round-trip fixture checks launch overrides and preservation
 of the launcher's other keys. These are offscreen input events, not a physical
 controller gameplay test.
+
+The frame-rate fixture checks independent real/displayed rates, 2x delivery,
+real-only fallback, refresh limits, invalid/duplicate/out-of-order callbacks,
+pause/resume and concurrent updates. The overlay fixture changes displayed FPS
+without changing real FPS, checks identical replay over a generated/real pair, and
+checks stable counter bounds across changing digit counts and unavailable readings.
 
 The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
 through GPU completion, bounded-pool fallback, warmup/cut/gap resets and moving
