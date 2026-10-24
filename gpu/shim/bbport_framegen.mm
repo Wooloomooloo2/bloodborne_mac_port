@@ -84,7 +84,9 @@ id<MTLTexture> Texture(Metal::Device& device, MTLPixelFormat format, uint32_t wi
     return [(__bridge id<MTLDevice>)device.NativeDevice() newTextureWithDescriptor:d];
 }
 Metal::Object Own(id object) { return Metal::Object::Adopt((__bridge_retained void*)object); }
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
 id<MTLTexture> Tex(const Metal::Object& object) { return (__bridge id<MTLTexture>)object.Get(); }
+#endif
 bool SameSize(const Description& a, const Description& b) {
     return a.width == b.width && a.height == b.height && a.out_width == b.out_width &&
            a.out_height == b.out_height && a.ui_format == b.ui_format;
