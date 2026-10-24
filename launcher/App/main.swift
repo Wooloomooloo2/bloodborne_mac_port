@@ -4,7 +4,7 @@ import AppKit
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var model: LauncherModel!
     private var window: NSWindow?
     private var direct = false
@@ -26,8 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
-        if !NSEvent.modifierFlags.contains(.option) && model.canSkipWindow {
+        // --updated: the copy an update just installed (Updater.install) shows its window.
+        // (⌥ is read before the update question, which may be answered after letting go of it.)
+        let wantsWindow = CommandLine.arguments.contains("--updated") || NSEvent.modifierFlags.contains(.option)
+        // Asked before the game too: players who turned the window off would never see it.
+        model.askAboutUpdatesIfNeeded()
+        if !wantsWindow && model.canSkipWindow {
             direct = true
+            // The daily check runs in the background while the game plays (started here, not
+            // later: its save() must not rewrite bbport.ini while the game's menu may change it).
+            model.checkForUpdatesIfDue()
             model.play()
         } else {
             showWindow()
@@ -36,8 +44,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func gameEnded(_ status: Int32) {
         if direct && status == 0 {
-            NSApp.terminate(nil)
-            return
+            // With the window turned off, an update the check found shows once, after the session.
+            guard model.updater.available != nil else {
+                NSApp.terminate(nil)
+                return
+            }
+        } else if status != 0 {
+            // The crash report comes first; the footer still links the update.
+            model.updater.showing = false
         }
         direct = false
         showWindow()
@@ -56,6 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate()
+        model.checkForUpdatesIfDue()
+    }
+
+    @objc func showAbout(_ sender: Any?) { About.show() }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        showWindow()
+        model.checkForUpdatesNow()
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action != #selector(checkForUpdates(_:)) || (model != nil && !model.running && !model.updater.busy)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -76,6 +102,11 @@ MainActor.assumeIsolated {
     let appItem = NSMenuItem()
     menu.addItem(appItem)
     let appMenu = NSMenu()
+    appMenu.addItem(withTitle: "About Bloodborne", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "").target = delegate
+    appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "").target = delegate
+    appMenu.addItem(.separator())
+    appMenu.addItem(withTitle: "Hide Bloodborne", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+    appMenu.addItem(.separator())
     appMenu.addItem(withTitle: "Quit Bloodborne", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     appItem.submenu = appMenu
     app.mainMenu = menu

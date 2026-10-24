@@ -747,6 +747,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
   - Split mode: mouse events live in the GPU host's window; extend the shared block's keyboard
     bridge (`bbgpu_split_keyboard`) with mouse deltas and buttons.
 
+- **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
+  (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the
+  bundle identifier, the version and `codesign --verify`, but the app is ad-hoc signed, so the
+  signature proves integrity, not origin: anyone who can publish a release on the repository can
+  ship an update. *Proper fix:* Developer ID signing + notarisation, then require the same Team
+  ID on the new app (`codesign -d -r-`), or an EdDSA signature over the zip (Sparkle's scheme)
+  with the public key in the app. Also: no delta updates (each one is ~50 MB).
+
 - **Launcher: warn when the frame cap is above the display's refresh** (`NSScreen
   .maximumFramesPerSecond`): a display set to 60 Hz silently holds 90/120 caps at 60 (2026-10-17).
 

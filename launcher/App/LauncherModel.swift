@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import AppKit
+import Combine
 import Foundation
 
 /// The launcher window's state and actions.
 @MainActor
 final class LauncherModel: ObservableObject {
     let layout: Layout
+    let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
     private let env = ProcessInfo.processInfo.environment
     private var confFile = IniFile()
     private var settingsFile = IniFile()
+    private var updaterChanges: AnyCancellable?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -28,6 +31,8 @@ final class LauncherModel: ObservableObject {
     init(layout: Layout) {
         self.layout = layout
         dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
+        // The window's update sheet follows the updater.
+        updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     var confURL: URL { layout.launchConfURL(env: env) }
@@ -231,6 +236,55 @@ final class LauncherModel: ObservableObject {
         copyCrashReport()
         NSWorkspace.shared.open(crashReport.issueURL)
     }
+
+    /// One check a day, silent unless it finds an update: when the launcher window shows, or as
+    /// the game starts when the window is turned off (main.swift shows the result after the game).
+    func checkForUpdatesIfDue() {
+        guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
+        config.lastUpdateCheck = Date()
+        save()
+        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: config.skippedVersion, manual: false) }
+    }
+
+    /// Automatic checks are off until the player agrees: asked once, at the first start with the
+    /// updater, before the launcher window or the game (also when the window is turned off).
+    func askAboutUpdatesIfNeeded() {
+        guard config.checkUpdates == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Check for updates automatically?"
+        alert.informativeText = "Bloodborne can look for a new version of this port on its GitHub releases page once a day, when the launcher opens. Nothing is downloaded or installed without asking you. You can change this in the update window (Bloodborne → Check for Updates…), which works either way."
+        alert.addButton(withTitle: "Check Automatically")
+        alert.addButton(withTitle: "Don't Check")
+        NSApp.activate()
+        config.checkUpdates = alert.runModal() == .alertFirstButtonReturn
+        save()
+    }
+
+    /// The app menu's Check for Updates….
+    func checkForUpdatesNow() {
+        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: nil, manual: true) }
+    }
+
+    func installUpdate() {
+        guard let update = updater.available, !running else { return }
+        save()
+        Task { await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL) }
+    }
+
+    func skipUpdate() {
+        config.skippedVersion = updater.available?.version.text
+        save()
+        updater.dismiss()
+    }
+
+    /// The update window's checkboxes: saved at once (launch.conf is read again after a game).
+    func setUpdatePreference(automatic: Bool? = nil, testBuilds: Bool? = nil) {
+        if let automatic { config.checkUpdates = automatic }
+        if let testBuilds { config.testBuilds = testBuilds }
+        save()
+    }
+
+    var updateInstallProblem: String? { Updates.installProblem(layout: layout, bundle: Bundle.main.bundleURL) }
 
     func effect(_ key: String) -> Bool { settings.effects[key] ?? false }
     func setEffect(_ key: String, _ on: Bool) { settings.effects[key] = on }

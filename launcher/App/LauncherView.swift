@@ -35,6 +35,7 @@ struct LauncherView: View {
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                UpdateBadge(updater: model.updater)
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -57,6 +58,12 @@ struct LauncherView: View {
         .sheet(isPresented: $model.showingCrashReport) {
             if let report = model.crashReport {
                 CrashReportView(report: report, model: model)
+            }
+        }
+        // (A second .sheet on the same view would never show: SwiftUI presents one per view.)
+        .background {
+            Color.clear.sheet(isPresented: Binding(get: { model.updater.showing }, set: { if !$0 { model.updater.dismiss() } })) {
+                UpdateView(model: model, updater: model.updater)
             }
         }
     }

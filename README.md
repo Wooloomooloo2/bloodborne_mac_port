@@ -344,6 +344,19 @@ a small Python for the launch scripts). Saves and settings go to
 the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
 
+**Updates.** The first time it opens, the app asks whether to check for updates automatically
+(also when the launcher window is turned off, before the game starts). If you agree, the launcher
+checks the GitHub releases once a day and offers a newer version with its release notes: when its
+window opens, or, with the window turned off, in the background while you play, showing the update
+after the game ends. **Install
+Update** downloads it, checks it (size, SHA-256 from GitHub, bundle identifier, version, code
+signature), replaces `Bloodborne.app` where it is and opens it again; saves and settings are not
+touched. **Bloodborne → Check for Updates…** checks at once; the update window has the
+*Check for updates automatically* and *Include test builds* (pre-releases and `mac-v…-test1`
+tags) options. The
+app must be somewhere you can write (Applications is fine) and not run from the Downloads quarantine
+location. **Bloodborne → About Bloodborne** shows the version, build and commit.
+
 **Preparing the game folder from PKG files.** The app needs an unpacked folder, not `.pkg`
 files. If you already play on shadPS4 you have one: use that folder, but first copy the
 contents of the update folder next to it (`CUSA03173-patch` or similar) into it, replacing
@@ -409,7 +422,8 @@ it to the Dock. It opens the same launcher window as the downloadable app (setti
 save folders; see "New in 0.4.0" above), runs the game from this checkout without a Terminal
 window, and writes the game's log to `~/Library/Logs/Bloodborne/game.log` (the session before
 in `game.previous.log`). If the game stops with an error, the launcher offers the log. Run the
-script again if you move the repository folder.
+script again if you move the repository folder. Its update check only tells you about new releases: update a
+checkout with `git pull` and build again.
 
 ### From Finder with a Terminal window
 
