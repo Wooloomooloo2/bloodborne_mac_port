@@ -40,6 +40,9 @@ bool Visible();
 /// `command_buffer` (id<MTLCommandBuffer>). Null `command_buffer`: a present without a drawable
 /// (timing and saving only). Callers hold an autorelease pool.
 void Render(void* command_buffer, void* target, u32 width, u32 height);
+/// Draws the same overlay over the second image of a generated/real pair. Call immediately
+/// after Render on the present thread; no new UI frame, input processing or FPS sample.
+void Replay(void* command_buffer, void* target);
 
 /// The menu or the game's text dialog is open: the game's input is held neutral.
 bool CapturesInput();

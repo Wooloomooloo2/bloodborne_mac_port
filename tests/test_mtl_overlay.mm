@@ -134,6 +134,27 @@ int main() {
         Expect(Changed(t, Width - 320, 0, Width, 90) > 0.05, "FPS counter drawn top right");
         Expect(Changed(t, 0, Height / 2, Width / 2, Height) == 0.0,
                "FPS counter leaves the rest of the frame");
+        // A generated/real pair reuses one UI frame. Replaying must draw exactly
+        // the same pixels without sampling the FPS clock or consuming input twice.
+        Target repeated{t.queue, [mtl newTextureWithDescriptor:desc]};
+        auto repeat_cb = [t.queue commandBuffer];
+        MTLRenderPassDescriptor* repeat_pass = [MTLRenderPassDescriptor renderPassDescriptor];
+        repeat_pass.colorAttachments[0].texture = repeated.texture;
+        repeat_pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+        repeat_pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        repeat_pass.colorAttachments[0].clearColor =
+            MTLClearColorMake(Fill[2] / 255.0, Fill[1] / 255.0, Fill[0] / 255.0, 1.0);
+        [[repeat_cb renderCommandEncoderWithDescriptor:repeat_pass] endEncoding];
+        BbOverlay::Replay((__bridge void*)repeat_cb, (__bridge void*)repeated.texture);
+        [repeat_cb commit];
+        [repeat_cb waitUntilCompleted];
+        std::vector<u8> first(size_t(Width) * Height * 4), second(first.size());
+        [t.texture getBytes:first.data() bytesPerRow:Width * 4
+                   fromRegion:MTLRegionMake2D(0, 0, Width, Height) mipmapLevel:0];
+        [repeated.texture getBytes:second.data() bytesPerRow:Width * 4
+                   fromRegion:MTLRegionMake2D(0, 0, Width, Height) mipmapLevel:0];
+        Expect(repeat_cb.status == MTLCommandBufferStatusCompleted && first == second,
+               "generated/real pair uses identical overlay draw data");
         s.show_fps = false;
 
         // Cmd+, opens the menu; the game's input is held while it is open.

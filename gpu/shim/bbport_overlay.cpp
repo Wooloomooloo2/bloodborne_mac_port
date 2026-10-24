@@ -1760,4 +1760,10 @@ void Render(void* command_buffer, void* target, u32 width, u32 height) {
     });
 }
 
+void Replay(void* command_buffer, void* target) {
+    if (!initialized || !command_buffer || !target) return;
+    std::scoped_lock lock{imgui_mutex};
+    if (Visible()) MetalBackend::Frame(command_buffer, target, [] {});
+}
+
 } // namespace BbOverlay
