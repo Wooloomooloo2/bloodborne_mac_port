@@ -726,8 +726,8 @@ bool TemporalUpscaler::ResolveMetalFx(const ResolveInputs& in) {
     };
     bool fresh = false;
     if (!metalfx_scaler || config != metalfx_config) {
-        // Commands recorded earlier hold the old scaler by pointer until they are encoded.
-        scheduler.Finish();
+        // Each recorded closure owns its scaler, then Encode transfers another
+        // reference to the command buffer. Replacing it needs no GPU-wide wait.
         metalfx_scaler = BbMetalFx::CreateScaler(device, config);
         metalfx_config = config;
         fresh = true;
@@ -747,8 +747,8 @@ bool TemporalUpscaler::ResolveMetalFx(const ResolveInputs& in) {
         .reset = in.reset || fresh,
     };
     scheduler.EndRendering();
-    scheduler.Record([scaler = metalfx_scaler.Get(), frame](Metal::Encoder& e) {
-        BbMetalFx::Encode(e, scaler, frame);
+    scheduler.Record([scaler = Metal::Object::Retain(metalfx_scaler.Get()), frame](Metal::Encoder& e) {
+        BbMetalFx::Encode(e, scaler.Get(), frame);
     });
     return true;
 }
