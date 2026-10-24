@@ -221,6 +221,35 @@ void TestLevelsUint(Device& device, ScaleHelper& scale) {
     Expect(ok, "nearest RGBA8Uint level 1 (2x2) -> level 1 (4x4)");
 }
 
+// An explicit full-mip copy followed by a full-width partial-height copy.
+// Level 0 and the unwritten row of level 1 must retain every channel.
+void TestFullMipThenPartial(Device& device, ScaleHelper& scale) {
+    Object white = Texture(device, MTLPixelFormatRGBA8Unorm, 1, 1);
+    Object blue = Texture(device, MTLPixelFormatRGBA8Unorm, 1, 1);
+    const u8 white_pixel[4] = {255, 255, 255, 255}, blue_pixel[4] = {0, 0, 255, 255};
+    Upload(device, white.Get(), 0, 1, 1, 4, white_pixel);
+    Upload(device, blue.Get(), 0, 1, 1, 4, blue_pixel);
+    Object dst = Texture(device, MTLPixelFormatRGBA8Unorm, 8, 4, 2);
+    const std::vector<u8> untouched(8 * 4 * 4, 77);
+    Upload(device, dst.Get(), 0, 8, 4, 4, untouched.data());
+    Encoder encoder{device};
+    scale.ScaleColor(encoder, white.Get(), dst.Get(), ScaleFilter::Linear, {0, 0, 4, 2}, 0, 1);
+    scale.ScaleColor(encoder, blue.Get(), dst.Get(), ScaleFilter::Nearest, {0, 0, 4, 1}, 0, 1);
+    id<MTLBuffer> readback = SharedBuffer(device, 4 * 2 * 4);
+    encoder.CopyTextureToBuffer(dst.Get(), 1, 0, {}, {4, 2, 1}, Ref(readback), 16, 32);
+    device.Wait(encoder.Submit());
+    const u8* out = static_cast<const u8*>(readback.contents);
+    bool ok = true;
+    for (u32 y = 0; y < 2; ++y) {
+        for (u32 x = 0; x < 4; ++x) {
+            ok &= std::memcmp(out + (y * 4 + x) * 4, y == 0 ? blue_pixel : white_pixel, 4) == 0;
+        }
+    }
+    Expect(ok, "full-mip overwrite followed by partial-height copy preserves the unwritten row");
+    Expect(Read<u8>(device, dst.Get(), 8, 4) == untouched,
+           "discarding mip 1's old contents preserves mip 0");
+}
+
 std::vector<float> DepthRamp(u32 width, u32 height) {
     std::vector<float> depth(width * height);
     for (u32 i = 0; i < depth.size(); ++i) {
@@ -326,6 +355,7 @@ int main() {
         TestSameSizeConvert(device, scale);
         TestRect(device, scale);
         TestLevelsUint(device, scale);
+        TestFullMipThenPartial(device, scale);
         TestClearDepth(device, scale);
         TestPrepare(device);
         TestResampleDepthOnly(device, scale);
