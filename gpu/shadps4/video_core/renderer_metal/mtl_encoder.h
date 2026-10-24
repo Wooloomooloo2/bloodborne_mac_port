@@ -158,6 +158,12 @@ public:
     void SetTexture(Stage stage, u32 slot, void* texture); ///< id<MTLTexture>
     void SetSampler(Stage stage, u32 slot, void* sampler); ///< id<MTLSamplerState>
 
+    /// Per-Encoder lifetime counters, collected only with BB_ENCODER_STATS=1. `emitted`
+    /// counts resource-binding Metal calls; `skipped` counts identical setter requests.
+    /// BB_METAL_BINDING_CACHE=0 keeps the original setters for performance comparisons.
+    struct BindingStats { u64 emitted{}, skipped{}; };
+    [[nodiscard]] BindingStats GetBindingStats() const noexcept;
+
     void Draw(Primitive primitive, u32 vertex_count, u32 instance_count = 1, u32 first_vertex = 0,
               u32 first_instance = 0);
     void DrawIndexed(Primitive primitive, u32 index_count, IndexType type, BufferRef indices,

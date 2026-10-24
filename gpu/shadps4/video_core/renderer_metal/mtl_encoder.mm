@@ -36,6 +36,7 @@ struct TextureMask {
     std::array<u32, MaxTextures / 32> words{};
 
     void Set(u32 slot) { words[slot / 32] |= 1u << (slot % 32); }
+    [[nodiscard]] bool Test(u32 slot) const { return (words[slot / 32] >> (slot % 32)) & 1u; }
     void Clear() { words = {}; }
     [[nodiscard]] bool Any() const {
         for (u32 w : words) {
@@ -328,6 +329,10 @@ const bool encoder_stats = [] {
     const char* env = std::getenv("BB_ENCODER_STATS");
     return env && env[0] == '1';
 }();
+const bool binding_cache = [] {
+    const char* env = std::getenv("BB_METAL_BINDING_CACHE");
+    return !(env && std::strcmp(env, "0") == 0);
+}();
 std::atomic<u64> encoder_opens[NumOpenKinds][NumCauses];
 /// Callers that open a compute encoder inside a render pass (it splits the pass): two return
 /// addresses up from Impl::Compute, named with dladdr when printed.
@@ -421,6 +426,14 @@ struct Encoder::Impl {
     id<MTLComputeCommandEncoder> compute;
     id<MTLBlitCommandEncoder> blit;
     std::vector<Object> keep;
+    BindingStats binding_stats;
+
+    void BindingEmitted() {
+        if (encoder_stats) ++binding_stats.emitted;
+    }
+    void BindingSkipped() {
+        if (encoder_stats) ++binding_stats.skipped;
+    }
 
     // Ordering of untracked buffers (mtl_order.h); `order` is null with hazard tracking.
     OrderTracker* order;
@@ -856,6 +869,7 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
         }
         StageState& s = compute_stage;
         ForEachBit(s.buffers_dirty, [&](u32 slot) {
+            BindingEmitted();
             const StageState::Slot& b = s.buffers[slot];
             if (!b.bytes.empty()) {
                 [e setBytes:b.bytes.data() length:b.bytes.size() atIndex:slot];
@@ -864,9 +878,11 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
             }
         });
         s.textures_dirty.ForEach([&](u32 slot) {
+            BindingEmitted();
             [e setTexture:(__bridge id<MTLTexture>)s.textures[slot] atIndex:slot];
         });
         ForEachBit(s.samplers_dirty, [&](u32 slot) {
+            BindingEmitted();
             [e setSamplerState:(__bridge id<MTLSamplerState>)s.samplers[slot] atIndex:slot];
         });
         s.buffers_dirty = s.samplers_dirty = 0;
@@ -914,6 +930,7 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
 
     void ApplyStage(id<MTLRenderCommandEncoder> e, StageState& s, bool is_vertex) {
         ForEachBit(s.buffers_dirty, [&](u32 slot) {
+            BindingEmitted();
             const StageState::Slot& b = s.buffers[slot];
             if (!b.bytes.empty()) {
                 if (is_vertex) {
@@ -933,6 +950,7 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
             }
         });
         s.textures_dirty.ForEach([&](u32 slot) {
+            BindingEmitted();
             id<MTLTexture> t = (__bridge id<MTLTexture>)s.textures[slot];
             if (is_vertex) {
                 [e setVertexTexture:t atIndex:slot];
@@ -941,6 +959,7 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
             }
         });
         ForEachBit(s.samplers_dirty, [&](u32 slot) {
+            BindingEmitted();
             id<MTLSamplerState> st = (__bridge id<MTLSamplerState>)s.samplers[slot];
             if (is_vertex) {
                 [e setVertexSamplerState:st atIndex:slot];
@@ -1300,6 +1319,15 @@ void Encoder::SetBuffer(Stage stage, u32 slot, BufferRef buffer) {
     ASSERT(slot < MaxBuffers);
     StageState& s = impl->StateOf(stage);
     StageState::Slot& b = s.buffers[slot];
+    // Adapted from bloodborne_mac's renderer_binding_cache.inc (b395cf4), using
+    // this Encoder's existing per-stage state and reapply/submit lifetime rules.
+    // Never clear an existing dirty bit: a reopened or externally used encoder
+    // still needs the binding even when the caller repeats the same value.
+    if (binding_cache && (s.buffers_used & (1u << slot)) && b.bytes.empty() &&
+        !b.attribute_stride && b.buffer == buffer.buffer && b.offset == buffer.offset) {
+        impl->BindingSkipped();
+        return;
+    }
     b.buffer = buffer.buffer;
     b.offset = buffer.offset;
     b.stride = 0;
@@ -1310,9 +1338,22 @@ void Encoder::SetBuffer(Stage stage, u32 slot, BufferRef buffer) {
 }
 
 void Encoder::SetVertexBuffer(u32 slot, BufferRef buffer, u32 stride) {
-    SetBuffer(Stage::Vertex, slot, buffer);
-    impl->vertex.buffers[slot].stride = stride;
-    impl->vertex.buffers[slot].attribute_stride = true;
+    ASSERT(slot < MaxBuffers);
+    StageState& s = impl->vertex;
+    StageState::Slot& b = s.buffers[slot];
+    if (binding_cache && (s.buffers_used & (1u << slot)) && b.bytes.empty() &&
+        b.attribute_stride && b.buffer == buffer.buffer && b.offset == buffer.offset &&
+        b.stride == stride) {
+        impl->BindingSkipped();
+        return;
+    }
+    b.buffer = buffer.buffer;
+    b.offset = buffer.offset;
+    b.stride = stride;
+    b.attribute_stride = true;
+    b.bytes.clear();
+    s.buffers_dirty |= 1u << slot;
+    s.buffers_used |= 1u << slot;
 }
 
 void Encoder::SetBytes(Stage stage, u32 slot, const void* data, u32 size) {
@@ -1342,6 +1383,10 @@ void Encoder::SetBytes(Stage stage, u32 slot, const void* data, u32 size) {
 void Encoder::SetTexture(Stage stage, u32 slot, void* texture) {
     ASSERT(slot < MaxTextures);
     StageState& s = impl->StateOf(stage);
+    if (binding_cache && s.textures_used.Test(slot) && s.textures[slot] == texture) {
+        impl->BindingSkipped();
+        return;
+    }
     s.textures[slot] = texture;
     s.textures_dirty.Set(slot);
     s.textures_used.Set(slot);
@@ -1350,9 +1395,17 @@ void Encoder::SetTexture(Stage stage, u32 slot, void* texture) {
 void Encoder::SetSampler(Stage stage, u32 slot, void* sampler) {
     ASSERT(slot < MaxSamplers);
     StageState& s = impl->StateOf(stage);
+    if (binding_cache && (s.samplers_used & (1u << slot)) && s.samplers[slot] == sampler) {
+        impl->BindingSkipped();
+        return;
+    }
     s.samplers[slot] = sampler;
     s.samplers_dirty |= 1u << slot;
     s.samplers_used |= 1u << slot;
+}
+
+Encoder::BindingStats Encoder::GetBindingStats() const noexcept {
+    return impl->binding_stats;
 }
 
 void Encoder::SetComputePipeline(void* pipeline, Access buffers, Lane lane) {
