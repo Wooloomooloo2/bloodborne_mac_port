@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "bbport_metalfx.h"
+#include "bbport_framegen.h"
 #include "ffx_metal/fsr3_metal.h"
 
 #include "common/types.h"
@@ -135,8 +136,10 @@ public:
         void* texture{};
         vk::Format format{};
         u32 width{}, height{};
+        BbFrameGen::FramePtr framegen;
     };
     bool DisplayOverride(VAddr address, Display& display);
+    BbFrameGen::Generator* FrameGenerator() const { return frame_generator.get(); }
 
     /// One frame of the resolve step (all textures id<MTLTexture>, unretained, alive until the
     /// GPU has run the frame). Render size: `reactive`; output size: `output`.
@@ -281,9 +284,14 @@ private:
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
+        BbFrameGen::FramePtr framegen;
     };
     std::mutex display_mutex;
     std::unordered_map<VAddr, DisplayImage> displays;
+    std::unique_ptr<BbFrameGen::Generator> frame_generator;
+    BbFrameGen::FramePtr pending_framegen, display_framegen;
+    u64 framegen_sequence = 0;
+    std::chrono::steady_clock::time_point framegen_last{};
 
     bool resources_ready = false; ///< the textures below match width/height/out size
     int resources_upscaler = -1;  ///< the provider they were made for
