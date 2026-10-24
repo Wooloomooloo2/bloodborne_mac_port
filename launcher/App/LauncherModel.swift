@@ -21,6 +21,10 @@ final class LauncherModel: ObservableObject {
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
     @Published var showingCrashReport = false
+    @Published var availableUpdate: AppUpdate?
+    @Published var isCheckingForUpdates = false
+    @Published var isUpdating = false
+    @Published var updateStatus: String?
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -60,6 +64,7 @@ final class LauncherModel: ObservableObject {
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
         settings = GameSettings(ini: settingsFile)
         checkGame()
+        checkForUpdates(quiet: true)
     }
 
     func save() {
@@ -86,8 +91,22 @@ final class LauncherModel: ObservableObject {
                 if self.config.gameDir == folder {
                     self.gameProblem = problem
                     self.checkingGame = false
+                    if problem == nil {
+                        self.applyGameIcon(from: folder)
+                    }
                 }
             }
+        }
+    }
+
+    private func applyGameIcon(from folder: URL) {
+        let iconURL = folder.appendingPathComponent("sce_sys/icon0.png")
+        guard FileManager.default.fileExists(atPath: iconURL.path),
+              let iconImage = NSImage(contentsOf: iconURL) else { return }
+        NSApplication.shared.applicationIconImage = iconImage
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension == "app" {
+            NSWorkspace.shared.setIcon(iconImage, forFile: bundleURL.path, options: [])
         }
     }
 
@@ -234,4 +253,125 @@ final class LauncherModel: ObservableObject {
 
     func effect(_ key: String) -> Bool { settings.effects[key] ?? false }
     func setEffect(_ key: String, _ on: Bool) { settings.effects[key] = on }
+
+    func checkForUpdates(quiet: Bool = true) {
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        Task.detached {
+            let update = await Self.fetchLatestRelease()
+            await MainActor.run {
+                self.isCheckingForUpdates = false
+                let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+                    ?? Bundle.main.infoDictionary?["CFBundleVersion"] as? String
+                    ?? "development build"
+                if let update = update, AppUpdate.isNewer(remote: update.version, local: current) {
+                    self.availableUpdate = update
+                } else if !quiet {
+                    let alert = NSAlert()
+                    alert.messageText = "Bloodborne is up to date"
+                    alert.informativeText = "Version \(current) is currently the newest version."
+                    alert.addButton(withTitle: "OK")
+                    alert.runModal()
+                }
+            }
+        }
+    }
+
+    private static func fetchLatestRelease() async -> AppUpdate? {
+        guard let url = URL(string: "https://api.github.com/repos/Wooloomooloo2/bloodborne_mac_port/releases/latest") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.setValue("Bloodborne-Launcher", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 10
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else { return nil }
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let tag = json["tag_name"] as? String,
+                  let htmlStr = json["html_url"] as? String,
+                  let releaseURL = URL(string: htmlStr),
+                  let assets = json["assets"] as? [[String: Any]] else {
+                return nil
+            }
+            let title = (json["name"] as? String) ?? tag
+            let body = (json["body"] as? String) ?? ""
+            for asset in assets {
+                if let name = asset["name"] as? String,
+                   name.hasPrefix("Bloodborne-macOS") && name.hasSuffix(".zip"),
+                   let downloadStr = asset["browser_download_url"] as? String,
+                   let downloadURL = URL(string: downloadStr) {
+                    return AppUpdate(version: tag, title: title, downloadURL: downloadURL, releaseURL: releaseURL, notes: body)
+                }
+            }
+        } catch {
+            return nil
+        }
+        return nil
+    }
+
+    func dismissUpdate() {
+        availableUpdate = nil
+    }
+
+    func performUpdate() {
+        guard let update = availableUpdate, !isUpdating else { return }
+        let bundleURL = Bundle.main.bundleURL
+        if bundleURL.pathExtension != "app" {
+            NSWorkspace.shared.open(update.releaseURL)
+            return
+        }
+        isUpdating = true
+        updateStatus = "Downloading update…"
+
+        let downloadURL = update.downloadURL
+        let appPID = ProcessInfo.processInfo.processIdentifier
+
+        Task.detached {
+            do {
+                let (tempZipURL, _) = try await URLSession.shared.download(from: downloadURL)
+                await MainActor.run {
+                    self.updateStatus = "Installing update…"
+                }
+
+                let script = """
+                PID=\(appPID)
+                BUNDLE="\(bundleURL.path)"
+                ZIP="\(tempZipURL.path)"
+                TMPDIR="/tmp/bb_update_$$\"
+
+                mkdir -p "$TMPDIR"
+                unzip -q "$ZIP" -d "$TMPDIR"
+                NEW_APP="$TMPDIR/Bloodborne.app"
+
+                if [ -d "$NEW_APP" ]; then
+                    while kill -0 $PID 2>/dev/null; do sleep 0.2; done
+                    if [ -f "$BUNDLE/Contents/Resources/Bloodborne.icns" ]; then
+                        cp "$BUNDLE/Contents/Resources/Bloodborne.icns" "$NEW_APP/Contents/Resources/Bloodborne.icns" 2>/dev/null || true
+                    fi
+                    rm -rf "$BUNDLE"
+                    mv "$NEW_APP" "$BUNDLE"
+                    xattr -cr "$BUNDLE"
+                    open "$BUNDLE"
+                fi
+                rm -rf "$TMPDIR" "$ZIP"
+                """
+
+                let runner = Process()
+                runner.executableURL = URL(fileURLWithPath: "/bin/bash")
+                runner.arguments = ["-c", script]
+                try runner.run()
+
+                await MainActor.run {
+                    NSApplication.shared.terminate(nil)
+                }
+            } catch {
+                await MainActor.run {
+                    self.isUpdating = false
+                    self.updateStatus = nil
+                    self.exitMessage = "Update failed: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
 }

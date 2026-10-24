@@ -287,8 +287,18 @@ do {
     check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
 }
 
+do {
+    check(AppUpdate.isNewer(remote: "mac-v0.5.4.1", local: "0.5.3"), "newer minor/patch version")
+    check(AppUpdate.isNewer(remote: "0.5.4.1", local: "0.5.4"), "newer point version")
+    check(!AppUpdate.isNewer(remote: "0.5.4.1", local: "0.5.4.1"), "same version is not newer")
+    check(!AppUpdate.isNewer(remote: "0.5.3", local: "0.5.4.1"), "older version is not newer")
+    check(!AppUpdate.isNewer(remote: "mac-v0.5.4.1", local: "development build"), "dev build ignored")
+    check(AppUpdate.cleanVersion("mac-v0.5.4.1") == "0.5.4.1", "clean mac-v prefix")
+    check(AppUpdate.cleanVersion("v1.0.0") == "1.0.0", "clean v prefix")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates)")

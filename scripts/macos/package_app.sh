@@ -161,6 +161,7 @@ cat > "$contents/Info.plist" <<EOF
     <key>CFBundleDisplayName</key><string>Bloodborne</string>
     <key>CFBundleIdentifier</key><string>io.github.wooloomooloo2.bloodborne-mac-port</string>
     <key>CFBundleExecutable</key><string>Bloodborne</string>
+    <key>CFBundleIconFile</key><string>Bloodborne</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${version%%-*}</string>
     <key>CFBundleVersion</key><string>$version</string>

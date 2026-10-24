@@ -12,6 +12,9 @@ struct LauncherView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let update = model.availableUpdate {
+                updateBanner(update)
+            }
             // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
             // points, Dock shown) without scrolling, even with every optional row showing.
             // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
@@ -35,6 +38,18 @@ struct LauncherView: View {
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                Divider().frame(height: 16)
+                if model.isCheckingForUpdates {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Check for Updates…") {
+                        model.checkForUpdates(quiet: false)
+                    }
+                    .controlSize(.small)
+                }
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -229,6 +244,55 @@ struct LauncherView: View {
 
     private func effectBinding(_ key: String) -> Binding<Bool> {
         Binding(get: { model.effect(key) }, set: { model.setEffect(key, $0) })
+    }
+
+    @ViewBuilder
+    private func updateBanner(_ update: AppUpdate) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.blue)
+                    .imageScale(.large)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Update Available: \(AppUpdate.cleanVersion(update.version))")
+                        .font(.headline)
+                    Text(update.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if model.isUpdating {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(model.updateStatus ?? "Updating…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Button("Update Now") {
+                        model.performUpdate()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+
+                    Button("Release Notes") {
+                        NSWorkspace.shared.open(update.releaseURL)
+                    }
+                    .controlSize(.small)
+
+                    Button(action: { model.dismissUpdate() }) {
+                        Image(systemName: "xmark")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Dismiss")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(NSColor.controlBackgroundColor))
+            Divider()
+        }
     }
 }
 
