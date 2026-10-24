@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: from Huax-1839/bloodborne-macos (ee3120a, GPL-2.0-or-later), renderer_metal/.
 
@@ -26,7 +27,7 @@
 /// encoder, step 3 the render encoder, which the caller opens after the compute work (the
 /// hazard-tracked scratch buffer orders the encoders). Nothing here knows the rasterizer: the
 /// callers bind each stage's resources (BindStage) and the vertex/index buffers.
-/// Direct draws of one instance only (Rasterizer drops the others, counted).
+/// Direct draws of one instance (Runs::DrawTessellated encodes an instanced draw as one per instance).
 ///
 /// Objective-C objects cross this header as `void*` (bridged), as in mtl_pso_cache.h.
 namespace Metal::Tessellation {

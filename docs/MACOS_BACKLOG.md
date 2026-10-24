@@ -439,6 +439,11 @@ Each item: what was done for now, what the refinement is, and where it lives.
   allocations (~4.5 GB/h) and the 8 KiB class could hand out 64-byte blocks. Flat at 2.5 GB now.
   The same fix for 0.4.x is on branch `fix/low-alloc-free-list` (not merged). FINDINGS 2026-10-18.
 
+- **Indirect draw arguments above 4 GiB in the arena** (Metal uses 32-bit `indirectBufferOffset`;
+  index buffers are copied to staging instead, #36). Arena windows fixed both but stalled the GPU
+  queue through the driver's wired-memory accounting (#42; `BB_ARENA_WINDOWS=1`). Options: split
+  the arena into non-overlapping buffers of at most 4 GiB, or copy indirect records like indices.
+
 ## 2. Performance
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
@@ -696,6 +701,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Show the release version in the launcher (user, 2026-10-23).** Nothing in the window says
+  which build is installed, so players (and bug reports) can't tell 0.5.4.2 from 0.5.4.4 without
+  opening About. The bundle already carries it: `package_app.sh` writes `CFBundleShortVersionString`
+  (e.g. 0.5.4.4) and `CFBundleVersion` (the full tag version), and `LauncherModel.swift` reads the
+  short one for crash reports. Show "Version 0.5.4.4" in the bottom bar, next to "Show launcher
+  every time", with the full `CFBundleVersion` as its tooltip, and "development build" when the
+  key is missing (`make_app.sh` copies). Later: compare it with the latest GitHub release (PR #23,
+  auto-update).
+
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
   text box opens in full screen, takes typing and Escape cancels, but the letters are not
   masked. Masking depends on the game setting `OrbisImeOption` PASSWORD (bit 4,
@@ -732,6 +746,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
     the default layout in the README.
   - Split mode: mouse events live in the GPU host's window; extend the shared block's keyboard
     bridge (`bbgpu_split_keyboard`) with mouse deltas and buttons.
+
+- **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
+  (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the
+  bundle identifier, the version and `codesign --verify`, but the app is ad-hoc signed, so the
+  signature proves integrity, not origin: anyone who can publish a release on the repository can
+  ship an update. *Proper fix:* Developer ID signing + notarisation, then require the same Team
+  ID on the new app (`codesign -d -r-`), or an EdDSA signature over the zip (Sparkle's scheme)
+  with the public key in the app. Also: no delta updates (each one is ~50 MB).
 
 - **Launcher: warn when the frame cap is above the display's refresh** (`NSScreen
   .maximumFramesPerSecond`): a display set to 60 Hz silently holds 90/120 caps at 60 (2026-10-17).

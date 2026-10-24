@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: unit test for Metal::BuildHostKernel's sampler slots (Metal-native M5 Task 2): a host
 // GLSL kernel with a combined image sampler (tests/shaders/host_kernel_sampler.comp, SPIR-V from

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 from paths import ROOT
 import tempfile
 import unittest

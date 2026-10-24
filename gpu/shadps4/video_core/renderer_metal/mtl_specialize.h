@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: SPIR-V specialisation constants fixed to plain constants (Metal-native backend).
 

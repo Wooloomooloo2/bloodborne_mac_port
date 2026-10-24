@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the two-process split of the GPU library (bbport_split.h).
 #include "bbport_split.h"

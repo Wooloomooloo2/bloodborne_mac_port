@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #ifndef BB_RUNTIME_H
 #define BB_RUNTIME_H
 #include <stdint.h>

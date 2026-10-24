@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: one FSR 3.1 upscaler context on the FidelityFX Metal back end (ffx_metal.h), for the
 // renderer's resolve step (vk_temporal_upscaler.cpp, ResolveFsr3). Owns the back end's scratch

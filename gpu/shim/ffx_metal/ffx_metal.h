@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the FidelityFX SDK 1.1.4 back end on native Metal (Metal-native M6). AMD's FSR 3.1 host
 // code (ffx_fsr3upscaler.cpp) talks to it through the FfxInterface callbacks, the role ffx_vk.cpp

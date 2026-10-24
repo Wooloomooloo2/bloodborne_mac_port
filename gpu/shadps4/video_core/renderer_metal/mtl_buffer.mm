@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: MTLBuffer creation for the buffer cache (Metal-native renderer).
 
@@ -66,24 +67,54 @@ id<MTLBuffer> NewLazyBuffer(id<MTLDevice> mtl_device, const Device& device, u64 
     return buffer;
 }
 
-constexpr u64 WindowStep = u64{2} << 30;
-constexpr u64 WindowSize = u64{4} << 30;
+/// Windows start every 512 MiB and are 1 GiB long: a range of up to 512 MiB (indices, indirect
+/// arguments) fits in the window of its start. Metal counts a window's length as allocated
+/// (currentAllocatedSize, the Metal HUD), though it adds no memory: windows are small, and made
+/// only for offsets near and above 4 GiB.
+constexpr u64 WindowStep = u64{512} << 20;
+constexpr u64 WindowSize = u64{1} << 30;
+constexpr u64 FirstWindowed = (u64{4} << 30) - WindowStep;
 /// The key of a buffer's windows (an NSMutableDictionary: window index -> id<MTLBuffer>).
 char windows_key;
 
 } // namespace
 
 bool CanLowerOffsets(void* buffer) {
-    return buffer != nullptr && ((__bridge id<MTLBuffer>)buffer).contents != nullptr;
+    // Off unless BB_ARENA_WINDOWS=1: the GPU driver counts a window's whole length as wired
+    // memory on top of the arena it overlaps. Command buffers then asked for more than maxWired
+    // ("IOGPUCommandDescriptor::prepare: required > max", ~470,000 times an evening), the
+    // driver paged on every submission until the queue stalled: GPU watchdog exits, WindowServer
+    // killed, once a GPU stuck until a reboot (#42, noelmiller's A/B; 0.5.4 and 0.5.4.1).
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_ARENA_WINDOWS");
+        return env && env[0] == '1';
+    }();
+    return enabled && buffer != nullptr && ((__bridge id<MTLBuffer>)buffer).contents != nullptr;
 }
 
 BufferRef LowOffset(BufferRef ref) {
-    if (ref.offset < WindowStep || !CanLowerOffsets(ref.buffer)) {
+    if (ref.offset < FirstWindowed || !CanLowerOffsets(ref.buffer)) {
         return ref;
     }
-    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
     const u64 index = ref.offset / WindowStep;
     const u64 start = index * WindowStep;
+    id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)ref.buffer;
+    // Per draw: the windows of this thread's last lookups, without the lock. Keyed by the buffer's
+    // GPU address too, so a new buffer at a freed one's address never finds the old window.
+    struct Last {
+        void* buffer;
+        u64 gpu_address;
+        u64 index;
+        void* window;
+    };
+    thread_local Last last[4]{};
+    thread_local u32 next = 0;
+    const u64 gpu_address = buffer.gpuAddress;
+    for (const Last& l : last) {
+        if (l.buffer == ref.buffer && l.gpu_address == gpu_address && l.index == index && l.window) {
+            return {l.window, ref.offset - start};
+        }
+    }
     static std::mutex mutex;
     std::scoped_lock lock{mutex};
     NSMutableDictionary* windows = objc_getAssociatedObject(buffer, &windows_key);
@@ -104,20 +135,21 @@ BufferRef LowOffset(BufferRef ref) {
                 static bool logged = false;
                 if (!logged) {
                     logged = true;
-                    std::fprintf(stderr, "Metal: no window at %llu GiB of %s; offset kept\n",
-                                 static_cast<unsigned long long>(start >> 30),
+                    std::fprintf(stderr, "Metal: no window at %llu MiB of %s; offset kept\n",
+                                 static_cast<unsigned long long>(start >> 20),
                                  buffer.label.UTF8String ?: "a buffer");
                 }
                 return ref;
             }
-            window.label = [NSString stringWithFormat:@"%@ window %llu GiB", buffer.label ?: @"",
-                                                      static_cast<unsigned long long>(start >> 30)];
+            window.label = [NSString stringWithFormat:@"%@ window %llu MiB", buffer.label ?: @"",
+                                                      static_cast<unsigned long long>(start >> 20)];
             windows[@(index)] = window;
-            std::printf("Metal: window at %llu GiB of %s (32-bit index/indirect offsets)\n",
-                        static_cast<unsigned long long>(start >> 30),
+            std::printf("Metal: window at %llu MiB of %s (32-bit index/indirect offsets)\n",
+                        static_cast<unsigned long long>(start >> 20),
                         buffer.label.UTF8String ?: "a buffer");
         }
     }
+    last[next++ % 4] = {ref.buffer, gpu_address, index, (__bridge void*)window};
     return {(__bridge void*)window, ref.offset - start};
 }
 

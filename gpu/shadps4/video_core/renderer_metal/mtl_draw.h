@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the rasterizer's draw helper (Metal-native renderer, M3): binds a draw's resources by
 // the shaders' slot maps, applies its state, and encodes plain, rect-list, indexed, indirect,
@@ -223,6 +224,7 @@ struct PatchDraw {
     BufferRef factors{}; ///< tessellation factors (kTessFactorBuffer, factor buffer)
     u32 patches{};
     u32 output_control_points{};
+    u32 instance{}; ///< the instance this patch draw stands for (its base instance)
 };
 
 /// The skip counters already reported (DescribeSkips).

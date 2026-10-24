@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* BB_SAMPLE_MS=<n>: where the game's main thread spends long frames. Every n ms a sampler thread
  * suspends the main thread, reads its x86 registers (thread_get_state; Rosetta provides the
  * translated state, as for .NET's GC) and up to three rbp-chain return addresses from its own

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Model tests for the launcher (scripts/macos/build_launcher.sh --test). One PASS line or exit 1.
 import Foundation
@@ -55,12 +56,35 @@ do {
     check(PixelSize(2560, 1440).iniValue == "2560x1440" && PixelSize(2560, 1440).description == "2560 × 1440", "format")
 }
 
+// Native wide patch: display size is independent of the neutral renderer size.
+do {
+    var settings = GameSettings()
+    settings.output = PixelSize(2560, 1440)
+    settings.ultrawide = true
+    settings.wideOutput = PixelSize(3840, 1080)
+    settings.upscaler = .metalfx
+    settings.preset = 3
+    settings.liveResolution = .on
+    var ini = IniFile()
+    settings.apply(to: &ini)
+    check(ini["output_res"] == "1920x1080" && ini["ultrawide_res"] == "3840x1080", "wide patch and neutral renderer")
+    check(ini["upscaler"] == "off" && ini["preset"] == "0" && ini["live_resolution"] == "0", "native wide avoids duplicate host scaling")
+    var loaded = GameSettings(ini: ini)
+    check(loaded.ultrawide && loaded.renderSize == PixelSize(3840, 1080), "wide selection survives restart")
+    loaded.ultrawide = false
+    loaded.apply(to: &ini)
+    check(ini["ultrawide_res"] == nil && ini["output_res"] == "2560x1440", "disable removes patch and restores standard output")
+}
+
 // GameSettings: defaults, reading, values the launcher does not offer, writing back.
 do {
     let defaults = GameSettings(ini: IniFile())
     check(defaults == GameSettings(), "empty ini = defaults")
     check(defaults.output == PixelSize(1920, 1080) && defaults.upscaler == .off && defaults.preset == 0, "default display")
     check(defaults.frameCap == .fps60 && !defaults.fullscreen, "default cap, window")
+    check(defaults.gameTiming == .fixed && GameSettings(ini: IniFile(text: "game_timing=variable\n")).gameTiming == .variable, "game timing: default fixed, read")
+    check(GameSettings(ini: IniFile(text: "game_timing=slow\n")).gameTiming == .fixed, "game timing: invalid -> fixed")
+    check(FrameCap.fps60.hasFixedSteps && FrameCap.fps30.hasFixedSteps && FrameCap.fps90.hasFixedSteps && !FrameCap.fps40.hasFixedSteps && !FrameCap.fps120.hasFixedSteps, "caps with fixed-step patches")
     check(!defaults.jitter && defaults.modelDetail == .gameDefault && !defaults.reactive && defaults.reactiveScale == 1.0 && defaults.reactiveThreshold == 0.2 && defaults.reactiveMax == 0.9, "default advanced (bbport_settings.h)")
     check(!defaults.objectMotion && defaults.liveResolution == .off && defaults.effects["debug_camera"] == false && defaults.effects["debug_menu"] == false, "default advanced, debug")
     check(defaults.effects["effect_dof"] == true && defaults.effects["effect_ssr"] == false && defaults.effects["skip_intro"] == false, "default effects")
@@ -101,6 +125,7 @@ do {
     check(file["reactive_scale"] == "1.00" && file["reactive_threshold"] == "0.20" && file["reactive_max"] == "0.90" && file["object_motion"] == "0", "apply reactive keys")
     check(file["metal_hud"] == "1", "apply writes the Metal HUD key")
     check(file["texture_compression"] == "1", "apply writes the texture compression key")
+    check(file["game_timing"] == "fixed", "apply writes the game timing key")
     check(file.text.hasPrefix("# header\n"), "header kept")
     // Review focus 3: reloading after the game's menu changed the file picks up its values.
     file["preset"] = "3"
@@ -413,8 +438,107 @@ do {
     check(failure { try HuntersDream.poll(data(#"{"ResKind":0,"Status":"approved","OnlineId":"dreamer"}"#), community: community) } == "no token in the reply", "approved without a token")
 }
 
+// Versions and the GitHub releases check.
+do {
+    let v = { (s: String) in ReleaseVersion(s)! }
+    check(v("mac-v0.5.2.2").numbers == [0, 5, 2, 2] && v("mac-v0.5.2.2").isPlain, "tag to version")
+    check(v("0.5.2-test1").numbers == [0, 5, 2] && v("0.5.2-test1").suffix == "-test1" && !v("0.5.2-test1").isPlain, "test build")
+    check(v("0.5.2-5-g0b50589").numbers == [0, 5, 2], "checkout build (git describe)")
+    check(ReleaseVersion("dev-0b50589") == nil && ReleaseVersion("") == nil && ReleaseVersion("mac-v") == nil, "no number: no version")
+    check(v("0.5.2.1").isNewer(than: v("0.5.2")) && v("0.5.10").isNewer(than: v("0.5.9")) && v("1.0").isNewer(than: v("0.9.9")), "newer")
+    check(!v("0.5.2").isNewer(than: v("0.5.2.0")) && !v("0.5.2.0").isNewer(than: v("0.5.2")), "trailing zero is equal")
+    check(v("0.5.2").isNewer(than: v("0.5.2-test1")) && !v("0.5.2-test1").isNewer(than: v("0.5.2")), "test build before its release")
+    check(v("0.5.2-test2").isNewer(than: v("0.5.2-test1")) && v("0.5.2.1").isNewer(than: v("0.5.2-5-g0b50589")), "test builds in order; next release after a checkout")
+    check(v("0.5.2-5-g0b50589").isNewer(than: v("0.5.2")) && !v("0.5.2").isNewer(than: v("0.5.2-5-g0b50589-dirty")), "checkout build after its tag")
+    check(!v("0.5.2").isNewer(than: v("0.5.2-dirty")) && !v("0.5.2-test1").isNewer(than: v("0.5.2-test1")), "dirty tag build; equal")
+
+    func release(_ tag: String, draft: Bool = false, prerelease: Bool = false, asset: String? = nil) -> String {
+        let name = asset ?? "Bloodborne-macOS-\(tag.dropFirst(5)).zip"
+        return """
+        {"tag_name":"\(tag)","name":"\(tag): notes","body":"**Fixed** things","draft":\(draft),"prerelease":\(prerelease),
+         "html_url":"https://github.com/o/r/releases/tag/\(tag)",
+         "assets":[{"name":"pkg_extract-macOS.zip","size":1,"state":"uploaded","digest":null,"browser_download_url":"https://x/p.zip"},
+                   {"name":"\(name)","size":51225450,"state":"uploaded","digest":"sha256:ab","browser_download_url":"https://x/\(name)"}]}
+        """
+    }
+    // The API's order: newest published first; 0.5.2 was published after its fix releases.
+    let json = Data(("[" + [release("mac-v0.5.2.2", prerelease: true), release("mac-v0.6.0-test1"),
+                            release("mac-v0.7.0", draft: true), release("mac-v0.9.0", asset: "Other.zip"), release("v1.0"),
+                            release("mac-v0.5.2"), release("mac-v0.5.2.1", prerelease: true), release("mac-v0.4.0")]
+        .joined(separator: ",") + "]").utf8)
+    // Pre-releases (GitHub's flag: 0.5.2.1, 0.5.2.2) and test tags (0.6.0-test1) are test builds.
+    let all = (try? Updates.releases(json: json, includeTestBuilds: false)) ?? []
+    check(all.map(\.tag) == ["mac-v0.5.2", "mac-v0.4.0"], "full releases only, newest version first: \(all.map(\.tag))")
+    check(all.first?.zip.absoluteString == "https://x/Bloodborne-macOS-0.5.2.zip" && all.first?.size == 51225450, "the app's zip, not pkg_extract")
+    check(all.first?.digest == "sha256:ab" && all.first?.title == "mac-v0.5.2: notes" && all.first?.notes == "**Fixed** things", "release details")
+    check(all.allSatisfy { !$0.isTestBuild }, "full releases are not test builds")
+    let tests = (try? Updates.releases(json: json, includeTestBuilds: true)) ?? []
+    check(tests.map(\.tag) == ["mac-v0.6.0-test1", "mac-v0.5.2.2", "mac-v0.5.2.1", "mac-v0.5.2", "mac-v0.4.0"], "test builds when asked: \(tests.map(\.tag))")
+    check(tests.prefix(3).allSatisfy(\.isTestBuild), "pre-releases and test tags marked")
+    func newest(_ current: String?, tests: Bool = false, skipping: String? = nil) -> String? {
+        (try? Updates.newest(json: json, current: current.flatMap(ReleaseVersion.init), includeTestBuilds: tests, skipping: skipping))??.tag
+    }
+    check(newest("0.4.0") == "mac-v0.5.2", "newer release offered")
+    check(newest("0.5.2") == nil, "up to date: the 0.5.2.x pre-releases are not offered by default")
+    check(newest("0.5.2", tests: true) == "mac-v0.6.0-test1", "pre-releases and test builds when asked")
+    check(newest("0.5.2-test1") == "mac-v0.5.2", "a test build is offered its release")
+    check(newest("0.5.2-5-g0b50589") == nil && newest("0.5.2-5-g0b50589", tests: true) == "mac-v0.6.0-test1", "checkout build: only later releases")
+    check(newest("0.4.0", skipping: "0.5.2") == nil, "skipped version")
+    check(newest(nil) == "mac-v0.5.2", "dev build: newest release")
+    check((try? Updates.releases(json: Data("{\"message\":\"rate limited\"}".utf8), includeTestBuilds: false)) == nil, "API error is an error")
+
+    let now = Date(timeIntervalSince1970: 2_000_000_000)
+    check(Updates.isDue(last: nil, now: now) && Updates.isDue(last: now - Updates.interval, now: now), "due")
+    check(!Updates.isDue(last: now - 3600, now: now) && Updates.isDue(last: now + 3600, now: now), "not due; clock set back")
+
+    let info: [String: Any] = ["CFBundleIdentifier": Updates.bundleIdentifier, "CFBundleVersion": "0.5.2.2"]
+    check(Updates.unpackedProblem(info: info, expected: v("0.5.2.2")) == nil, "unpacked app accepted")
+    check(Updates.unpackedProblem(info: info, expected: v("0.5.3")) != nil, "wrong version refused")
+    check(Updates.unpackedProblem(info: ["CFBundleIdentifier": "com.example", "CFBundleVersion": "0.5.2.2"], expected: v("0.5.2.2")) != nil, "other app refused")
+
+    let fm = FileManager.default
+    let root = fm.temporaryDirectory.appendingPathComponent("launcher-update-\(getpid())")
+    try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+    let app = root.appendingPathComponent("Bloodborne.app")
+    let packaged = Layout.packaged(contents: app.appendingPathComponent("Contents"))
+    check(Updates.installProblem(layout: packaged, bundle: app) == nil, "packaged app in a writable folder installs")
+    check(Updates.installProblem(layout: .checkout(repo: root, app: app), bundle: app) != nil, "checkout app: git, not the updater")
+    check(Updates.installProblem(layout: packaged, bundle: URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/1/d/Bloodborne.app")) != nil, "translocated copy")
+    check(Updates.installProblem(layout: packaged, bundle: URL(fileURLWithPath: "/System/Bloodborne.app")) != nil, "read-only folder")
+    try? fm.removeItem(at: root)
+
+    // launch.conf keeps the update preferences.
+    var conf = IniFile(text: "BB_GAME_DIR=/g\n")
+    var config = LaunchConfig(ini: conf)
+    check(config.checkUpdates == nil && !config.testBuilds && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
+    config.checkUpdates = false
+    config.testBuilds = true
+    config.skippedVersion = "0.5.2.2"
+    config.lastUpdateCheck = now
+    config.apply(to: &conf)
+    check(LaunchConfig(ini: conf) == config && LaunchConfig(ini: conf).checkUpdates == false, "update preferences round trip")
+    check(conf["BB_UPDATE_CHECKED"] == "2000000000" && conf["BB_CHECK_UPDATES"] == "0", "update keys written")
+    config.testBuilds = false
+    config.skippedVersion = nil
+    config.checkUpdates = nil
+    config.apply(to: &conf)
+    check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
+    check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
+}
+
+// High-resolution ultrawide selection on memory-constrained Macs.
+do {
+    let gib: UInt64 = 1024 * 1024 * 1024
+    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440)] {
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 16 * gib) != nil, "16 GB wide memory warning")
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 24 * gib) == nil, "24 GB boundary")
+        check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
+    }
+    check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, online, sign-in)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, online, sign-in)")

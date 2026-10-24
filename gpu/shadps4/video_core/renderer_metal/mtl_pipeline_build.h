@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Metal pipeline states of the game's pipelines (Metal-native renderer, M3). The
 // pipeline cache (renderer_vulkan/vk_pipeline_cache.h) keeps each shader permutation as SPIR-V

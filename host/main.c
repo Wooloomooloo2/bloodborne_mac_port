@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* bbgpu-host: the native arm64 GPU process (docs/DESIGN_NATIVE_GPU_PROCESS.md), M3.
  * Spawned by bb-probe (src/gpu_process.c). It reserves the guest range,
  * maps the guest memory entry and the shared control block it receives in the handshake

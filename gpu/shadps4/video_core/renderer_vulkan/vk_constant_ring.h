@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: small read-only guest buffers (constants) copied by the GPU command thread (stage A of
 // the draw pipeline, vk_draw_pipe.h) into this ring, so the draw recording thread only binds

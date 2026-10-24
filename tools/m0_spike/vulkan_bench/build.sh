@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Build vkbench + cpubench twice from one source: x86_64 (runs under Rosetta) and arm64 (native).
 # Both vkbench builds link the universal MoltenVK dylib directly (no Vulkan loader).
 set -euo pipefail

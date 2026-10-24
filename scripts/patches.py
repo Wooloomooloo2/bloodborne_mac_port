@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Compile selected shadPS4/GoldHEN XML patches into out/patches.bin for the loader.
 
 Patch addresses are PS4 virtual addresses (eboot base 0x400000); the loader's
@@ -137,6 +138,48 @@ def output_size(settings):
     except ValueError:
         pass
     return OUTPUT_SIZE
+
+
+ULTRAWIDE_PATCHES = {
+    '2560x720': 'Resolution Patch 2560x720 (32:9)',
+    '3840x1080': 'Resolution Patch 3840x1080 (32:9)',
+    '5120x1440': 'Resolution Patch 5120x1440 (32:9)',
+    '2560x1080': 'Resolution Patch 2560x1080 (21:9)',
+    '3440x1440': 'Resolution Patch 3440x1440 (21:9)',
+}
+
+
+def ultrawide_patch(settings):
+    size = settings.get('ultrawide_res', '').strip()
+    if not size: return ''
+    if size not in ULTRAWIDE_PATCHES:
+        raise ValueError(f'Unsupported ultrawide resolution: {size}; choose a launcher preset or remove ultrawide_res from bbport.ini.')
+    return ULTRAWIDE_PATCHES[size]
+
+
+def ultrawide_writes(xml, name, app_version, segments):
+    """Apply the complete native scene/UI patch with a bounded texture-pool increase.
+
+    Keep the fallback globals and scene MOV/NOP overrides together. Preserve the
+    first graphics heap; increase only the smaller pool from 886 to 1536 MiB above
+    1080p pixel count. Retail capacity failed combat texture allocations (error 9).
+    launch_settings.sh supplies 6144 MiB DMEM for the extra 650 MiB.
+    """
+    heaps = [(0x04B36DDA - EBOOT_BASE, 0x04B36DDC - EBOOT_BASE),
+             (0x04B36DE2 - EBOOT_BASE, 0x04B36DE4 - EBOOT_BASE)]
+    writes = [(offset, data) for offset, data in
+              compile_patches(xml, [name], app_version, segments)
+              if not any(offset < end and offset + len(data) > start
+                         for start, end in heaps)]
+    required = {0x0183A35D - EBOOT_BASE, SCENE_WIDTH, SCENE_HEIGHT, UI_WIDTH, UI_HEIGHT}
+    if not required.issubset(offset for offset, _ in writes):
+        raise ValueError('Ultrawide patch is missing scene/camera/UI instructions')
+    size = next(size for size, patch in ULTRAWIDE_PATCHES.items() if patch == name)
+    width, height = map(int, size.split('x'))
+    if width * height > 1920 * 1080:
+        # Full 32-bit pool size; the community's two-byte write starts two bytes later.
+        writes.append((0x04B36DE0 - EBOOT_BASE, struct.pack('<I', 1536 * 1024 * 1024)))
+    return writes
 
 
 def scaled_sizes(settings):
@@ -294,9 +337,13 @@ def main():
     p.add_argument('--render-res',default='',help='render resolution WxH (overrides the preset)')
     p.add_argument('--print-preset-size',action='store_true',help='print the selected preset size, if reduced')
     p.add_argument('--output-res',default='',help='output resolution WxH (the upscaler\'s; the UI stays 1920x1080)')
+    p.add_argument('--print-ultrawide',action='store_true', help='print the selected native wide patch')
     p.add_argument('--print-scaled',action='store_true',
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
     a=p.parse_args()
+    if a.print_ultrawide:
+        print(ultrawide_patch(read_settings(a.settings)))
+        return
     if a.print_scaled:
         sizes=scaled_sizes(read_settings(a.settings))
         if sizes: print(f'{sizes[0][0]}x{sizes[0][1]} {sizes[1][0]}x{sizes[1][1]}')
@@ -323,7 +370,14 @@ def main():
             names.append(n)
     validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
+    wide = ultrawide_patch(read_settings(a.settings))
+    if wide and (a.render_res or any(n.startswith('Resolution Patch ') or
+                                    n == 'Increased Graphics Heap Sizes' for n in names)):
+        raise ValueError('Ultrawide already selects the native resolution; remove conflicting resolution/heap overrides')
     writes=compile_patches(a.xml,names,a.app_version,segments)
+    if wide:
+        writes += ultrawide_writes(a.xml, wide, a.app_version, segments)
+        names.append(f'Native scene/UI with bounded texture pool: {wide}')
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
     # it into the output-size image with a viewport scaled by output / 1920
@@ -349,4 +403,8 @@ def main():
 
 
 if __name__=='__main__':
-    main()
+    try:
+        main()
+    except ValueError as error:
+        print(f'Patches: {error}', file=sys.stderr)
+        sys.exit(1)

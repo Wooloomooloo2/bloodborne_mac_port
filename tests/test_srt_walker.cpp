@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Portable SRT walker (gpu/shadps4/shader_recompiler/ir/passes/flatten_extended_userdata_pass.cpp):
 // runs hand-written bytecode against tables in memory, on x86-64 (Rosetta) and native arm64.

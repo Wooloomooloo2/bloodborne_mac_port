@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2026 bbport contributors
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // Metal-native M4: which pipeline configurations an MTLBinaryArchive can serialize.

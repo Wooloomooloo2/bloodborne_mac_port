@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Link the user's plaintext libc into a separate, reproducible probe image.
 
 The original boot.bin remains usable. Symbols are matched by library/module

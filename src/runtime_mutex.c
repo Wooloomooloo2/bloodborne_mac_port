@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Opaque PS4 mutex and condition variable handles over the host's own primitives: pthread
  * mutexes/condition variables. */
 #define _GNU_SOURCE

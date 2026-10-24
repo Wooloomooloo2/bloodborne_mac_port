@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // pkg_extract: unpacks a fake-signed PS4 package (fpkg) into <output>/<TITLE_ID>/,
 // the layout bbport expects (eboot.bin, sce_sys/, sce_module/, dvdroot_ps4/ ...).

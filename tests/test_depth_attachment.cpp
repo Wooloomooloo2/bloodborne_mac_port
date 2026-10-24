@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The pipeline key's depth/stencil formats describe the depth buffer exactly as the render pass
 // binds it (Metal rejects a pipeline whose depth/stencil pixel formats differ from the pass's

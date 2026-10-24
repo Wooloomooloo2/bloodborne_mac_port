@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Builds a standalone pkg_extract for release downloads: arm64, macOS 15 or newer, Crypto++ built
 # from source for that target and linked in (Homebrew's is built for the build machine's macOS).
 #

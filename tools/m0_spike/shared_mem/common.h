@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* M0 feasibility spike: shared guest memory + IPC between an x86-64 (Rosetta)
  * parent and a native arm64 child. Shared by parent.c and child.c.
  * SPDX-License-Identifier: GPL-2.0-or-later */

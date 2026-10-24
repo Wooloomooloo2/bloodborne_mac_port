@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Kernel semaphores: 32-bit IDs, counted tokens and FIFO waiters.
  * Priority-ordered semaphores are approximated by FIFO order. */
 #define _GNU_SOURCE

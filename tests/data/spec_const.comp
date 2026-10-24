@@ -1,4 +1,5 @@
 #version 450
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 layout(local_size_x = 1) in;
 layout(constant_id = 0) const uint A = 1;
 layout(constant_id = 3) const uint B = 2;

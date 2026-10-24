@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <xxhash.h>
@@ -318,7 +319,19 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     }
     // bbport: the G-buffer pass (5+ color targets) holds the scene depth, and its constants the
     // main camera (shadow passes bind the same layout with the light's camera).
-    gbuffer_draw = camera_motion->Enabled() && std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    const bool scene_gbuffer = std::popcount(key.mrt_mask) >= 5 && db_desc.first;
+    if (scene_gbuffer && !upscaler->Enabled() && BbSettings::Get().ultrawide_width) {
+        const auto& size = texture_cache.GetImage(db_desc.first).info.size;
+        auto& settings = BbSettings::Get();
+        if (settings.active_render_width != int(size.width) ||
+            settings.active_render_height != int(size.height)) {
+            settings.active_render_width = size.width;
+            settings.active_render_height = size.height;
+            std::printf("Native ultrawide: observed scene depth %ux%u (no host scaling)\n",
+                        size.width, size.height);
+        }
+    }
+    gbuffer_draw = camera_motion->Enabled() && scene_gbuffer;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
     }

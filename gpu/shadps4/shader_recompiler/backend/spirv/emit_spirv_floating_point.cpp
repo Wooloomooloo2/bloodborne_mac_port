@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
@@ -190,10 +191,20 @@ Id EmitFPSqrt(EmitContext& ctx, Id value) {
     return ctx.OpSqrt(ctx.F32[1], value);
 }
 
+// bbport: NaN and Inf tested on the bit pattern. Metal's fast math (our default) assumes neither
+// exists and folds isnan/isinf to false, which turned GCN's NaN-safe ops (clamp, legacy min/max,
+// v_cmp_class) back into plain ones: a red bloom ball on the hunter's breath in Cainhurst.
+static Id MagnitudeBits32(EmitContext& ctx, Id value) {
+    return ctx.OpBitwiseAnd(ctx.U32[1], ctx.OpBitcast(ctx.U32[1], value),
+                            ctx.ConstU32(0x7fffffffu));
+}
+
 Id EmitFPSaturate32(EmitContext& ctx, Id value) {
     const Id zero{ctx.ConstF32(f32{0.0})};
     const Id one{ctx.ConstF32(f32{1.0})};
-    return ctx.OpFClamp(ctx.F32[1], value, zero, one);
+    // bbport: GCN's clamp modifier turns NaN into 0 (FClamp leaves NaN undefined).
+    return ctx.OpSelect(ctx.F32[1], EmitFPIsNan32(ctx, value), zero,
+                        ctx.OpFClamp(ctx.F32[1], value, zero, one));
 }
 
 Id EmitFPSaturate64(EmitContext& ctx, Id value) {
@@ -419,7 +430,7 @@ Id EmitFPIsNan16(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsNan32(EmitContext& ctx, Id value) {
-    return ctx.OpIsNan(ctx.U1[1], value);
+    return ctx.OpUGreaterThan(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsNan64(EmitContext& ctx, Id value) {
@@ -427,7 +438,7 @@ Id EmitFPIsNan64(EmitContext& ctx, Id value) {
 }
 
 Id EmitFPIsInf32(EmitContext& ctx, Id value) {
-    return ctx.OpIsInf(ctx.U1[1], value);
+    return ctx.OpIEqual(ctx.U1[1], MagnitudeBits32(ctx, value), ctx.ConstU32(0x7f800000u));
 }
 
 Id EmitFPIsInf64(EmitContext& ctx, Id value) {

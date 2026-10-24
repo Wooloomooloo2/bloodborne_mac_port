@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* M0 spike parent: x86-64, runs under Rosetta 2. Owns the guest memory entry,
  * spawns the native arm64 child, and drives every test.
  * SPDX-License-Identifier: GPL-2.0-or-later */

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* libSceSaveData on host directories:
  *   <save folder>/<user id>/<title id>/<dir name>/        files the game writes
  *   <save folder>/<user id>/<title id>/<dir name>.sce_sys/ param.bin, icon0.png

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Guest file system: PS4 mount points mapped onto host directories.
  *   /app0, /hostapp  -> game package root (read-only by convention)
  *   /temp0, /download0, /data, and mounts added by SaveData -> user directory

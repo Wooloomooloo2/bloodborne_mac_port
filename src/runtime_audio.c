@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <time.h>
 #include <SDL3/SDL.h>
 
@@ -40,6 +41,10 @@ typedef struct {
     int stats;
     uint64_t stat_start_ns, stat_last_ns, stat_max_gap_ns; /* BB_AUDIO_STATS */
     unsigned stat_starved, stat_buffers; int stat_min_queued;
+    uint64_t stat_samples, stat_nonfinite;
+    double stat_energy;
+    float stat_peak;
+    unsigned stat_put_failures;
 } Port;
 typedef struct { uint16_t output; uint8_t channel, reserved; int16_t volume; uint16_t reroute; uint64_t flag, reserved64[2]; } PortState;
 _Static_assert(sizeof(PortState)==32,"AudioOut port state layout");
@@ -190,11 +195,26 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
                 float v; memcpy(&v,(const char *)data+from*4,4);
                 v*=gain;
                 v=soft_clip(v);
+                if (p->stats) {
+                    ++p->stat_samples;
+                    if (!isfinite(v)) ++p->stat_nonfinite;
+                    else {
+                        float magnitude=fabsf(v);
+                        if (magnitude>p->stat_peak) p->stat_peak=magnitude;
+                        p->stat_energy+=(double)v*(double)v;
+                    }
+                }
                 memcpy(converted+to*4,&v,4);
             } else {
                 int16_t v; memcpy(&v,(const char *)data+from*2,2);
                 float fv=((float)v/32768.0f)*gain;
                 fv=soft_clip(fv);
+                if (p->stats) {
+                    ++p->stat_samples;
+                    float magnitude=fabsf(fv);
+                    if (magnitude>p->stat_peak) p->stat_peak=magnitude;
+                    p->stat_energy+=(double)fv*(double)fv;
+                }
                 int32_t iv=(int32_t)(fv*32767.0f);
                 if (iv>32767) iv=32767; else if (iv<-32768) iv=-32768;
                 int16_t sv=(int16_t)iv;
@@ -214,6 +234,10 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             /* Steer the SDL queue against hardware device rate */
             int low=2*(int)bytes;
             int queued=SDL_GetAudioStreamQueued(p->stream);
+            if (p->stats) {
+                if (!p->stat_buffers || queued<p->stat_min_queued) p->stat_min_queued=queued;
+                if (queued==0) ++p->stat_starved;
+            }
             if (queued<(int)bytes) {
                 if (buffers_out>0) ++g_audio_underruns;
                 static const unsigned char silence[2048*8*4];
@@ -230,7 +254,11 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
                 p->window_count=0;
             }
             p->next_deadline_ns+=(uint64_t)p->adjust_ns;
-            SDL_PutAudioStreamData(p->stream,converted,(int)bytes);
+            if (!SDL_PutAudioStreamData(p->stream,converted,(int)bytes) && p->stats) {
+                if (!p->stat_put_failures)
+                    fprintf(stderr,"Audio stats port %d: output failed: %s\n",(int)(p-ports),SDL_GetError());
+                ++p->stat_put_failures;
+            }
         }
 
         if (p->stats) {
@@ -238,15 +266,13 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             if (!p->stat_start_ns) { p->stat_start_ns=now; p->stat_min_queued=1<<30; }
             else if (now-p->stat_last_ns>p->stat_max_gap_ns) p->stat_max_gap_ns=now-p->stat_last_ns;
             p->stat_last_ns=now; ++p->stat_buffers;
-            if (p->stream) {
-                int queued=SDL_GetAudioStreamQueued(p->stream);
-                if (queued<p->stat_min_queued) p->stat_min_queued=queued;
-                if (queued==0) ++p->stat_starved;
-            }
             if (now-p->stat_start_ns>=5000000000u) {
-                printf("Audio stats port %d: %u buffers/5s (expected %u), max gap %.2f ms, min queued %d bytes, starved %u\n",
+                printf("Audio stats port %d: %u buffers/5s (expected %u), max gap %.2f ms, min queued %d bytes, starved %u; peak %.6f rms %.6f, nonfinite %llu/%llu, output failures %u\n",
                        (int)(p-ports),p->stat_buffers,(unsigned)(5u*48000u/(unsigned)p->frames),p->stat_max_gap_ns/1e6,
-                       p->stat_min_queued,p->stat_starved);
+                       p->stat_min_queued,p->stat_starved,p->stat_peak,
+                       p->stat_samples ? sqrt(p->stat_energy/(double)p->stat_samples) : 0.0,
+                       (unsigned long long)p->stat_nonfinite,(unsigned long long)p->stat_samples,p->stat_put_failures);
+                p->stat_samples=p->stat_nonfinite=0; p->stat_energy=0; p->stat_peak=0; p->stat_put_failures=0;
                 p->stat_start_ns=now; p->stat_max_gap_ns=0; p->stat_starved=0; p->stat_buffers=0; p->stat_min_queued=1<<30;
             }
         }

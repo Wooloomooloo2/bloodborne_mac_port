@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Run the production TAA shader on synthetic inputs, including undefined/invalid history.
 // Metal-native (M5): the kernels are built by Taa::Build (Metal::BuildHostKernel) and recorded by

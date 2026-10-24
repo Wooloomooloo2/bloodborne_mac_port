@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Native arm64 GPU process, runtime side (docs/DESIGN_NATIVE_GPU_PROCESS.md, M2 and M3).
  * The only renderer on macOS: spawns out/bbgpu-host (arm64 slice), hands it the guest memory
  * entry and a shared control block (host/bbgpu_protocol.h, host/bbgpu_shared.h) and mirrors

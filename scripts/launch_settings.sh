@@ -1,7 +1,14 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # SPDX-License-Identifier: GPL-2.0-or-later
 # Sourced by run.sh: bbport.ini settings the launcher writes that become environment variables.
 #   fps_cap=30|40|60|90|120  the presenter lets at most that many frames through
-#                            (BB_FPS_LIMIT); the game keeps run.sh's default frame rate patch
+#                            (BB_FPS_LIMIT)
+#   game_timing=fixed|variable  the game's frame rate patch (BB_FPS, run.sh). fixed (default):
+#                            the game steps by 1/cap seconds (the unpatched game at 30, the
+#                            60/90 FPS++ patches), slowing down when frames are late; variable:
+#                            Uncap FPS++ steps by each frame's measured time, which keeps speed
+#                            but lets you sink through moving lifts on uneven frames (user,
+#                            2026-10-23). Caps without a fixed-step patch (40, 120) are variable.
 #   fullscreen=1             the window opens full screen (BB_FULLSCREEN=1)
 # Online play (the online module, gpu/bbnet; run.sh):
 #   online=1                 online play on (BB_ONLINE=1)
@@ -29,7 +36,9 @@
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
     local line cap='' full='' hud='' compress='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
-    local pool='' thd_id='' thd_token=''
+    local pool='' thd_id='' thd_token='' timing=''
+    # BB_FPS chosen here for the previous launch is chosen again after an in-game restart.
+    if [[ ${BB_FPS_AUTO:-} == 1 ]]; then unset BB_FPS BB_FPS_AUTO; fi
     [[ -f $1 ]] || return 0
     while IFS= read -r line || [[ -n $line ]]; do
         line=${line%$'\r'}
@@ -48,6 +57,7 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^thd_online_id=(.+)$ ]]; then thd_id=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^game_timing=(fixed|variable)$ ]]; then timing=${BASH_REMATCH[1]}; fi
     done < "$1"
     # Secrets kept in the login keychain instead of the file (`security find-generic-password`;
     # BB_KEYCHAIN_TOOL names another command, for tests). A lookup that finds nothing leaves the
@@ -65,6 +75,12 @@ bb_launch_settings() { # ini file
         thd_token=$("$tool" find-generic-password -s bbport-huntersdream -a "$thd_id" -w 2>/dev/null) || thd_token=''
         if [[ $want_token == keychain && -z $thd_token ]]; then
             echo "Online: no keychain item bbport-huntersdream for $thd_id (python3 scripts/online.py signin --keychain)" >&2
+        fi
+    fi
+    if [[ -z ${BB_FPS:-} ]]; then
+        export BB_FPS=uncap BB_FPS_AUTO=1
+        if [[ $timing != variable ]]; then
+            case ${BB_FPS_LIMIT:-$cap} in 30|60|90) BB_FPS=${BB_FPS_LIMIT:-$cap} ;; esac
         fi
     fi
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
@@ -88,4 +104,32 @@ bb_launch_settings() { # ini file
     if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi
     if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
     return 0
+}
+
+# Recomputed on every launch/restart. Never append automatic patches to the inherited
+# BB_PATCHES, otherwise disabling ultrawide would leave the previous patch active.
+bb_native_ultrawide() { # a patch name validated by patches.py, or empty for 16:9
+    local wide_patch=$1 wide_w wide_h
+    launch_patches=${BB_PATCHES:-}
+    unset BB_ULTRAWIDE_RES
+    if [[ ${BB_ULTRAWIDE_SESSION:-} == 1 ]]; then
+        unset BB_UPSCALER BB_ULTRAWIDE_SESSION
+    fi
+    if [[ ${BB_ULTRAWIDE_AUTO_DMEM:-} == 1 ]]; then
+        unset BB_DMEM_MB BB_ULTRAWIDE_AUTO_DMEM
+    fi
+    if [[ -n $wide_patch ]]; then
+        export BB_ULTRAWIDE_RES=${wide_patch#Resolution Patch }
+        BB_ULTRAWIDE_RES=${BB_ULTRAWIDE_RES%% *}
+        # The complete game patch owns scene/UI sizes. Do not resize/composite it again.
+        export BB_UPSCALER=none BB_ULTRAWIDE_SESSION=1
+        unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
+        wide_w=${BB_ULTRAWIDE_RES%x*}
+        wide_h=${BB_ULTRAWIDE_RES#*x}
+        if (( wide_w * wide_h > 1920 * 1080 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
+            export BB_DMEM_MB=6144 BB_ULTRAWIDE_AUTO_DMEM=1
+        fi
+        # Complete resolution patch, retail first heap, bounded second texture pool.
+        echo "Ultrawide: native $BB_ULTRAWIDE_RES; bounded texture pool; DMEM ${BB_DMEM_MB:-5056} MiB; no upscaling"
+    fi
 }

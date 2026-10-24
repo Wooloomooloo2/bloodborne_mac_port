@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* bbgpu-host internals shared by host/main.c and host/host_runtime.c.
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #pragma once

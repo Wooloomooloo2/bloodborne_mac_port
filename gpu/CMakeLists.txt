@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # bbport GPU library: shadPS4 video core + shader recompiler + Gnm/VideoOut
 # drivers, adapted to the native_probe runtime through shims in shim/.
 cmake_minimum_required(VERSION 3.24)

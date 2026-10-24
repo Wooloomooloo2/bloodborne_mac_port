@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the FidelityFX Metal back end's state (shim/ffx_metal/ffx_metal.h), shared by its
 // source files. Plain C++: Metal objects cross as void*.

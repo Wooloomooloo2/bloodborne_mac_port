@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // bbport: optimizations that can be switched off while the game runs (BB_TOGGLE_FILE,
 // see runtime_memory.c), to find which one changes rendering without restarting.
 #pragma once

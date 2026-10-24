@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the draw helper's Vulkan-free part (mtl_draw.h): slot binding, draw preparation, plain /
 // rect / indexed / indirect draws, dispatches, scratch memory and the tessellation run queue.
@@ -456,7 +457,7 @@ void Runs::Flush(Encoder& e) {
         e.SetBuffer(Stage::Vertex, kTessInputBuffer, d.patch.control);
         e.SetBuffer(Stage::Vertex, kTessPatchBuffer, d.patch.patch);
         e.SetBuffer(Stage::Vertex, kTessFactorBuffer, d.patch.factors);
-        e.DrawPatches(d.patch.output_control_points, 0, d.patch.patches, {}, 1, 0);
+        e.DrawPatches(d.patch.output_control_points, 0, d.patch.patches, {}, 1, d.patch.instance);
     }
     e.ReleaseOrderCommand();
 }

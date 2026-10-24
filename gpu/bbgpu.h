@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* C interface of the GPU library (gpu/): shadPS4's Liverpool/Vulkan video core,
  * GnmDriver, VideoOut and kernel event queues, adapted to the native loader. */
 #ifndef BBGPU_H

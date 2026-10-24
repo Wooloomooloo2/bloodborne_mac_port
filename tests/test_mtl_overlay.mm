@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: unit test for the settings overlay on Metal (Metal-native M5 Task 9): BbOverlay::Init on
 // a Metal::Device, then BbOverlay::Render into an offscreen BGRA8 render target, as the presenter

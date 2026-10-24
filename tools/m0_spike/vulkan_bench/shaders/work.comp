@@ -1,4 +1,5 @@
 #version 450
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 layout(local_size_x = 64) in;
 layout(set = 0, binding = 0, std430) buffer Sb { vec4 v[]; } sb;
 layout(push_constant) uniform Pc { uvec4 a; } pc;

@@ -15,17 +15,121 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-19)
+## Status (2026-10-24)
 
-**Current version: [mac-v0.5.2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.2)** (download the app, or build it as below).
+**Current version: [mac-v0.5.5](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.5)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
-saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, or upscaled with
-MetalFX, FSR 3.1 or TAA, through its own **native Metal renderer**. Expect occasional rendering
-glitches (see [Known issues](#known-issues)).
+saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
+**4K native too** (70 FPS uncapped in Hemwick), or upscaled with MetalFX, FSR 3.1 or TAA,
+through its own **native Metal renderer**. Expect occasional rendering glitches (see
+[Known issues](#known-issues)).
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### New in 0.5.5: lifts, crash and upscaling fixes, no more red flashes
+
+0.5.5 is a full release of the 0.5.4.3 to 0.5.4.5 pre-releases, plus one new fix. The first launch
+rebuilds the shader cache once (a minute or so of stutter).
+
+- **Red flashes on breath and other effects** (new in 0.5.5). In cold areas such as Cainhurst,
+  the hunter's breath could flash as a bright red ball every few seconds. The PS4's GPU
+  has float instructions that turn infinities and invalid values into 0 or the largest normal
+  number. The shader translator turned several of them into ordinary maths, and Metal's fast maths
+  removed the checks for invalid values, so one bad pixel bloomed into a red ball. Those
+  instructions now follow the PS4's rules: in testing, flashes went from about 1 frame in 60 to
+  fewer than 1 in 500 with the first half of the fix, and the second half targets the rest. If you
+  still see one, please report where.
+- **Fixed game timing by default, so lifts no longer drop you through the floor.** The port always
+  advanced the game by each frame's measured time, so on uneven frames the character could sink
+  through a moving lift and die. At the 60 and 90 FPS caps the game now runs in fixed steps (the
+  60/90 FPS++ patches); 30 runs the game unpatched, and 40 and 120 stay variable. If a scene can't
+  hold the cap, the game slows down a little instead. **Game timing** under the launcher's frame
+  rate cap (`game_timing` in `bbport.ini`) switches back to variable steps.
+- **The rare "memmove" crash is fixed** (#34, #37, #38, #54, #57). The game's render thread builds
+  each frame's commands in a fixed 256 KB pool. It normally uses about 3% of it, but on rare frames
+  it needs more, and the game then copied into a null address and crashed. When the pool runs out,
+  the port now hands the game memory from a 16 MB spare pool and logs a "Frame pool: … full" line
+  in `game.log`.
+- **MetalFX and FSR 3.1 no longer turn hazy while moving** (#48, found and measured by
+  @MojahedAbushawish). The camera motion vectors pointed the wrong way vertically on the Metal
+  renderer, so the upscalers blended in history from the mirrored position.
+- **Native AA works again with texture compression on**: since 0.5.4 it, and upscaling above
+  1080p, silently ran without the upscaler.
+- **The launcher no longer freezes on macOS 26.0.1** when switching from Advanced back to General
+  (#47): General and Advanced are now a switch at the top instead of tabs, which hit a SwiftUI
+  bug in that macOS version.
+
+### New in 0.5.4.2: GPU stall crashes fixed
+
+- **"The GPU stopped making progress" crashes, and the frame rate sinking over a session, are
+  fixed** (#42, #43, #44, #45, #49, #55). The extra Metal views of GPU memory added in 0.5.4 cost
+  no memory, but macOS's GPU driver counted each one as memory it had to keep in place, until it
+  paged on every frame and the GPU stalled. They are gone; meshes high in GPU memory are copied to
+  a small buffer instead (@DiAvisoo's original fix). Found and measured by @noelmiller.
+
+### New in 0.5.4.1: missing trees
+
+- **Trees and other objects that never drew are back** (#35). The Metal renderer skipped every
+  tessellated draw with more than one instance, which some areas use for whole trees: in the
+  Forbidden Woods, about 1,900 draws every 5 seconds were dropped. Each instance is now drawn on
+  its own; 60 FPS holds there on an M4 Max.
+
+### New in 0.5.4: the biggest speed-up since native Metal
+
+The same spot in Hemwick Charnel Lane, M4 Max, full screen, upscaler off, frame rate uncapped,
+read from Apple's Metal Performance HUD:
+
+| Output | 0.5.3 | 0.5.4 | |
+|---|---|---|---|
+| 4K native (3840×2160) | 51.3 FPS, GPU 20.1 ms | **70.1 FPS, GPU 14.9 ms** | **+37%** |
+| 4K native, another view | 80.7 FPS, GPU 12.6 ms | **109.1 FPS, GPU 9.3 ms** | **+35%** |
+
+And in alternating test runs (M4 Max, uncapped; the presenter stops at 120 FPS):
+
+| Scene | Before | After |
+|---|---|---|
+| Hunter's Dream, 1440p native, texture compression off → on | 101.7–102.1 | **119.6–119.8** (at the 120 limit, so at least +18%) |
+| Hunter's Dream, 1440p native, invariant positions (below) | 85.7 | **98.9** (+15%) |
+| M3 Pro 18 GB, compression off → on ([@MojahedAbushawish](https://github.com/MojahedAbushawish)) | 37.6 / 49.7 / 28.5 | **44.3 / 62.2 / 40.2** (+18% / +25% / +41%) |
+
+GPU time is what decides whether a slower Mac holds 60 FPS (16.7 ms per frame), so these gains
+matter most on base and Pro chips. What changed:
+
+- **Lossless texture compression** (from [@MojahedAbushawish](https://github.com/MojahedAbushawish), #33).
+  Apple GPUs compress textures and render targets without any loss, but only when they are
+  created without two usage flags. Every texture had both, so nothing was compressed and memory
+  bandwidth was the largest cost of a frame. Textures now get those flags only when something
+  needs them. Launcher: Advanced → Performance → **Texture compression** (on; turn it off if you
+  see wrong colours or broken textures).
+- **Invariant positions instead of precise math in vertex shaders** (from Mojahed's #20). Positions
+  stay identical between passes through Metal's invariance, without the precise-math mode that
+  blocked the shader compiler's optimisations. The shader cache rebuilds once after updating.
+- **Vanishing floors, walls and props fixed** (found by [@DiAvisoo](https://github.com/DiAvisoo), #36; #35, #18).
+  Metal's indexed and indirect draws use only the low 32 bits of their buffer offset, on every
+  Apple GPU tested (M2 Max, M4 Max): when streaming placed a large mesh more than 4 GiB into the
+  game's GPU memory, the draw read the wrong data and the mesh disappeared until a reload. Such
+  draws now go through a second Metal buffer over the same memory, at a low offset, with no copy.
+- **Smoother full screen** (#25): three frame buffers instead of two in full screen, where macOS
+  shows the game's frames directly. Late frames per test run: 10–18 → 0–2.
+- **Native ultrawide** (from [@DiAvisoo](https://github.com/DiAvisoo), #30, building on Kyo's
+  resolution patches): 2560×1080 and 3440×1440 (21:9), 2560×720, 3840×1080 and 5120×1440 (32:9)
+  in the launcher, with the camera and HUD adjusted. 3840×1080 holds 60 FPS on an M4 Max; the
+  1440-tall modes need a lot of GPU memory, and the launcher warns on Macs with less than 24 GB.
+- **Optional frame pacing** (in-game menu: Display → Frame pacing): each frame stays on screen for
+  one period of the FPS cap, for even motion on ProMotion displays, at the cost of about one
+  frame of input latency. Off by default.
+- The pipeline archive is written less often while many new shaders appear (less competition with
+  the game on Macs with fewer cores).
+
+### New in 0.5.3: fixes, crash reports
+
+- **The black loading screen** (#18, found by Mojahed in #20) and **very low frame rates on 16 GB
+  Macs** with an upscaler or at 720p (#22, #19) are fixed.
+- **Crash reports:** the launcher shows what happened and opens a GitHub issue with the log.
+- **Advanced tab** in the launcher (#15); +5–15% FPS from deferred copies and 10–22% less CPU
+  (Mojahed's #20); MoltenVK and the Vulkan loader are gone from the app.
 
 ### Benchmarks: 0.4.0 → 0.5.0
 
@@ -62,6 +166,9 @@ got it to 60 and beyond, in order:
 | 0.3.1 | **MoltenVK encodes while we record** (prefilled Metal command buffers) instead of encoding the whole frame inside the flip's submit (~13 ms) | Judder: late game frames **~6× fewer**; the "solid 60" feel |
 | 0.3.3 | **No Metal argument buffers in MoltenVK** (push descriptors bound directly; the tip came from [Huax-1839/bloodborne-macos](https://github.com/Huax-1839/bloodborne-macos)) | **+13–16%** everywhere: 1080p native 82 → 94, 1440p native 59 → 66 (above 60 for the first time), FSR/MetalFX 92 → 107 |
 | 0.5.0 | **Native Metal renderer.** The video core encodes Metal directly (no Vulkan, no MoltenVK): untracked guest buffers with our own ordering, a pipeline archive kept between sessions, MetalFX on our own textures, FSR 3.1 through a Metal back end for AMD's FidelityFX interface | **1440p native 69.5 → 82.0**, FSR 3.1 Quality 1080p **108 → 120** (Hunter's Dream; table above) |
+| 0.5.3 | **Copies inside a render pass wait until it ends** (Mojahed, #20) | +5–7% at 1440p, up to +15% at 1080p |
+| 0.5.4 | **Invariant positions** instead of precise vertex math (Mojahed, #20) | Hunter's Dream 1440p **85.7 → 98.9** |
+| 0.5.4 | **Lossless texture compression** (Mojahed, #33) | Hunter's Dream 1440p **102 → 120** (cap); 4K native in Hemwick **51 → 70** together with the line above |
 
 Also fixed along the way: a MoltenVK crash from two threads sharing one command pool, and
 geometry corruption at 1440p (scenes above 1080p now use live resolution changes).
@@ -171,9 +278,10 @@ the log.
 
 ### Known issues
 
-- **Missing geometry after a respawn or reload** (character's legs, a flight of stairs, a
-  floor), reported on an M4 Max and an M2 Pro; a relaunch brings it back. It coincided with the
-  load race below, now fixed, so it may be gone: reports welcome.
+- **Missing geometry:** floors, walls and props vanishing until a reload (Metal's 32-bit index
+  offsets) are fixed in 0.5.4, and trees and other instanced tessellated objects that never drew
+  (Forbidden Woods, #35) in 0.5.4.1. If something still goes missing, reports with a screenshot
+  and `game.log` are welcome on #35.
 - **Occasional judder at a steady 60 FPS** (some game frames take 20–45 ms): much rarer since
   2026-10-15 (about 6x fewer late frames).
 - **Uncapped, an occasional single long frame** (20–40 ms) on the Metal renderer; capped play
@@ -183,14 +291,12 @@ the log.
 
 ### What's next
 
-- **0.5.3: cleanup** (done): MoltenVK, the Vulkan loader and the unused FSR 4 code are gone
-  from the app, a 4.5 MB smaller download (51.3 → 46.7 MB). Next for 0.5.3: keyboard and mouse
-  controls.
-- **Fewer Metal render passes.** Profiling found ~408 Metal encoders per frame (190 render
-  passes). Each extra render pass costs ~13–16 µs of GPU time on Apple GPUs regardless of
-  resolution — about 3 ms per frame — and leaves the GPU idle in periodic gaps. Merging passes
-  is the main lever for 1440p and 4K at 60.
-- Confirm the missing-geometry reports are gone; the frame-time judder.
+- **Fewer Metal render passes.** In Central Yharnam, tessellated draws split the render pass
+  67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
+  bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
+  (Mojahed's #39 starts on it).
+- Keyboard and mouse controls (mouse look, from #20).
+- Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
 Details:
@@ -246,6 +352,19 @@ a small Python for the launch scripts). Saves and settings go to
 `~/Library/Application Support/Bloodborne` (another save folder can be chosen in the launcher),
 the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
+
+**Updates.** The first time it opens, the app asks whether to check for updates automatically
+(also when the launcher window is turned off, before the game starts). If you agree, the launcher
+checks the GitHub releases once a day and offers a newer version with its release notes: when its
+window opens, or, with the window turned off, in the background while you play, showing the update
+after the game ends. **Install
+Update** downloads it, checks it (size, SHA-256 from GitHub, bundle identifier, version, code
+signature), replaces `Bloodborne.app` where it is and opens it again; saves and settings are not
+touched. **Bloodborne → Check for Updates…** checks at once; the update window has the
+*Check for updates automatically* and *Include test builds* (pre-releases and `mac-v…-test1`
+tags) options. The
+app must be somewhere you can write (Applications is fine) and not run from the Downloads quarantine
+location. **Bloodborne → About Bloodborne** shows the version, build and commit.
 
 **Preparing the game folder from PKG files.** The app needs an unpacked folder, not `.pkg`
 files. If you already play on shadPS4 you have one: use that folder, but first copy the
@@ -312,7 +431,8 @@ it to the Dock. It opens the same launcher window as the downloadable app (setti
 save folders; see "New in 0.4.0" above), runs the game from this checkout without a Terminal
 window, and writes the game's log to `~/Library/Logs/Bloodborne/game.log` (the session before
 in `game.previous.log`). If the game stops with an error, the launcher offers the log. Run the
-script again if you move the repository folder.
+script again if you move the repository folder. Its update check only tells you about new releases: update a
+checkout with `git pull` and build again.
 
 ### From Finder with a Terminal window
 

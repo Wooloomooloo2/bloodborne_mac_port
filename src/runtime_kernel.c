@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* libkernel/libScePosix process services: clocks, sleeping, errno mapping,
  * pthread once/keys, signal bookkeeping and a narrow sysctl. Guest values
  * use FreeBSD numbering; host errno values never reach the guest directly. */

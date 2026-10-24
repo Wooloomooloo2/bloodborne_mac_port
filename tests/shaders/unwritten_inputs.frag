@@ -1,4 +1,5 @@
 #version 450
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // unwritten-inputs-test: reads locations 0..4; the vertex shader writes 0 and 1. Location 3 is
 // read through a component access chain, location 4 is flat.
 layout(location = 0) in vec4 in0;

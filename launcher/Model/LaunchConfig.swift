@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
@@ -33,12 +34,19 @@ enum Shell {
 }
 
 /// launch.conf: the launcher's own settings as shell assignments (bash sources the file in
-/// Bloodborne.command): BB_GAME_DIR, BB_SAVE_DIR (absent: the default), BB_SHOW_LAUNCHER.
+/// Bloodborne.command): BB_GAME_DIR, BB_SAVE_DIR (absent: the default), BB_SHOW_LAUNCHER, and the
+/// update check's BB_CHECK_UPDATES (absent: not asked yet), BB_UPDATE_TEST_BUILDS, BB_UPDATE_SKIP (a version the player
+/// skipped) and BB_UPDATE_CHECKED (the last automatic check, Unix seconds).
 /// Other assignments in it (BB_DATA_DIR, BB_FPS, ...) stay in the IniFile.
 struct LaunchConfig: Equatable {
     var gameDir: URL?
     var saveDir: URL?
     var showLauncher = true
+    /// Automatic update checks; nil until the player answers the first-run question.
+    var checkUpdates: Bool?
+    var testBuilds = false
+    var skippedVersion: String?
+    var lastUpdateCheck: Date?
     private(set) var dataDir: URL?
 
     init() {}
@@ -52,11 +60,20 @@ struct LaunchConfig: Equatable {
         saveDir = path("BB_SAVE_DIR")
         dataDir = path("BB_DATA_DIR")
         if let v = ini["BB_SHOW_LAUNCHER"] { showLauncher = Shell.unquote(v) != "0" }
+        if let v = ini["BB_CHECK_UPDATES"] { checkUpdates = Shell.unquote(v) != "0" }
+        if let v = ini["BB_UPDATE_TEST_BUILDS"] { testBuilds = Shell.unquote(v) == "1" }
+        skippedVersion = ini["BB_UPDATE_SKIP"].map(Shell.unquote).flatMap { $0.isEmpty ? nil : $0 }
+        lastUpdateCheck = ini["BB_UPDATE_CHECKED"].flatMap { TimeInterval(Shell.unquote($0)) }
+            .map(Date.init(timeIntervalSince1970:))
     }
 
     func apply(to ini: inout IniFile) {
         ini["BB_GAME_DIR"] = gameDir.map { Shell.quote($0.path) }
         ini["BB_SAVE_DIR"] = saveDir.map { Shell.quote($0.path) }
         ini["BB_SHOW_LAUNCHER"] = showLauncher ? "1" : "0"
+        ini["BB_CHECK_UPDATES"] = checkUpdates.map { $0 ? "1" : "0" }
+        ini["BB_UPDATE_TEST_BUILDS"] = testBuilds ? "1" : nil
+        ini["BB_UPDATE_SKIP"] = skippedVersion.map(Shell.quote)
+        ini["BB_UPDATE_CHECKED"] = lastUpdateCheck.map { String(Int($0.timeIntervalSince1970)) }
     }
 }

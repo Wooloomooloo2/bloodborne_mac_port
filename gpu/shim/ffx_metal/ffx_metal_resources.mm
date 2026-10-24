@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the FidelityFX Metal back end's resources, clears, copies and job queue (Metal-native
 // M6). Mirrors ffx_vk.cpp's split: effect-owned resources are created once (fpCreateResource),

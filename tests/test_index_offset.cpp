@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Real Metal indexed draws from low, high CPU-owned and high GPU-produced guest ranges.
 #include <algorithm>
@@ -119,6 +120,10 @@ int main() {
     // The encoder draws through Metal::LowOffset (a window of the arena, no copy).
     const Metal::BufferRef safe_ref = Metal::LowOffset(safe->Ref(safe_offset));
     Check(safe_ref.offset + Size <= (1ull << 32), "CPU index binding stays below 4 GiB");
+    const Metal::BufferRef mid = Metal::LowOffset(safe->Ref(u64{5} << 29));
+    Check(mid.buffer == safe->Ref().buffer && mid.offset == (u64{5} << 29),
+          "offsets below 3.5 GiB keep the arena (no window)");
+    Check(safe_ref.offset < (u64{512} << 20), "windowed offsets are below 512 MiB");
     Check(RenderIndexTriangle(device, safe_ref), "high CPU-owned indices render correctly");
     const uintptr_t high_gpu = HighBase + 13 * Size;
     std::memset(reinterpret_cast<void*>(high_gpu), 0, Size);

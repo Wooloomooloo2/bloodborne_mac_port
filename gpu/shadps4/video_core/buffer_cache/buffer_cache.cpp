@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
@@ -397,8 +398,8 @@ std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, 
     if (offset < IndexOffsetLimit && size <= IndexOffsetLimit - offset) {
         return {buffer, offset};
     }
-    // bbport: the encoder draws through a window of the arena at a low offset (Metal::LowOffset),
-    // without a copy, when the arena has CPU contents (BB_ARENA_LAZY, the default).
+    // bbport: with BB_ARENA_WINDOWS=1 the encoder draws through a window of the arena at a low
+    // offset (Metal::LowOffset) instead; off by default (Metal::CanLowerOffsets, #42).
     if (Metal::CanLowerOffsets(buffer->Ref().buffer)) {
         return {buffer, offset};
     }

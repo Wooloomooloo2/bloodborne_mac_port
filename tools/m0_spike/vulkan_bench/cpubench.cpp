@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // M0(c) companion: CPU-only micro-benchmark of renderer-style C++ (no Vulkan, no MoltenVK).
 // Mimics what the shadPS4 renderer does per draw: hash-map cache lookups keyed by hashed
 // state, small vectors of bindings, virtual dispatch, atomics/refcounts, short sorts and

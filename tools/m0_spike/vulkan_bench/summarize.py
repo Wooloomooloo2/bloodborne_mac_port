@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Summarise out/m0_vulkan_bench/results.txt (RESULT / CPURESULT lines from run.sh)."""
 import re, statistics, sys
 from collections import defaultdict

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Host pthread rwlocks behind the PS4 pointer-to-handle ABI. The registry protects
    lifetime, static initialization and ownership; waiting happens outside it. */
 #define _GNU_SOURCE

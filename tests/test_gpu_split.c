@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* End-to-end test of the GPU process split (M3) without the game: this x86-64 program (under
  * Rosetta) plays bb-probe. It starts the native arm64 bbgpu-host (gpu_process.c), starts the
  * renderer there (bbgpu_init_remote) and calls the real GnmDriver/VideoOut HLE functions, which

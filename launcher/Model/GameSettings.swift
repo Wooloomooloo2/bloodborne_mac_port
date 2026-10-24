@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
@@ -26,6 +27,20 @@ enum FrameCap: Int, CaseIterable, Identifiable {
     case fps30 = 30, fps40 = 40, fps60 = 60, fps90 = 90, fps120 = 120
     var id: Int { rawValue }
     var label: String { "\(rawValue)" }
+    /// Caps with a fixed-step frame rate patch (scripts/launch_settings.sh): 30 is the unpatched game.
+    var hasFixedSteps: Bool { self == .fps30 || self == .fps60 || self == .fps90 }
+}
+
+/// bbport.ini game_timing, read by run.sh at start (scripts/launch_settings.sh picks BB_FPS).
+enum GameTiming: String, CaseIterable, Identifiable {
+    case fixed, variable
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .fixed: "Fixed steps"
+        case .variable: "Variable"
+        }
+    }
 }
 
 enum ShaderCompile: String, CaseIterable, Identifiable {
@@ -95,6 +110,9 @@ struct GameSettings: Equatable {
     static let newFileHeader = "# bbport settings (in-game menu: Cmd+, / L3+R3)\n"
 
     var output = Resolution.defaultOutput
+    var ultrawide = false
+    var wideOutput = PixelSize(3840, 1080)
+    var displayOutput: PixelSize { ultrawide ? wideOutput : output }
     var upscaler = Upscaler.off
     var preset = 0
     var sharpen = true
@@ -103,6 +121,7 @@ struct GameSettings: Equatable {
     var metalHUD = false
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
+    var gameTiming = GameTiming.fixed
     var fullscreen = false
     var shaderCompile = ShaderCompile.balanced
     // The in-game menu's Graphics and Advanced options (gpu/shim/bbport_settings.h, same defaults).
@@ -124,6 +143,11 @@ struct GameSettings: Equatable {
         // Booleans as the game reads them (atoi(value) != 0).
         func flag(_ key: String) -> Bool? { ini[key].map { (Int($0) ?? 0) != 0 } }
         if let v = ini["output_res"], let size = PixelSize(iniValue: v) { output = size }
+        if let v = ini["ultrawide_res"], let size = PixelSize(iniValue: v), Resolution.ultrawideOutputs.contains(size) {
+            ultrawide = true
+            wideOutput = size
+            if let original = ini["standard_output_res"].flatMap(PixelSize.init(iniValue:)) { output = original }
+        }
         if let v = ini["upscaler"], let u = Upscaler(rawValue: v) { upscaler = u }
         if let v = ini["preset"], let p = Int(v), Resolution.presetScales.indices.contains(p) { preset = p }
         if let v = flag("sharpen") { sharpen = v }
@@ -134,6 +158,7 @@ struct GameSettings: Equatable {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
         if let v = ini["fps_cap"], let n = Int(v), let cap = FrameCap(rawValue: n) { frameCap = cap }
+        if let v = ini["game_timing"], let t = GameTiming(rawValue: v) { gameTiming = t }
         if let v = flag("fullscreen") { fullscreen = v }
         if let v = ini["shader_compile"], let s = ShaderCompile(rawValue: v) { shaderCompile = s }
         // Ranges as the game clamps them.
@@ -154,9 +179,11 @@ struct GameSettings: Equatable {
     /// Writes the launcher's settings into `ini`; every other line stays (a `renderer` key from
     /// 0.5.2 or earlier too: the game drops it the next time its menu saves).
     func apply(to ini: inout IniFile) {
-        ini["output_res"] = output.iniValue
-        ini["upscaler"] = upscaler.rawValue
-        ini["preset"] = String(preset)
+        ini["output_res"] = (ultrawide ? Resolution.defaultOutput : output).iniValue
+        ini["ultrawide_res"] = ultrawide ? wideOutput.iniValue : nil
+        ini["standard_output_res"] = output.iniValue
+        ini["upscaler"] = ultrawide ? "off" : upscaler.rawValue
+        ini["preset"] = ultrawide ? "0" : String(preset)
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
@@ -165,6 +192,7 @@ struct GameSettings: Equatable {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }
         ini["fps_cap"] = String(frameCap.rawValue)
+        ini["game_timing"] = gameTiming.rawValue
         ini["fullscreen"] = fullscreen ? "1" : "0"
         ini["shader_compile"] = shaderCompile.rawValue
         ini["jitter"] = jitter ? "1" : "0"
@@ -174,12 +202,12 @@ struct GameSettings: Equatable {
         ini["reactive_threshold"] = String(format: "%.2f", reactiveThreshold)
         ini["reactive_max"] = String(format: "%.2f", reactiveMax)
         ini["object_motion"] = objectMotion ? "1" : "0"
-        ini["live_resolution"] = liveResolution.rawValue
+        ini["live_resolution"] = ultrawide ? "0" : liveResolution.rawValue
         ini["texture_compression"] = textureCompression ? "1" : "0"
     }
 
     /// The scene size the game renders.
     var renderSize: PixelSize {
-        upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output
+        ultrawide ? wideOutput : (upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output)
     }
 }

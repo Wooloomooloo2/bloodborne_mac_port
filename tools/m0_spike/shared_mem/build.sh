@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Build the M0 shared-memory spike: x86-64 parent (Rosetta) + native arm64 child.
 set -eu
 cd "$(dirname "$0")"

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Link the eboot with the game's bundled system modules into one probe image.
 
 Successor of link_libc.py for several modules (default: libc.prx, then

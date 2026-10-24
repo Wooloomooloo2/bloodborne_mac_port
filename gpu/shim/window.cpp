@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #include <cstdio>
 // bbport: SDL3 window for the presenter (a CAMetalLayer on macOS; X11 or Wayland elsewhere).
 #include <cstdlib>

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: scaled colour copies, depth resample and depth clear as render passes (Metal-native
 // renderer).

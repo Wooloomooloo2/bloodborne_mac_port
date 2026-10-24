@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """GPU time per render pass (or per draw) from a Metal System Trace of bbgpu-host.
 
 Run the game with BB_PASS_LOG=<file> BB_PASS_LABELS=1 (per pass) or 2 (a pass per draw), record

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* CPU time of game threads for the frame spike log (gnmdriver.cpp puts it in the GPU
  * process's control block at each flip). Apart from runtime_thread.c: the Mach headers declare a
  * thread_create of their own. */

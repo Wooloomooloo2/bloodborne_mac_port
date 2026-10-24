@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the FidelityFX Metal back end's pipelines, constant buffers and compute jobs
 // (Metal-native M6). fpCreatePipeline maps every (space, binding) of a blob's reflection tables to

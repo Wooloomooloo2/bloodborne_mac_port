@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #include "bbport_write_log.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"

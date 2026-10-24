@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the GPU library split across two processes (docs/DESIGN_NATIVE_GPU_PROCESS.md, M3).
 // The same library runs in both: in bb-probe ("remote": the game's side, no renderer) and in

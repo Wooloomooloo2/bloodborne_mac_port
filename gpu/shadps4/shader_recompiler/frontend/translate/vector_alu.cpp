@@ -6,7 +6,48 @@
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/profile.h"
 
+#include <atomic>
+#include <cstdio>
+
 namespace Shader::Gcn {
+
+// bbport: GCN's DX9-style ("legacy") and clamped float ops return 0 or +-FLT_MAX where IEEE gives
+// NaN or +-Inf. Mapped to plain IEEE ops, an Inf reached the HDR target: a red bloom ball on the
+// hunter's breath in Cainhurst. Inf is tested on the bit pattern so Metal's fast math cannot fold
+// the test away.
+namespace {
+
+IR::U1 IsInfBits(IR::IREmitter& ir, const IR::F32& value) {
+    const IR::U32 magnitude{ir.BitwiseAnd(ir.BitCast<IR::U32>(value), ir.Imm32(0x7fffffffu))};
+    return ir.IEqual(magnitude, ir.Imm32(0x7f800000u));
+}
+
+IR::U32 SignBits(IR::IREmitter& ir, const IR::F32& value) {
+    return ir.BitwiseAnd(ir.BitCast<IR::U32>(value), ir.Imm32(0x80000000u));
+}
+
+/// +-Inf becomes +-FLT_MAX; anything else is unchanged.
+IR::F32 ClampInf(IR::IREmitter& ir, const IR::F32& value) {
+    const IR::F32 max{ir.BitCast<IR::F32>(IR::U32{ir.BitwiseOr(SignBits(ir, value), ir.Imm32(0x7f7fffffu))})};
+    return IR::F32{ir.Select(IsInfBits(ir, value), max, value)};
+}
+
+/// DX9 multiply: zero times anything (Inf and NaN included) is +0.
+IR::F32 LegacyMul(IR::IREmitter& ir, const IR::F32& a, const IR::F32& b) {
+    const IR::F32 zero{ir.Imm32(0.0f)};
+    const IR::U1 either_zero{ir.LogicalOr(ir.FPEqual(a, zero), ir.FPEqual(b, zero))};
+    return IR::F32{ir.Select(either_zero, zero, ir.FPMul(a, b))};
+}
+
+/// Logs once per op that the game's shaders use it.
+void NoteLegacyOp(u32 bit, const char* name) {
+    static std::atomic<u32> seen{0};
+    if (!(seen.fetch_or(1u << bit) & (1u << bit))) {
+        std::printf("Shader: game uses %s\n", name);
+    }
+}
+
+} // namespace
 
 void Translator::EmitVectorAlu(const GcnInst& inst) {
     switch (inst.opcode) {
@@ -24,7 +65,7 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
     case Opcode::V_SUBREV_F32:
         return V_SUBREV_F32(inst);
     case Opcode::V_MAC_LEGACY_F32:
-        return V_MAC_F32(inst);
+        return V_MAC_LEGACY_F32(inst);
     case Opcode::V_MUL_LEGACY_F32:
         return V_MUL_LEGACY_F32(inst);
     case Opcode::V_MUL_F32:
@@ -168,7 +209,7 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
     case Opcode::V_EXP_F32:
         return V_EXP_F32(inst);
     case Opcode::V_LOG_CLAMP_F32:
-        return V_LOG_F32(inst);
+        return V_LOG_CLAMP_F32(inst);
     case Opcode::V_LOG_F32:
         return V_LOG_F32(inst);
     case Opcode::V_RCP_F32:
@@ -180,9 +221,9 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
     case Opcode::V_RCP_IFLAG_F32:
         return V_RCP_F32(inst);
     case Opcode::V_RCP_CLAMP_F32:
-        return V_RCP_F32(inst);
+        return V_RCP_CLAMP_F32(inst);
     case Opcode::V_RSQ_CLAMP_F32:
-        return V_RSQ_F32(inst);
+        return V_RSQ_CLAMP_F32(inst);
     case Opcode::V_RSQ_LEGACY_F32:
         return V_RSQ_F32(inst);
     case Opcode::V_RSQ_F32:
@@ -414,7 +455,7 @@ void Translator::EmitVectorAlu(const GcnInst& inst) {
 
         // VOP3a
     case Opcode::V_MAD_LEGACY_F32:
-        return V_MAD_F32(inst);
+        return V_MAD_LEGACY_F32(inst);
     case Opcode::V_MAD_F32:
         return V_MAD_F32(inst);
     case Opcode::V_MAD_I32_I24:
@@ -607,13 +648,10 @@ void Translator::V_MUL_LEGACY_F32(const GcnInst& inst) {
     // GCN V_MUL_LEGACY_F32: if either source is zero, the result is +0.0
     // regardless of the other operand (even if NaN or Inf).
     // Standard IEEE multiply would produce NaN for 0 * Inf.
+    NoteLegacyOp(0, "v_mul_legacy_f32");
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
     const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
-    const IR::F32 zero{ir.Imm32(0.0f)};
-    const IR::U1 src0_zero{ir.FPEqual(src0, zero)};
-    const IR::U1 src1_zero{ir.FPEqual(src1, zero)};
-    const IR::U1 either_zero{ir.LogicalOr(src0_zero, src1_zero)};
-    SetDst(inst.dst[0], IR::F32{ir.Select(either_zero, zero, ir.FPMul(src0, src1))});
+    SetDst(inst.dst[0], LegacyMul(ir, src0, src1));
 }
 
 void Translator::V_MUL_I32_I24(const GcnInst& inst, bool is_signed) {
@@ -729,6 +767,14 @@ void Translator::V_MAC_F32(const GcnInst& inst) {
     const auto src1 = GetSrc<IR::F32>(inst.src[1]);
     const auto dst0 = GetSrc<IR::F32>(inst.dst[0]);
     SetDst(inst.dst[0], ir.FPAdd(ir.FPMul(src0, src1), dst0));
+}
+
+void Translator::V_MAC_LEGACY_F32(const GcnInst& inst) {
+    NoteLegacyOp(1, "v_mac_legacy_f32");
+    const auto src0 = GetSrc<IR::F32>(inst.src[0]);
+    const auto src1 = GetSrc<IR::F32>(inst.src[1]);
+    const auto dst0 = GetSrc<IR::F32>(inst.dst[0]);
+    SetDst(inst.dst[0], ir.FPAdd(LegacyMul(ir, src0, src1), dst0));
 }
 
 void Translator::V_MADMK_F32(const GcnInst& inst) {
@@ -1037,23 +1083,32 @@ void Translator::V_LOG_F32(const GcnInst& inst) {
     SetDst(inst.dst[0], ir.FPLog2(src0));
 }
 
+void Translator::V_LOG_CLAMP_F32(const GcnInst& inst) {
+    NoteLegacyOp(2, "v_log_clamp_f32");
+    const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    SetDst(inst.dst[0], ClampInf(ir, ir.FPLog2(src0)));
+}
+
 void Translator::V_RCP_F32(const GcnInst& inst) {
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
     SetDst(inst.dst[0], ir.FPRecip(src0));
 }
 
-void Translator::V_RCP_LEGACY_F32(const GcnInst& inst) {
+void Translator::V_RCP_CLAMP_F32(const GcnInst& inst) {
+    NoteLegacyOp(3, "v_rcp_clamp_f32");
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
-    const auto result = ir.FPRecip(src0);
-    const auto inf = ir.FPIsInf(result);
+    SetDst(inst.dst[0], ClampInf(ir, ir.FPRecip(src0)));
+}
 
-    const auto raw_result = ir.ConvertFToU(32, result);
-    const auto sign_bit = ir.ShiftRightLogical(raw_result, ir.Imm32(31u));
-    const auto sign_bit_set = ir.INotEqual(sign_bit, ir.Imm32(0u));
-    const IR::F32 inf_result{ir.Select(sign_bit_set, ir.Imm32(-0.0f), ir.Imm32(0.0f))};
-    const IR::F32 val{ir.Select(inf, inf_result, result)};
-
-    SetDst(inst.dst[0], val);
+void Translator::V_RCP_LEGACY_F32(const GcnInst& inst) {
+    NoteLegacyOp(4, "v_rcp_legacy_f32");
+    // bbport: an infinite result becomes a zero of the same sign. The sign used to come from
+    // ConvertFToU (a value conversion, not the bits) and the test from FPIsInf (folded by fast
+    // math).
+    const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    const IR::F32 result{ir.FPRecip(src0)};
+    const IR::F32 signed_zero{ir.BitCast<IR::F32>(SignBits(ir, result))};
+    SetDst(inst.dst[0], IR::F32{ir.Select(IsInfBits(ir, result), signed_zero, result)});
 }
 
 void Translator::V_RCP_F64(const GcnInst& inst) {
@@ -1064,6 +1119,12 @@ void Translator::V_RCP_F64(const GcnInst& inst) {
 void Translator::V_RSQ_F32(const GcnInst& inst) {
     const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
     SetDst(inst.dst[0], ir.FPRecipSqrt(src0));
+}
+
+void Translator::V_RSQ_CLAMP_F32(const GcnInst& inst) {
+    NoteLegacyOp(5, "v_rsq_clamp_f32");
+    const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    SetDst(inst.dst[0], ClampInf(ir, ir.FPRecipSqrt(src0)));
 }
 
 void Translator::V_SQRT_F32(const GcnInst& inst) {
@@ -1342,6 +1403,14 @@ void Translator::V_MAD_F32(const GcnInst& inst) {
     const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
     const IR::F32 src2{GetSrc<IR::F32>(inst.src[2])};
     SetDst(inst.dst[0], ir.FPAdd(ir.FPMul(src0, src1), src2));
+}
+
+void Translator::V_MAD_LEGACY_F32(const GcnInst& inst) {
+    NoteLegacyOp(6, "v_mad_legacy_f32");
+    const IR::F32 src0{GetSrc<IR::F32>(inst.src[0])};
+    const IR::F32 src1{GetSrc<IR::F32>(inst.src[1])};
+    const IR::F32 src2{GetSrc<IR::F32>(inst.src[2])};
+    SetDst(inst.dst[0], ir.FPAdd(LegacyMul(ir, src0, src1), src2));
 }
 
 void Translator::V_MAD_I32_I24(const GcnInst& inst, bool is_signed) {

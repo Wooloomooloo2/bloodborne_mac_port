@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Run the M0(c) benchmark: each (arch, MoltenVK config) RUNS times, alternating architectures,
 # then the CPU micro-benchmark. Raw lines go to out/m0_vulkan_bench/results.txt; a summary
 # table (medians of per-run medians) is printed at the end.

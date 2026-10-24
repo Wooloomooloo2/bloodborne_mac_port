@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Shared control block rings (host/bbgpu_shared.h) between an x86-64 parent under Rosetta and a
  * native arm64 child, the bb-probe / bbgpu-host pair. The block is a Mach memory entry mapped at
  * different addresses on each side. Checks variable-size records in order (with wrap-around),

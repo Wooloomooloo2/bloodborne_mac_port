@@ -1506,6 +1506,24 @@ VMA, Zydis, xbyak, FSR 4's tools and the `renderer` setting left the build and t
   MoltenVK, VMA, Zydis and xbyak (symlink overlay) succeeds.
 
 
+2026-10-20 — opt-in audio dropout diagnostics (split from PR #26). BB_AUDIO_STATS=1
+adds converted-PCM peak/RMS, non-finite samples and SDL output failure counts to the
+existing per-port five-second reports. Measure minimum queued bytes/starvation before
+silence refill, rather than after submission. BB_AUDIO_TRACE=1 reserves a separate
+100-error budget for unexpected AJM results; expected partial-input/output-full results
+can exhaust the original trace budget before a later real failure appears. Samples,
+gain, clipping and scheduling are unchanged; diagnostics stay disabled by default.
+
+An earlier combined M2 Max 64 GB playtest lost music/effects, with menu effects still
+working. The next session with existing trace flags did not reproduce it; the user
+reported correct audio. Initial output had about 938 buffers/5s (937 expected), a
+6.7 ms maximum gap and a non-empty queue. This is instrumentation, not an audio fix.
+If reproduced, retain Audio stats/Audio trace lines and whether it followed travel/death
+or ordinary play. No reproducible dropout or causal claim is asserted in this split.
+
+Split validation: build_macos.sh completes for the x86 guest/library and both arm64
+host variants. The extraction changes only runtime_audio.c, runtime_ajm.c and this note;
+no playback algorithm, renderer default or launcher setting is changed.
 2026-10-20 — launcher validation fixes (split from PR #26): the duplicate-launch
 guard now recognizes bbgpu-host-macos27 as well as bbgpu-host/bb-probe. Game-folder
 validation passes Python -B in both checkout and packaged layouts; importing prepare.py
@@ -1593,3 +1611,203 @@ ms/frame), `BB_FRAMES_AHEAD` 1 (default) vs 2, two runs each: with 1, pacing std
 worst frame 16.7 ms standing and turning in every run; with 2, turning had worst frames of 31-33
 ms and stddev 1.1-1.5 ms. More frames ahead does not absorb heavy frames here, it bunches them;
 the default stays 1.
+
+## Metal's 32-bit index and indirect offsets; texture compression on an M4 Max (2026-10-21, evening)
+
+**Vanishing geometry (#36, #35, #18).** DiAvisoo found that indexed draws more than 4 GiB into the
+guest arena drew nothing on an M2 Max. Plain Metal probes (no port code) on the M4 Max:
+
+| Command, offset into a 8 GiB no-copy buffer | below 4 GiB | 4 GiB + x |
+|---|---|---|
+| `drawIndexedPrimitives` (`indexBufferOffset`), direct and indirect | correct | reads at x |
+| `drawPrimitives:indirectBuffer:` (`indirectBufferOffset`) | correct | reads at x |
+| vertex/fragment/compute `set*Buffer:offset:` read by the shader | correct | correct |
+| any of the above through a second no-copy buffer over the same pages, low offset | correct | correct |
+
+(A first probe wrongly blamed shader buffer bindings: its "drawn" check was always true and the
+failure was the indirect arguments.) Fix: `Metal::LowOffset` (`mtl_buffer.mm`) draws indexed,
+indirect and patch draws and indirect dispatches from 3.5 GiB on through a window, a second
+`MTLBuffer` over the arena's pages, 1 GiB long every 512 MiB. Metal counts a window's whole length
+in `currentAllocatedSize` (the Metal HUD's "Metal" figure) without any memory: a 4 GiB window
+added 4 GiB there with the footprint unchanged (0.50 → 0.50 GiB), and the first version (4 GiB
+windows from 2 GiB on) showed ~4.2 GB more in the HUD in play with App memory equal. Normal play
+reached the 2–4 GiB range in every test run; beyond 4 GiB needs streaming through areas.
+
+**Texture compression (#33) on the M4 Max**, compression off (`BB_LAZY_TEXTURE_USAGE=0`) vs on,
+alternating, uncapped (presenter limit 120): Hunter's Dream 1440p native 101.7 / 102.0 / 102.1 →
+119.6 / 119.8 / 119.8 (at the limit); Central Yharnam 1080p 120 both. Screenshots: off-vs-on
+differences equal off-vs-off (swaying flowers, fog); overall brightness overlaps across runs.
+`MTL_DEBUG_LAYER=1` play runs clean in both scenes. 3–9 upgrades per run, at load, 14–35 MB.
+
+**The user's play session, 0.5.3 → 0.5.4 (invariant default + compression + windows)**, Hemwick,
+full screen 4K native, Metal HUD: 51.3 FPS / GPU 20.1 ms → 70.1 / 14.9; another view 80.7 / 12.6
+→ 109.1 / 9.3.
+
+**Window lookup cost.** With the window lock and dictionary lookup on every draw at 3.5 GiB and
+above, the city (1080p, uncapped, window visible) fell from ~137 to 97–108 FPS over a minute as
+streaming moved meshes there. With a per-thread cache of the last windows (no lock on a hit) it
+held 125–148 (compression on) and 112–119 (off). Earlier runs read exactly 120 because the
+harness window was in the background (macOS limits it); uncapped comparisons need it visible.
+
+2026-10-20 — native ultrawide (split from PR #26): keep Kyo's complete scene/camera/UI
+patch, including the dependent MOV/NOP writes and fallback globals. Removing only part
+of that sequence caused a squeezed scene, stretched/black menus and a 640x360 scene.
+The full sequence fixes those dimensions; bypass live resizing/upscaling for this path.
+Keep the first retail graphics heap. Above 1920x1080 pixel count, grow only the second
+texture pool to 1536 MiB with 6144 MiB DMEM (7 GiB GPU arena): retail capacity reproduced
+an error-9 combat texture allocation failure. Do not import the oversized community heaps.
+
+The launcher warns for 3440x1440/5120x1440 below 24 GB physical memory. Invalid
+ultrawide_res values now stop with one actionable line rather than a Python traceback.
+Patch tests cover all five scene/camera/UI presets and heap bounds; CLI, launcher and
+shell tests cover invalid input, memory-warning boundaries and disable/restart behavior.
+The combined M2 Max 64 GB playtest rendered travel, combat and menus correctly, but also
+used PR #20's invariant shaders and precise readbacks. Those experiments and performance
+claims are not changes to the defaults in this PR. See METAL_ULTRAWIDE_TEST.md; independent
+3840x1080/5120x1440 visual validation on the maintainer's machine remains requested.
+
+Split validation: both architecture builds, launcher/model tests, 16 patch/ultrawide tests,
+shell restart tests, settings-preservation and native scene-target roundtrips pass. The
+broader build_macos.sh --test run stops at the unchanged mtl-encoder-test timestamp check
+"the render encoder's fragment end is sampled, after the blit" on this M2; the Metal
+encoder sources and that test are identical to master. No full-suite pass is claimed.
+
+## Instanced tessellated draws were skipped: missing trees (2026-10-21, late)
+
+After 0.5.4 the user still saw objects vanish. The log had `Metal draws skipped in the last 5 s:
+tessellation 300-2100` and `instanced tessellated draws are not encoded (skipped)`: the Metal
+renderer skipped every tessellated draw with more than one instance (since 0.5.0). The test scenes
+(Central Yharnam, Hunter's Dream) never issue one, so no test saw it. On a copy of the user's save
+(Forbidden Woods) at 1080p, 60 cap: with `BB_TESS_INSTANCES=0` (skipped, as before) ~1900 skipped
+draws per 5 s and the large mossy tree trunks around the player missing; with each instance drawn
+as its own tessellated draw (own kernels and scratch, instance number in the vertex kernel's
+stage-in region and the patch draw's base instance) no skips, the trees drawn, 60 FPS held (worst
+frame 17.7 ms standing). City unchanged (no instanced tessellated draws there).
+
+## Arena windows stalled the GPU queue: off by default (2026-10-23)
+
+0.5.4 and 0.5.4.1 drew high index and indirect offsets through windows: no-copy `MTLBuffer`s over
+the arena's own pages. They add no memory, but the GPU driver counts each window's whole length
+as wired on top of the arena (noelmiller, #42, M5 Max 36 GB, macOS 27.0.1): command buffers asked
+for ~30.9 GB against `maxWired` 30.2 GB (`IOGPUCommandDescriptor::prepare: required > max`,
+~470,000 refusals an evening, starting exactly when a window was created). The driver paged on
+every submission until the queue stalled: GPU watchdog exits (#43, #44, #45, #49, all 0.5.4.1),
+WindowServer killed, once `bbgpu-host` stuck exiting and the GPU unusable until a reboot. With
+no windows (`BB_ARENA_LAZY=0`): zero refusals, nine co-op sessions without a crash.
+
+Windows are now off unless `BB_ARENA_WINDOWS=1`; high index ranges use #36's staging copy again.
+Checked: index test (copy path, windows path, Metal validation), 116 unit tests, the Forbidden
+Woods save (trees drawn, 60 FPS, no skips), the city (60), the Hunter's Dream 1440p uncapped
+(127 FPS standing). Indirect arguments above 4 GiB are unhandled again, as before 0.5.4.
+Lesson: "no extra memory" in the footprint is not "no extra wired budget" for the GPU driver.
+
+## Upscaler haze in motion: vertical motion vectors reversed (M3 Pro, 2026-10-22)
+
+A player's report: MetalFX at the Quality preset turns hazy while moving, pixels stay in place
+while new ones appear, sharp again after stopping; FSR 3.1 worse. MacBook Pro M3 Pro, macOS
+15.7.5, 1280x720 -> 1920x1080 (the tonemapped path, `RunScaled`).
+
+**Ruled out, one play session each** (the player's verdict):
+- motion blur and depth of field off: unchanged;
+- the game's own AA off: unchanged (a ping-pong temporal pass after tonemapping, which the
+  upscaler takes as its input; still worth skipping when upscaling);
+- FSR 3.1 instead of MetalFX: also hazy, worse. So the shared inputs, not MetalFX's setup.
+
+**Logged** (a logging build, per upscaled frame): the camera was found every frame; the motion
+vectors were 0.01 px with the camera still, grew with movement, and matched the rotation's
+prediction within 0.7-1.6x: present and the right size.
+
+**Found:** the logging build also saved the centre of the upscaler's input (256x144 grey) every
+frame. Phase correlation of consecutive frames gives how far the picture moved; the mean motion
+vector of the same region (previous minus current) should be its negative.
+
+| 491 / 1,275 frames moving > 3 px, lag 0 | horizontal error | vertical error | vertical, reversed |
+|---|---|---|---|
+| y-down reconstruction (before) | 1.76 px | 3.99 px | **0.77 px** |
+| y-up reconstruction (after) | 1.63 px | **0.90 px** | 6.06 px |
+
+Lags -2..+2 match worse than 0: the timing was right. Example frames before: picture moved -5.25 /
+-13.79 / +3.98 px vertically, the vectors said +4.86 / +13.20 / -4.18. The y-down convention was
+checked on MoltenVK on 2026-10-06; the native Metal renderer changed the picture's orientation under
+it. `taa.comp` already used y up. The object motion vectors (recompiler, through the viewport scale)
+have the picture's vertical sign (checked with object motion on); only the camera vectors were
+reversed. After the fix the player saw no haze with MetalFX or FSR.
+
+**Also found:** `TemporalUpscaler::Run` (Native AA, the live path above 1080p) returned silently when
+the scene colour had no ShaderWrite usage, which lazy texture usages never gave it: those modes ran
+without the upscaler. It now upgrades the scene colour once (16.7 MB at 1080p); MetalFX Native AA
+runs again ("metalfx 1920x1080 -> 1920x1080 (HDR scene color)").
+
+Not checked: whether the jitter's direction is right on the Metal renderer (the player plays with
+jitter off; `BB_METALFX_JITTER_SIGN` exists for that test).
+
+## The memmove crash: the render thread's per-frame command pool (#34, #37, #38, #54, #57, 2026-10-23)
+
+Five reports, one site: guest 0x21d5b45, a NULL destination. Seen on macOS 26.5.1 and 27.0.1,
+M3 Max (36 and 128 GB) and M5 Pro, ports 0.5.3 to 0.5.4.1, always while characters spawn, with
+new pipelines compiling just before. It is not the Mac's memory.
+
+What the disassembly shows:
+- **The crash:** a draw command (0x21d5a80, run by a render job worker: 0x263b246 → 0x21b9841 →
+  0x21b7c02 → 0x294a400 → 0xec7470/0xec7c90) copies a 0x398-byte record into a 0x4d0-byte node
+  of the frame's command list, so it can run later on the render thread's immediate context.
+- **The allocation:** it comes from a chunked bump arena (0xe45560, minimum chunk 0x800) whose
+  parent is a 256 KiB linear heap per list. The renderer carves that heap once
+  (0x2195c09/0x2195c46). The heap's allocate (0xe453b0) returns NULL when full, and nothing
+  checks it.
+- **The flip** (0x2198fd0, once per frame) swaps the two lists and resets the other one's heap.
+  That's plain CPU code; no GPU or runtime signal is involved, and the pool doesn't leak.
+
+Measured with the new probe on the Forbidden Woods save (standing and turning, 60 FPS): a
+**peak of 8 KiB of 256 (3%)**, 73 of 216 records. A crashing frame is a rare spike of more
+than 30 times the normal load. Its cause is unknown.
+
+The fix (src/runtime_hooks.c, observer hooks: no lock):
+- The flip and the heap's allocate are hooked. The log gets the pool's high-water mark, and
+  each allocation that fails on a frame heap.
+- Such an allocation gets memory from a spare pool instead (16 MiB per frame heap, from the
+  low allocator). The spare pool is reused once the game resets that heap.
+- Checked with `BB_FRAME_POOL_TEST=2`, which treats everything past 2 KiB as failed. Every
+  frame went through the spare pool for about 8,700 frames: 60 FPS, the picture intact, and the
+  spare pool never full. `BB_FRAME_POOL=0` turns the hooks off.
+
+## Sinking through a lift: the uncapped frame rate patch (user report, 2026-10-23)
+
+The user died every time (4–5 tries) in one lift: the character sank through its floor and fell.
+The port always applied **Uncap FPS++** (`BB_FPS=uncap`, run.sh's default), which advances the
+game by each frame's measured time; its own note warns the timestep fixes vary with a
+fluctuating frame rate. At that spot (3840x2160 native, cap 60, M4 Max) frames alternated
+10 / 35 ms (`BB_FRAME_STATS=1`: 50–120 GPU page faults a frame, up to 30 ms waited). Same save
+with **60 FPS++** (`BB_FPS=60`, fixed 1/60 s steps): the lift worked. Frame pool peak in those
+sessions 15 of 256 KiB (memmove fix never needed).
+
+Change: bbport.ini `game_timing=fixed|variable` (launcher: General → Game timing; default
+fixed). `scripts/launch_settings.sh` picks BB_FPS from it and `fps_cap`: fixed gives the
+unpatched game at 30, 60 FPS++ at 60, 90 FPS++ (+ sprint fix) at 90; 40 and 120 have no
+fixed-step patch and stay on Uncap FPS++. Fixed steps run the game slightly slower when a scene
+can't hold the cap. An explicit BB_FPS still wins; a value picked by the launcher is re-picked
+after an in-game restart (BB_FPS_AUTO).
+
+## Red flash on the hunter's breath: GCN legacy and clamped float ops (Cainhurst, 2026-10-24)
+
+On the Cainhurst rooftops the breath vapour (about every 4 s) flashed as a bright red ball, with
+the whole frame's exposure shifting on the same frames: one non-finite or huge red value spread by
+bloom and seen by auto exposure. Screen recordings (60 FPS, red pixels counted per frame):
+
+| Build | Frames with the flash |
+|---|---|
+| 0.5.4.5 | 70 of 4,225 (1 in 60), scattered frames through each breath |
+| `BB_MSL_SAFE_MATH=1` | 9 of 2,179 (1 in 240), one 3-frame flash at the start of each breath |
+| legacy/clamped ops translated | 6 of 3,229 (1 in 540), only at some camera angles |
+
+Safe math turning the scatter into one flash at the particle's birth pointed at a value that is
+infinite on IEEE hardware but defined on GCN. The translator mapped `v_mac_legacy_f32` and
+`v_mad_legacy_f32` to plain multiply-add (GCN: 0 * anything = 0, so 0 * Inf gave NaN here) and
+`v_rcp_clamp_f32`, `v_rsq_clamp_f32` and `v_log_clamp_f32` to the unclamped ops (GCN: Inf becomes
++-FLT_MAX). The game uses `v_mul_legacy`, `v_mac_legacy`, `v_mad_legacy` and `v_rsq_clamp` (a
+"Shader: game uses …" line is logged once for each). `v_rcp_legacy_f32` took the sign from a
+value conversion instead of the bits. Second part: Metal's fast math (the default) folds
+`isnan`/`isinf` to false, which turned every NaN-safe translation (legacy min/max, `v_cmp_class`,
+these ops) back into plain ones; NaN and Inf are now tested on the bit pattern, and the clamp
+output modifier turns NaN into 0 as GCN does. Shader cache meta version 11 (rebuilt once).
+City at 1080p still holds 60 FPS; all 214 pipelines of the test cache build in Metal.

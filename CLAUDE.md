@@ -149,6 +149,14 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   login keychain (the ini says `keychain`), never read back; the Discord device sign-in polls the
   community server's `/auth/device/*` as `scripts/online.py signin` does. Test runs:
   `open -n --env BB_DATA_DIR=$PWD/out/macdata --env BB_LAUNCH_CONF=$PWD/out/macdata/launch.conf Bloodborne.app`.
+- **About + updates (2026-10-20):** app menu *About Bloodborne* (standard panel; Info.plist
+  `CFBundleVersion` from `git describe`, `BBCommit`) and *Check for Updates…*; daily automatic
+  check of GitHub releases when the launcher window shows (window off: started with the game, a
+  found update shows after it instead of quitting), only after the player agreed (asked
+  once at start, before the game too; `launcher/Model/Update.swift`, `launcher/App/Updater.swift`;
+  launch.conf `BB_CHECK_UPDATES` absent = not asked, `BB_UPDATE_TEST_BUILDS`, `BB_UPDATE_SKIP`,
+  `BB_UPDATE_CHECKED`). Test builds = GitHub pre-releases and `-test` tags; 0.5.2-test1 < 0.5.2 <
+  0.5.2-5-g…. Release apps replace themselves in place; checkout apps only notify.
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
 ## State as of 2026-10-21 (after 0.5.3, local master, not pushed)

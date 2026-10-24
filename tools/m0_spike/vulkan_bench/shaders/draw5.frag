@@ -1,4 +1,5 @@
 #version 450
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 layout(location = 0) in vec2 v_uv;
 layout(set = 0, binding = 0) uniform Ubo { mat4 mvp; vec4 tint; } ubo;
 layout(set = 0, binding = 1) uniform texture2D tex;

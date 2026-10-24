@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the settings overlay's Metal side (imgui_impl_metal), used by bbport_overlay.cpp only.
 // The shape follows Huax-1839/bloodborne-macos's renderer_metal/mtl_overlay.mm

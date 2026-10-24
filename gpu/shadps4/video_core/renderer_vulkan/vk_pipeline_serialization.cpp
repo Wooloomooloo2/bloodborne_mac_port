@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2025-2026 shadPS4 Emulator Project
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -19,9 +20,11 @@ int PreciseMode();
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 8u; // bbport: Metal shader profile (native Metal)
-static constexpr u32 ShaderMetaVersionBase = 9u; // bbport: no NoContraction in FS/CS
+// bbport: 9 no NoContraction in FS/CS; 10 GCN legacy/clamped float ops (0 * Inf = 0, Inf
+// clamped to FLT_MAX) and NaN/Inf tests on the bit pattern, so a stored cache is rebuilt once.
+static constexpr u32 ShaderMetaVersionBase = 11u;
 // bbport: cached SPIR-V depends on BB_SPIRV_PRECISE, which the keys do not record (mode 0,
-// "vertex", keeps version 9; the invariant default since 0.5.4 rebuilds an older cache once).
+// "vertex", keeps the base version; the invariant default since 0.5.4 adds the mode).
 static u32 ShaderMetaVersion() {
     return ShaderMetaVersionBase | (u32(Shader::Backend::SPIRV::PreciseMode()) << 8);
 }

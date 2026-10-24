@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Builds the GPU library (gpu/: shadPS4 video core + drivers) natively for arm64, for the native
 # GPU host process bbgpu-host (docs/DESIGN_NATIVE_GPU_PROCESS.md), which renders with Metal. The
 # x86-64 build loaded by the game (bb-probe) stays in build_macos.sh (out/gpu); this one goes to

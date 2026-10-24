@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // M0(c) spike: synthetic Vulkan workload shaped like Bloodborne's measured frame
 // (docs/FINDINGS.md Part 2), built from this one source as x86-64 (Rosetta) and
 // arm64 (native). Both builds link MoltenVK directly (no loader), headless.

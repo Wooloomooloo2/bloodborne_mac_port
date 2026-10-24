@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: unit test for the FidelityFX Metal back end (Metal-native M6 Tasks 1-4): every FSR 3.1
 // upscaler blob AMD ships (SDK 1.1.4 SPIR-V, wave32, fp16 on and off) is reached through the

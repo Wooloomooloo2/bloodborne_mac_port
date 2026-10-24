@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* The runtime's own locks, condition variables, threads and clocks.
  * Linux: pthreads and clock_gettime. macOS: the same pthreads path (see __APPLE__ below). */
 #ifndef BB_HOST_SYNC_H

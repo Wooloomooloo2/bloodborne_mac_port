@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: a second thread for the GPU command thread's per-draw work (docs/parallel_gpu.md,
 // "Texture binding on a helper thread"). The GPU thread forks one task per draw and joins it

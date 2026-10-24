@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: explicit ordering of untracked buffers (Metal-native renderer). Pure C++: which
 // MTLFences a Metal encoder waits on when it opens and updates when it ends.

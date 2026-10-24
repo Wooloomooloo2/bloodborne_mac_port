@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """The game files bbport runs: Bloodborne CUSA03173 with the 1.09 update merged in.
 
 Other versions start and then fail inside the game's code (the base game 1.00 faults at guest

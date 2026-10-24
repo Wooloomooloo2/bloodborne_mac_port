@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Builds the macOS dependencies of bbport (no sudo, no x86 Homebrew).
 #  - x86_64 (default) -> deps/x86_64: bb-probe and the game run under Rosetta 2, so every
 #    library linked into that process must be x86-64.

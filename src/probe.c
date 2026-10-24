@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Minimal x86-64 native loader experiment. Not a PS4 emulator or game port. */
 #define _GNU_SOURCE
 #include <stdint.h>

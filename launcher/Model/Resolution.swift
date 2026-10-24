@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import Foundation
 
@@ -29,6 +30,18 @@ enum Resolution {
     static let outputs = [PixelSize(1280, 720), PixelSize(1920, 1080), PixelSize(2560, 1440),
                           PixelSize(3456, 1944), PixelSize(3840, 2160)]
     static let defaultOutput = PixelSize(1920, 1080)
+    static let ultrawideOutputs = [PixelSize(2560, 720), PixelSize(3840, 1080),
+                                  PixelSize(5120, 1440), PixelSize(2560, 1080), PixelSize(3440, 1440)]
+    static func wideLabel(_ size: PixelSize) -> String {
+        let aspect = [PixelSize(2560, 1080), PixelSize(3440, 1440)].contains(size) ? "21:9" : "32:9"
+        return "\(size) · \(aspect)"
+    }
+    /// Native 1440p ultrawide adds large targets/textures to the 7 GiB GPU arena.
+    static func ultrawideMemoryWarning(_ size: PixelSize, memoryBytes: UInt64) -> String? {
+        guard memoryBytes < 24 * 1024 * 1024 * 1024,
+              [PixelSize(3440, 1440), PixelSize(5120, 1440)].contains(size) else { return nil }
+        return "This resolution may exceed available graphics memory on Macs with less than 24 GB of memory, causing slowdowns or crashes. Try a 1080p ultrawide resolution if this happens."
+    }
     /// Upscaler quality levels (bbport_settings.cpp PresetName / PresetScale).
     static let presetNames = ["Native AA", "Quality", "Balanced", "Performance", "Ultra Performance"]
     static let presetScales = [1.0, 1.5, 1.7, 2.0, 3.0]

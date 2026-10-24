@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: native-resolution TAA (host_shaders/taa.comp) and its RCAS sharpen
 // (taa_sharpen.comp) on Metal. The temporal upscaler and taa-shader-test record the kernels

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: camera motion vectors for temporal upscaling (docs/upscaler.md). The scene constants
 // give the camera of each frame; the previous one is kept here. BB_DEBUG_MOTION=1 blends the

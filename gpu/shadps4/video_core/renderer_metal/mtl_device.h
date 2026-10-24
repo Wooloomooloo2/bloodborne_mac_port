@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Metal device, queue and submission ticks (Metal-native renderer, spec component 1).
 // The interface began as Huax-1839/bloodborne-macos's Metal::Device (GPL-2.0-or-later). On the

@@ -1,4 +1,5 @@
 #version 450
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // unwritten-inputs-test: a full-screen triangle that writes locations 0 and 1 only.
 layout(location = 0) out vec4 out0;
 layout(location = 1) out vec4 out1;

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Shared by Bloodborne.command and Bloodborne.app (scripts/macos/make_app.sh). Source it from the
 # repository root. Reads launch.conf, finds the game folder (asks once with a folder picker and
 # remembers it) and exports BB_GAME_DIR (and BB_DATA_DIR when set). Returns 1 with a message on

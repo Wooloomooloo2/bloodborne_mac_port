@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* M0 spike child: native arm64. Receives the memory entry from the x86-64
  * parent, maps it at the same VA and serves the parent's test commands.
  * SPDX-License-Identifier: GPL-2.0-or-later */

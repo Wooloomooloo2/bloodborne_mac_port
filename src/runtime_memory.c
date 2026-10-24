@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* PS4 virtual memory: direct (physical) pool, flexible memory, reservations,
  * protection changes and queries. One sparse memfd backs the whole direct
  * pool, so any mapping of any physical range aliases the same storage.

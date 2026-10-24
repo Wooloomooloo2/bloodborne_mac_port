@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: one FSR 3.1 upscaler context on the FidelityFX Metal back end (fsr3_metal.h): what
 // ffx-vulkan's portable wrapper did for the Vulkan renderer (context creation, the shared

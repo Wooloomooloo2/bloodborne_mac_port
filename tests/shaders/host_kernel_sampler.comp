@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: test kernel for HostKernel::sampler_slot (tests/test_mtl_host_kernel.mm): samples a
 // combined image sampler at four push-constant coordinates. The storage image comes first so

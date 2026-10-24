@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: unit test for the present helper (renderer_metal/mtl_present.h, Metal-native M4 Task 1):
 // aspect fit, the post-process pass (gamma, sRGB input, alpha swizzle) against the CPU formula of

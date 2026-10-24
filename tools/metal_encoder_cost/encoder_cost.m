@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // Same work, split into N encoders vs one encoder: per-encoder GPU overhead on Apple GPUs.
 #import <Metal/Metal.h>
 #include <stdio.h>

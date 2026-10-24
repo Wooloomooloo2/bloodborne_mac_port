@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: BB_GPU_PROFILE=1 — GPU time per render pass, dispatch and upscaler run. Each mark
 // labels the Metal encoders opened after it (until the next mark); every such encoder samples

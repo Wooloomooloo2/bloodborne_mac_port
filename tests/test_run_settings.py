@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 """Exercise run.sh across a re-exec with lightweight preparation/probe stand-ins."""
 from paths import ROOT
 import json

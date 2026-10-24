@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 import SwiftUI
 
@@ -7,18 +8,37 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
+    private enum Page: Hashable { case general, advanced, online }
+    @State private var page = Page.general
+
     var body: some View {
         VStack(spacing: 0) {
-            // Two tabs of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
+            // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
             // points, Dock shown) without scrolling, even with every optional row showing.
-            TabView {
-                general.tabItem { Text("General") }
-                advanced.tabItem { Text("Advanced") }
-                onlineTab.tabItem { Text("Online") }
+            // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
+            // graph and SwiftUI's accessibility nodes loop on a dependency cycle, printing it
+            // forever with the window frozen (#47, sampled by the reporter).
+            Picker("", selection: $page) {
+                Text("General").tag(Page.general)
+                Text("Advanced").tag(Page.advanced)
+                Text("Online").tag(Page.online)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, 10)
+            Group {
+                switch page {
+                case .general: general
+                case .advanced: advanced
+                case .online: onlineTab
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                UpdateBadge(updater: model.updater)
                 Spacer()
                 if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
@@ -43,14 +63,33 @@ struct LauncherView: View {
                 CrashReportView(report: report, model: model)
             }
         }
+        // (A second .sheet on the same view would never show: SwiftUI presents one per view.)
+        .background {
+            Color.clear.sheet(isPresented: Binding(get: { model.updater.showing }, set: { if !$0 { model.updater.dismiss() } })) {
+                UpdateView(model: model, updater: model.updater)
+            }
+        }
     }
 
     private var general: some View {
         HStack(alignment: .top, spacing: 0) {
             Form {
                 Section("Display") {
-                    Picker("Output resolution", selection: $model.settings.output) {
-                        ForEach(model.outputChoices, id: \.self) { Text($0.description).tag($0) }
+                    Toggle("Ultrawide", isOn: $model.settings.ultrawide)
+                    if model.settings.ultrawide {
+                        Picker("Resolution", selection: $model.settings.wideOutput) {
+                            ForEach(Resolution.ultrawideOutputs, id: \.self) { Text(Resolution.wideLabel($0)).tag($0) }
+                        }
+                        if let warning = Resolution.ultrawideMemoryWarning(model.settings.wideOutput,
+                            memoryBytes: ProcessInfo.processInfo.physicalMemory) {
+                            Text(warning).font(.caption).foregroundStyle(.orange)
+                        }
+                        Text("Native resolution. Uses your existing game UI; no UI files are installed.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Picker("Output resolution", selection: $model.settings.output) {
+                            ForEach(model.outputChoices, id: \.self) { Text($0.description).tag($0) }
+                        }
                     }
                     Picker("Window", selection: $model.settings.fullscreen) {
                         Text("Windowed").tag(false)
@@ -65,16 +104,30 @@ struct LauncherView: View {
                         Text("Above 60 FPS is experimental: the game was made for 30. 120 needs a 120 Hz display.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Picker("Game timing", selection: $model.settings.gameTiming) {
+                        ForEach(GameTiming.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!model.settings.frameCap.hasFixedSteps)
+                    Text(model.settings.frameCap.hasFixedSteps
+                         ? "Fixed steps: the game advances the same amount every frame, as on the PS4. If a scene can't hold the cap it slows down a little. Variable: keeps full speed when frames are late, but uneven frames can drop you through moving lifts and floors. Applies at the next start."
+                         : "\(model.settings.frameCap.label) FPS always uses variable timing: there is no fixed-step patch for it. Uneven frames can drop you through moving lifts.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Upscaler") {
+                    if model.settings.ultrawide {
+                        Text("Ultrawide runs at the selected native resolution, with upscaling off.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Upscaler", selection: $model.settings.upscaler) {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
+                    .disabled(model.settings.ultrawide)
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }
-                    .disabled(!model.settings.upscaler.usesPreset)
-                    LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.output)")
+                    .disabled(model.settings.ultrawide || !model.settings.upscaler.usesPreset)
+                    LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.displayOutput)")
                     if model.settings.upscaler != .off {
                         Toggle("Sharpening", isOn: $model.settings.sharpen)
                         if model.settings.sharpen {

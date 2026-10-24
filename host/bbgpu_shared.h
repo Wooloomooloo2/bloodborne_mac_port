@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Shared control block between bb-probe (x86-64, Rosetta) and bbgpu-host (native arm64), M3
  * (docs/DESIGN_NATIVE_GPU_PROCESS.md "M3 plan"). A separate small Mach memory entry, mapped at
  * any address on each side: it holds offsets, never pointers. Guest addresses inside records are

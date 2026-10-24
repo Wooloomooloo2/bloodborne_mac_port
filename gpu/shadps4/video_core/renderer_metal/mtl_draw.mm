@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the draw helper's part that needs the PSO cache's pipeline types (mtl_draw.h): views of
 // RenderPipeline / ComputePipeline, the routing of a GraphicsPipeline's draws, and the
@@ -7,6 +8,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
 #include <vector>
 #include "common/logging/log.h"
@@ -151,9 +153,28 @@ bool Runs::DrawTessellated(Encoder& e, const TessellationPipeline& t, Access buf
         return false;
     }
     if (a.instances > 1) {
-        ++counters.skipped_tess;
-        BB_DRAW_WARN_ONCE("Metal: instanced tessellated draws are not encoded (skipped)");
-        return false;
+        // bbport: one tessellated draw per instance, each with its own kernels, scratch and
+        // instance number (the vertex kernel's stage-in region, the patch draw's base
+        // instance). They were skipped: whole objects missing (2026-10-21, ~1-7 draws a frame
+        // in some areas). BB_TESS_INSTANCES=0 skips them again (A/B).
+        static const bool skip = [] {
+            const char* env = std::getenv("BB_TESS_INSTANCES");
+            return env && env[0] == '0';
+        }();
+        if (skip) {
+            ++counters.skipped_tess;
+            BB_DRAW_WARN_ONCE("Metal: instanced tessellated draws are not encoded (skipped)");
+            return false;
+        }
+        BB_DRAW_WARN_ONCE("Metal: instanced tessellated draws are drawn one instance at a time");
+        DrawArgs one = a;
+        one.instances = 1;
+        bool drawn = false;
+        for (u32 i = 0; i < a.instances; ++i) {
+            one.first_instance = a.first_instance + i;
+            drawn |= DrawTessellated(e, t, buffers, s, r, one);
+        }
+        return drawn;
     }
     if (!t.render) {
         ++counters.skipped_no_pipeline;
@@ -199,6 +220,7 @@ bool Runs::DrawTessellated(Encoder& e, const TessellationPipeline& t, Access buf
     patch.factors = {scratch.buffer, scratch.offset + plan.factor_offset};
     patch.patches = plan.patches;
     patch.output_control_points = t.output_control_points;
+    patch.instance = a.first_instance;
     QueuePatchDraw(view, s, r, patch);
     // Its render pass reads come with the run's end: the encoders until then hold this command.
     e.HoldOrderCommand();

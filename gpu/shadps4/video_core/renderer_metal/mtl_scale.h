@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: scaled and format-converting texture copies, depth resample and depth clear as
 // fullscreen-triangle render passes (Metal-native renderer). Metal blit encoders copy only between

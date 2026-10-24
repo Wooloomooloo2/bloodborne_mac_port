@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: in-game settings menu (Dear ImGui), drawn by the presenter into the drawable after the
 // game frame, at display resolution (imgui_impl_metal; the Metal glue is bbport_overlay_metal.mm).

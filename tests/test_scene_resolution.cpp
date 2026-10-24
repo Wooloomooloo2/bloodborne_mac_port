@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Exercises the production target/resolve path on Metal (no game/window).
 #include <bit>
@@ -91,8 +92,10 @@ int main() {
     for (int preset : {3,1,4,2,0,3,0,1,0,3}) {
         const u32 copied_stencil = stencil_values[stencil_index++];
         const u32 resolved_stencil = copied_stencil ^ 255;
-        const auto output = stencil_index > 7 ? SceneResolution::Size{3840,2160}
-                                             : SceneResolution::Size{};
+        const auto output = stencil_index == 7 ? SceneResolution::Size{3840,1080}
+                          : stencil_index == 9 ? SceneResolution::Size{5120,1440}
+                          : stencil_index > 7 ? SceneResolution::Size{3840,2160}
+                                              : SceneResolution::Size{};
         const auto size = SceneResolution::ForPreset(preset, output);
         targets.SetSize(size);
         assert(SceneResolution::Unpack(SceneResolution::Pack(size)) == size);

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #define _GNU_SOURCE
 #include "runtime.h"
 #include <stdlib.h>

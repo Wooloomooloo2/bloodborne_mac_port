@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Wire protocol between bb-probe (x86-64, Rosetta) and bbgpu-host (native arm64): Mach
  * messages over ports exchanged at launch (docs/DESIGN_NATIVE_GPU_PROCESS.md 3.2, 3.6).
  * Shared by src/gpu_process.c and host/main.c; both sides are little-endian LP64, so the

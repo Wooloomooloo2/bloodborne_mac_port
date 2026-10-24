@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # macOS (Apple Silicon) build: everything is x86-64 and runs under Rosetta 2, because the game's
 # eboot.bin is x86-64 code executed directly. Dependencies come from deps/x86_64
 # (scripts/macos/bootstrap_deps.sh); nothing from the arm64 Homebrew may be linked.

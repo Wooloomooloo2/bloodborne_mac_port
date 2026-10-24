@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: unit test for the scale helper (renderer_metal/mtl_scale.h, Metal-native M5 Task 2):
 // linear and nearest scaled colour copies with format conversion (RGBA16F -> RGBA8), into a

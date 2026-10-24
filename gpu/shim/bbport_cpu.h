@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: CPU spin-wait hint and cycle counter, portable between the x86-64 build (game process
 // under Rosetta 2) and the native arm64 GPU host (docs/DESIGN_NATIVE_GPU_PROCESS.md).

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *

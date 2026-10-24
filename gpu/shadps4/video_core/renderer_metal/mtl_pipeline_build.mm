@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: the Metal pipeline states of the game's pipelines (mtl_pipeline_build.h). Moved from
 // the M1 shadow builder (mtl_shadow.mm Graphics/Compute), which followed Huax-1839's

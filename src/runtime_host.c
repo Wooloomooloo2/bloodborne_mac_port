@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* host_sync.h: the runtime's threads, clocks and sleeps on each host. */
 #define _GNU_SOURCE
 #include "runtime.h"

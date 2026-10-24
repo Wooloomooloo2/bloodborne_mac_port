@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 /* Guest threads on host threads. Each guest thread owns a FreeBSD-style TCB
  * (variant II: static TLS below the TCB). The loader rewrites the eboot's
  * `mov rax, fs:[0]` into `mov rax, gs:[0]`, so GS base = guest TCB while glibc

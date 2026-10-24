@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
 # BB_PREBUILT=1 (packaged builds, Bloodborne.app): out/bb-probe and its GPU library are installed
@@ -57,8 +58,9 @@ if [[ ${BB_AUTO_RENDER_RES:-} == 1 ]]; then
     unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
 fi
 # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
-# Frame rate: BB_FPS=uncap (default; delta-time patch, vblank follows the display),
-# 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
+# Frame rate: BB_FPS=uncap (delta-time patch, vblank follows the display), 60/90 (fixed-timestep
+# patches) or 30 (unpatched). Unset, scripts/launch_settings.sh picks it from bbport.ini fps_cap
+# and game_timing (fixed steps for caps 30/60/90 unless game_timing=variable). BB_PATCHES adds patch names ("a;b").
 fps=${BB_FPS:-uncap}
 # bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
@@ -68,7 +70,10 @@ fps=${BB_FPS:-uncap}
 # and scene targets are copied back: much slower on the Steam Deck and older GPUs). Chosen by
 # BB_LIVE_RES=0/1, else bbport.ini live_resolution=0/1/auto (auto: the GPU check, strong
 # discrete GPUs get them); off when unset. 1080p output and TAA always use the live path.
-if [[ -z ${BB_RENDER_RES:-} ]]; then
+wide_patch=$("$PYTHON" scripts/patches.py --print-ultrawide --settings "$BB_CONFIG")
+bb_native_ultrawide "$wide_patch"
+scaled_render='' scaled_output=''
+if [[ -z $wide_patch && -z ${BB_RENDER_RES:-} ]]; then
     read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --settings "$BB_CONFIG") || true
 fi
 live=0 above_1080=0
@@ -100,7 +105,7 @@ elif [[ -n ${scaled_output:-} ]]; then
     if (( render_w * render_h > 1920 * 1080 )); then export BB_DMEM_MB=${BB_DMEM_MB:-9152}; fi
     echo "Output ${scaled_output}: scene ${scaled_render}, direct memory ${BB_DMEM_MB:-5056} MiB (live_resolution=1: live changes)"
 fi
-"$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "${BB_PATCHES:-}" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
+"$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "$launch_patches" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
     case $fps in uncap) export BB_VBLANK_HZ=0 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac

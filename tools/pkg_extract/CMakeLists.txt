@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 # Host tool (native arm64 is fine): unpacks fake-signed PS4 packages.
 cmake_minimum_required(VERSION 3.25)
 project(pkg_extract CXX)

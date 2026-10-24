@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
 // bbport: CompiledShader's out-of-line members (mtl_shader.h), in the Metal-native core so that
 // core code (mtl_draw_core.mm) and its unit tests can hold CompiledShaders without the SPIR-V
