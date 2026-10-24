@@ -81,6 +81,9 @@ do {
     check(defaults == GameSettings(), "empty ini = defaults")
     check(defaults.output == PixelSize(1920, 1080) && defaults.upscaler == .off && defaults.preset == 0, "default display")
     check(defaults.frameCap == .fps60 && !defaults.fullscreen, "default cap, window")
+    check(defaults.gameTiming == .fixed && GameSettings(ini: IniFile(text: "game_timing=variable\n")).gameTiming == .variable, "game timing: default fixed, read")
+    check(GameSettings(ini: IniFile(text: "game_timing=slow\n")).gameTiming == .fixed, "game timing: invalid -> fixed")
+    check(FrameCap.fps60.hasFixedSteps && FrameCap.fps30.hasFixedSteps && FrameCap.fps90.hasFixedSteps && !FrameCap.fps40.hasFixedSteps && !FrameCap.fps120.hasFixedSteps, "caps with fixed-step patches")
     check(!defaults.jitter && defaults.modelDetail == .gameDefault && !defaults.reactive && defaults.reactiveScale == 1.0 && defaults.reactiveThreshold == 0.2 && defaults.reactiveMax == 0.9, "default advanced (bbport_settings.h)")
     check(!defaults.objectMotion && defaults.liveResolution == .off && defaults.effects["debug_camera"] == false && defaults.effects["debug_menu"] == false, "default advanced, debug")
     check(defaults.effects["effect_dof"] == true && defaults.effects["effect_ssr"] == false && defaults.effects["skip_intro"] == false, "default effects")
@@ -121,6 +124,7 @@ do {
     check(file["reactive_scale"] == "1.00" && file["reactive_threshold"] == "0.20" && file["reactive_max"] == "0.90" && file["object_motion"] == "0", "apply reactive keys")
     check(file["metal_hud"] == "1", "apply writes the Metal HUD key")
     check(file["texture_compression"] == "1", "apply writes the texture compression key")
+    check(file["game_timing"] == "fixed", "apply writes the game timing key")
     check(file.text.hasPrefix("# header\n"), "header kept")
     // Review focus 3: reloading after the game's menu changed the file picks up its values.
     file["preset"] = "3"

@@ -812,7 +812,11 @@ void TemporalUpscaler::Run() {
     const bool reduced = ReducedScene(color) && scene_targets.EligibleScene(depth);
     const u32 w = reduced ? scene_targets.Size().width : ow;
     const u32 h = reduced ? scene_targets.Size().height : oh;
-    // The merge writes the scene color as a storage texture.
+    // The merge writes the scene color as a storage texture: a texture made without the usage
+    // (lazy usages, VideoCore::LazyTextureUsage) gets it once.
+    if (!color.backing->desc.shader_write && color.allowed_shader_write) {
+        runtime.UpgradeUsage(&color, VideoCore::Image::UsageShaderWrite);
+    }
     if (color.info.pixel_format != vk::Format::eR16G16B16A16Sfloat ||
         depth.info.size.width != ow || depth.info.size.height != oh ||
         !color.backing->desc.shader_write) {

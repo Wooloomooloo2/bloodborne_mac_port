@@ -26,6 +26,20 @@ enum FrameCap: Int, CaseIterable, Identifiable {
     case fps30 = 30, fps40 = 40, fps60 = 60, fps90 = 90, fps120 = 120
     var id: Int { rawValue }
     var label: String { "\(rawValue)" }
+    /// Caps with a fixed-step frame rate patch (scripts/launch_settings.sh): 30 is the unpatched game.
+    var hasFixedSteps: Bool { self == .fps30 || self == .fps60 || self == .fps90 }
+}
+
+/// bbport.ini game_timing, read by run.sh at start (scripts/launch_settings.sh picks BB_FPS).
+enum GameTiming: String, CaseIterable, Identifiable {
+    case fixed, variable
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .fixed: "Fixed steps"
+        case .variable: "Variable"
+        }
+    }
 }
 
 enum ShaderCompile: String, CaseIterable, Identifiable {
@@ -106,6 +120,7 @@ struct GameSettings: Equatable {
     var metalHUD = false
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
+    var gameTiming = GameTiming.fixed
     var fullscreen = false
     var shaderCompile = ShaderCompile.balanced
     // The in-game menu's Graphics and Advanced options (gpu/shim/bbport_settings.h, same defaults).
@@ -142,6 +157,7 @@ struct GameSettings: Equatable {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
         if let v = ini["fps_cap"], let n = Int(v), let cap = FrameCap(rawValue: n) { frameCap = cap }
+        if let v = ini["game_timing"], let t = GameTiming(rawValue: v) { gameTiming = t }
         if let v = flag("fullscreen") { fullscreen = v }
         if let v = ini["shader_compile"], let s = ShaderCompile(rawValue: v) { shaderCompile = s }
         // Ranges as the game clamps them.
@@ -175,6 +191,7 @@ struct GameSettings: Equatable {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }
         ini["fps_cap"] = String(frameCap.rawValue)
+        ini["game_timing"] = gameTiming.rawValue
         ini["fullscreen"] = fullscreen ? "1" : "0"
         ini["shader_compile"] = shaderCompile.rawValue
         ini["jitter"] = jitter ? "1" : "0"

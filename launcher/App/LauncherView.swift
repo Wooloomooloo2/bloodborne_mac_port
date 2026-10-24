@@ -7,17 +7,34 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
+    private enum Page: Hashable { case general, advanced }
+    @State private var page = Page.general
+
     var body: some View {
         VStack(spacing: 0) {
             if let update = model.availableUpdate {
                 updateBanner(update)
             }
-            // Two tabs of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
+            // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
             // points, Dock shown) without scrolling, even with every optional row showing.
-            TabView {
-                general.tabItem { Text("General") }
-                advanced.tabItem { Text("Advanced") }
+            // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
+            // graph and SwiftUI's accessibility nodes loop on a dependency cycle, printing it
+            // forever with the window frozen (#47, sampled by the reporter).
+            Picker("", selection: $page) {
+                Text("General").tag(Page.general)
+                Text("Advanced").tag(Page.advanced)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, 10)
+            Group {
+                switch page {
+                case .general: general
+                case .advanced: advanced
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 12) {
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
@@ -92,6 +109,15 @@ struct LauncherView: View {
                         Text("Above 60 FPS is experimental: the game was made for 30. 120 needs a 120 Hz display.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Picker("Game timing", selection: $model.settings.gameTiming) {
+                        ForEach(GameTiming.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .disabled(!model.settings.frameCap.hasFixedSteps)
+                    Text(model.settings.frameCap.hasFixedSteps
+                         ? "Fixed steps: the game advances the same amount every frame, as on the PS4. If a scene can't hold the cap it slows down a little. Variable: keeps full speed when frames are late, but uneven frames can drop you through moving lifts and floors. Applies at the next start."
+                         : "\(model.settings.frameCap.label) FPS always uses variable timing: there is no fixed-step patch for it. Uneven frames can drop you through moving lifts.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Upscaler") {
                     if model.settings.ultrawide {

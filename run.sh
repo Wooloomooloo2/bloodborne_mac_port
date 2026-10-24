@@ -57,8 +57,9 @@ if [[ ${BB_AUTO_RENDER_RES:-} == 1 ]]; then
     unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
 fi
 # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
-# Frame rate: BB_FPS=uncap (default; delta-time patch, vblank follows the display),
-# 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
+# Frame rate: BB_FPS=uncap (delta-time patch, vblank follows the display), 60/90 (fixed-timestep
+# patches) or 30 (unpatched). Unset, scripts/launch_settings.sh picks it from bbport.ini fps_cap
+# and game_timing (fixed steps for caps 30/60/90 unless game_timing=variable). BB_PATCHES adds patch names ("a;b").
 fps=${BB_FPS:-uncap}
 # bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is

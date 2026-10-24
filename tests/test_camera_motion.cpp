@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
     assert(!staging.mapped_data.empty());
     const auto run=[&](const char* label,float depth,float translation,float rotation,
                        float object_depth,u32 mode,float expected,bool jitter=false,
-                       bool d32s8=false) {
+                       bool d32s8=false,float lift=0.f,float expected_y=0.f) {
         auto* pixels=reinterpret_cast<float*>(staging.mapped_data.data());
         for (u32 p=0;p<N;++p) {
             pixels[p*4]=depth;
@@ -67,7 +67,8 @@ int main(int argc, char** argv) {
             pixels[N*4+p*4+2]=1.f; pixels[N*4+p*4+3]=object_depth;
             pixels[N*8+p]=depth;
         }
-        const Vulkan::CameraMotion::Params params{{1,0,rotation,translation,0,1,0,0,0,0,1,0},
+        // `lift`: the previous view sits higher by this much (view +y), for the vertical case.
+        const Vulkan::CameraMotion::Params params{{1,0,rotation,translation,0,1,0,lift,0,0,1,0},
             {1,1,1,-0.05f},{1,1,1,-0.05f},{W,H},
             {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{0,0},mode};
         void* const depth_texture=d32s8 ? scene_depth.Get() : images[0].Get();
@@ -92,8 +93,8 @@ int main(int argc, char** argv) {
                 std::ldexp(1.f+float(v&1023)/1024.f,e-15));
         };
         assert(std::abs(half(result[0])-expected)<0.002f);
-        assert(std::abs(half(result[1]))<0.001f);
-        std::printf("Camera motion: %s PASS (%.5f)\n",label,half(result[0]));
+        assert(std::abs(half(result[1])-expected_y)<0.002f);
+        std::printf("Camera motion: %s PASS (%.5f, %.5f)\n",label,half(result[0]),half(result[1]));
     };
     constexpr float distant=0.999995f;
     run("distant geometry moves",distant,1000,0,0,0,4.5f*1000*(1-distant)/0.05f);
@@ -102,6 +103,11 @@ int main(int argc, char** argv) {
     run("static camera cancels jitter",distant,0,0,0,0,0,true);
     run("matching object vector",distant,0,0,distant,1,2);
     run("stale distant object vector",distant,0,0,0.9999f,1,0);
+    // View +y is up the screen: a point seen higher in the previous frame was at a smaller row
+    // (motion is previous minus current, in pixel rows). Measured on the game (2026-10-22): the
+    // y-down convention moved the vectors opposite to the picture the upscalers read.
+    run("vertical movement maps up the screen",distant,0,0,0,0,0,false,false,1000,
+        -3.5f*1000*(1-distant)/0.05f);
     // Metal-native addition: the first case again with the renderer's D32S8 scene depth.
     run("distant geometry moves, D32S8 depth",distant,1000,0,0,0,4.5f*1000*(1-distant)/0.05f,
         false,true);

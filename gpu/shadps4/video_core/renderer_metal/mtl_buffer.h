@@ -29,7 +29,9 @@ Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::s
 /// once. The windows live as long as their buffer. Unchanged for a buffer without CPU contents (private storage: BB_ARENA_LAZY=0).
 BufferRef LowOffset(BufferRef ref);
 
-/// Whether LowOffset can rebase offsets in `buffer` (an id<MTLBuffer>): it has CPU contents.
+/// Whether LowOffset can rebase offsets in `buffer` (an id<MTLBuffer>): it has CPU contents and
+/// BB_ARENA_WINDOWS=1 (off by default: the GPU driver counts windows as extra wired memory and
+/// stalled the queue, #42). Otherwise BufferCache::ObtainIndexBuffer copies high indices.
 bool CanLowerOffsets(void* buffer);
 
 } // namespace Metal

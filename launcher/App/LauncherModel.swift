@@ -230,7 +230,7 @@ final class LauncherModel: ObservableObject {
     private var settingsSummary: [String] {
         var items = ["output \(settings.output.iniValue)", "upscaler \(settings.upscaler.rawValue)"]
         if settings.upscaler.usesPreset { items.append("quality \(Resolution.presetNames[settings.preset])") }
-        items += ["cap \(settings.frameCap.rawValue) FPS", settings.fullscreen ? "full screen" : "windowed"]
+        items += ["cap \(settings.frameCap.rawValue) FPS", "\(settings.frameCap.hasFixedSteps ? settings.gameTiming.rawValue : "variable") timing", settings.fullscreen ? "full screen" : "windowed"]
         return items
     }
 

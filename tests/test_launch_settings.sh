@@ -38,10 +38,32 @@ compression $'texture_compression=0\n' "0"
 compression $'texture_compression=1\n' "-"
 compression $'upscaler=off\n' "-"                     # default: compressed
 compression $'texture_compression=0\n' "1" BB_LAZY_TEXTURE_USAGE=1
+timing() { # ini text, expected "BB_FPS BB_FPS_AUTO" (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_FPS -u BB_FPS_AUTO -u BB_FPS_LIMIT "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s %s" "${BB_FPS:--}" "${BB_FPS_AUTO:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: game_timing for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+timing $'fps_cap=60\n' "60 1"                            # default: fixed steps
+timing $'fps_cap=60\ngame_timing=fixed\n' "60 1"
+timing $'fps_cap=30\n' "30 1"
+timing $'fps_cap=90\n' "90 1"
+timing $'fps_cap=40\n' "uncap 1"                         # no fixed-step patch for 40
+timing $'fps_cap=120\n' "uncap 1"
+timing $'fps_cap=60\ngame_timing=variable\n' "uncap 1"
+timing $'upscaler=off\n' "uncap 1"                        # no cap: the presenter's default, variable
+timing $'fps_cap=60\n' "uncap -" BB_FPS=uncap             # explicit BB_FPS wins
+timing $'fps_cap=60\n' "90 1" BB_FPS_LIMIT=90             # explicit limit picks the patch
+timing $'fps_cap=90\n' "60 1" BB_FPS=uncap BB_FPS_AUTO=1 BB_FPS_LIMIT=60
+timing $'fps_cap=60\ngame_timing=variable\n' "uncap 1" BB_FPS=60 BB_FPS_AUTO=1  # restart re-picks
 rm -f "$ini"
 /bin/bash -c 'source scripts/launch_settings.sh; bb_launch_settings /nonexistent/bbport.ini' ||
     { echo "FAIL: launch settings with a missing file"; exit 1; }
-echo "PASS: launch settings (fps_cap, fullscreen, texture_compression)"
+echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, game_timing)"
 
 # In-game restart inherits the old environment: disabling wide mode must clear only our
 # overrides and keep the user's external patch list and explicit memory limit.

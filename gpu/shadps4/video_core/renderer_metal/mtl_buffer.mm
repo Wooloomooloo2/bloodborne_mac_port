@@ -79,7 +79,16 @@ char windows_key;
 } // namespace
 
 bool CanLowerOffsets(void* buffer) {
-    return buffer != nullptr && ((__bridge id<MTLBuffer>)buffer).contents != nullptr;
+    // Off unless BB_ARENA_WINDOWS=1: the GPU driver counts a window's whole length as wired
+    // memory on top of the arena it overlaps. Command buffers then asked for more than maxWired
+    // ("IOGPUCommandDescriptor::prepare: required > max", ~470,000 times an evening), the
+    // driver paged on every submission until the queue stalled: GPU watchdog exits, WindowServer
+    // killed, once a GPU stuck until a reboot (#42, noelmiller's A/B; 0.5.4 and 0.5.4.1).
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_ARENA_WINDOWS");
+        return env && env[0] == '1';
+    }();
+    return enabled && buffer != nullptr && ((__bridge id<MTLBuffer>)buffer).contents != nullptr;
 }
 
 BufferRef LowOffset(BufferRef ref) {

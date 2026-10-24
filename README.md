@@ -15,9 +15,9 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-21)
+## Status (2026-10-23)
 
-**Current version: [mac-v0.5.4.1](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4.1)** (download the app, or build it as below).
+**Current version: [mac-v0.5.4.2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.4.2)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -27,6 +27,44 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### Pre-release 0.5.4.5: lifts no longer drop you through the floor
+
+- **Fixed game timing by default.** The port always advanced the game by each frame's measured
+  time, so on uneven frames the character could sink through a moving lift and die. At the 60
+  and 90 FPS caps the game now runs in fixed steps (the 60/90 FPS++ patches); 30 runs the game
+  unpatched, and 40 and 120 stay variable. If a scene can't hold the cap, the game slows down a
+  little instead. **Game timing** under the launcher's frame rate cap (`game_timing` in
+  `bbport.ini`) switches back to variable steps.
+- Everything from 0.5.4.4 below is included.
+
+### Pre-release 0.5.4.4: memmove crash fixed
+
+- **The rare "memmove" crash is fixed** (#34, #37, #38, #54, #57). The game's render thread
+  builds each frame's commands in a fixed 256 KB pool. It normally uses about 3% of it, but
+  on rare frames it needs more, and the game then copied into a null address and crashed. When
+  the pool runs out, the port now hands the game memory from a 16 MB spare pool and logs a
+  "Frame pool: … full" line in `game.log`.
+- Everything from 0.5.4.3 below is included.
+
+### Pre-release 0.5.4.3: sharper upscaling in motion
+
+- **MetalFX and FSR 3.1 no longer turn hazy while moving** (#48, found and measured by
+  @MojahedAbushawish). The camera motion vectors pointed the wrong way vertically on the Metal
+  renderer, so the upscalers blended in history from the mirrored position.
+- **Native AA works again with texture compression on**: since 0.5.4 it, and upscaling above
+  1080p, silently ran without the upscaler.
+- **The launcher no longer freezes on macOS 26.0.1** when switching from Advanced back to General
+  (#47): General and Advanced are now a switch at the top instead of tabs, which hit a SwiftUI
+  bug in that macOS version.
+
+### New in 0.5.4.2: GPU stall crashes fixed
+
+- **"The GPU stopped making progress" crashes, and the frame rate sinking over a session, are
+  fixed** (#42, #43, #44, #45, #49, #55). The extra Metal views of GPU memory added in 0.5.4 cost
+  no memory, but macOS's GPU driver counted each one as memory it had to keep in place, until it
+  paged on every frame and the GPU stalled. They are gone; meshes high in GPU memory are copied to
+  a small buffer instead (@DiAvisoo's original fix). Found and measured by @noelmiller.
 
 ### New in 0.5.4.1: missing trees
 
