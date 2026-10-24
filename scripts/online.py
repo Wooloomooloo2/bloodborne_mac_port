@@ -12,17 +12,22 @@ summon service) and prints its path for SHADPS4_HTTP_HOST_OVERRIDES_JSON. A play
 other addresses puts them in DIR/host_overrides.custom.json, which is then used as it is.
 
 The Hunter's Dream co-op pool (BB_NET_BACKEND=thd, online_pool=huntersdream): the game's servers
-and play logs go to the game server over HTTP, and bells and summons through its session service
+and play logs go to the game server over HTTPS, and bells and summons through its session service
 with the module's own backend (gpu/bbnet/thd). `online.py thd-overrides --user DIR` writes that
 launch's host_overrides.json; `online.py signin` links the account with Discord the way bbhost
 does (a code to approve on the website) and prints the two bbport.ini lines, or writes them with
 --ini FILE.
+
+The community server must be HTTPS (its account token and the game's traffic go there); plain
+HTTP is accepted only for a server on this Mac (localhost, 127.0.0.1). `online.py community`
+prints the address run.sh uses, or fails with the reason.
 """
 import argparse
 import getpass
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import stat
 import subprocess
@@ -39,12 +44,34 @@ GAME_SERVER = 'https://ss4.scej-network.jp:20443'
 COMMUNITY_API_PORT = 18671
 
 
+LOCAL_HOSTS = ('localhost', '127.0.0.1')
+# What The Hunter's Dream accepts as an online id (bbhost's rule).
+ONLINE_ID = re.compile(r'[A-Za-z0-9_-]{3,16}')
+
+
 def community_address(value):
-    """The game server as https://host (the game picks the ports), The Hunter's Dream by default."""
+    """The game server as https://host (the game picks the ports), The Hunter's Dream by default.
+    ValueError for another scheme, or http:// to a host that is not this Mac."""
     value = str(value or '').strip() or COMMUNITY_SERVER
     scheme, _sep, rest = value.rpartition('://')
     host = rest.split('/')[0].split(':')[0]
-    return f'{scheme or "https"}://{host}'
+    scheme = (scheme or 'https').lower()
+    if not host:
+        raise ValueError(f'no host in the community server address {value!r}')
+    if scheme != 'https' and not (scheme == 'http' and host.lower() in LOCAL_HOSTS):
+        raise ValueError(f'the community server must be https:// (got {value!r}; plain http only '
+                         'for localhost)')
+    return f'{scheme}://{host}'
+
+
+def on_community_host(url, community):
+    """True when url is the community server's own address (its scheme and host, or a host
+    under it): the only page the sign-in may send the player to."""
+    scheme, _sep, rest = str(url or '').partition('://')
+    host = rest.split('/')[0].split(':')[0].lower()
+    base_scheme, base_host = community.split('://', 1)
+    return (scheme.lower() == base_scheme and bool(host)
+            and (host == base_host.lower() or host.endswith('.' + base_host.lower())))
 
 
 def webapi_address(server):
@@ -148,9 +175,11 @@ def thd_sign_in(community, on_code):
     device, user_code = start.get('DeviceCode', ''), start.get('UserCode', '')
     if not device or not user_code:
         raise ValueError('no code in the reply')
-    interval = max(1, int(start.get('Interval') or 5))
-    deadline = time.monotonic() + int(start.get('ExpiresIn') or 600)
-    on_code(start.get('VerificationUri') or auth + '/link', user_code)
+    # The server's numbers within reason: 1-60 s between polls, at most 30 minutes.
+    interval = min(60, max(1, int(start.get('Interval') or 5)))
+    deadline = time.monotonic() + min(1800, max(0, int(start.get('ExpiresIn') or 600)))
+    page = start.get('VerificationUri')
+    on_code(page if on_community_host(page, auth) else auth + '/link', user_code)
     while time.monotonic() < deadline:
         time.sleep(interval)
         poll = thd_call(auth + '/auth/device/poll', {'DeviceCode': device})
@@ -158,9 +187,13 @@ def thd_sign_in(community, on_code):
         if status == 'approved':
             if not poll.get('OnlineId') or not poll.get('Token'):
                 raise ValueError('no token in the reply')
+            if not ONLINE_ID.fullmatch(str(poll['OnlineId'])):
+                raise ValueError('the reply has an invalid online id')
+            if any(ord(c) < 0x21 for c in str(poll['Token'])):
+                raise ValueError('the reply has an invalid token')
             return poll['OnlineId'], poll['Token']
         if status == 'slow_down':
-            interval += 5
+            interval = min(60, interval + 5)
         elif status == 'denied':
             raise ValueError('the sign-in was denied')
         elif status == 'expired':
@@ -173,16 +206,21 @@ SECRET_KEYS = ('shadnet_password', 'thd_token')
 
 def write_ini_keys(ini, values):
     """Replaces these keys in bbport.ini (other lines kept). A file that holds a secret in clear
-    is made readable by its owner only; one that says `keychain` gets no secret written."""
+    is made readable by its owner only before the secret is written; one that says `keychain`
+    gets no secret written."""
     ini = Path(ini)
     lines = ini.read_text(encoding='utf-8').splitlines() if ini.exists() else []
     keep = [line for line in lines if not line.startswith(tuple(f'{k}=' for k in values))]
     keep += [f'{k}={v}' for k, v in values.items()]
     ini.parent.mkdir(parents=True, exist_ok=True)
-    ini.write_text('\n'.join(keep) + '\n', encoding='utf-8')
-    if any(line.startswith(tuple(f'{k}=' for k in SECRET_KEYS)) and not line.endswith('=keychain')
-           for line in keep):
-        ini.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    secret = any(line.startswith(tuple(f'{k}=' for k in SECRET_KEYS)) and not line.endswith('=keychain')
+                 for line in keep)
+    owner_only = stat.S_IRUSR | stat.S_IWUSR
+    if secret and ini.exists():
+        ini.chmod(owner_only)
+    fd = os.open(ini, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, owner_only if secret else 0o644)
+    with os.fdopen(fd, 'w', encoding='utf-8') as file:
+        file.write('\n'.join(keep) + '\n')
 
 
 def write_ini_account(ini, online_id, token):
@@ -191,11 +229,29 @@ def write_ini_account(ini, online_id, token):
     write_ini_keys(ini, {'online_pool': 'huntersdream', 'thd_online_id': online_id, 'thd_token': token})
 
 
+def security_quote(text):
+    """One argument of a `security -i` command line: in double quotes, \\ and \" escaped."""
+    if any(ord(c) < 0x20 for c in text):
+        raise ValueError('a keychain value cannot hold control characters or line breaks')
+    return '"' + text.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
 def keychain_store(service, account, secret):
-    """The login keychain item launch_settings.sh reads (`security find-generic-password -w`)."""
-    subprocess.run(['security', 'add-generic-password', '-U', '-s', service, '-a', account,
-                    '-l', f'{service} ({account})', '-w', secret], check=True,
-                   stdout=subprocess.DEVNULL)
+    """The login keychain item launch_settings.sh reads (`security find-generic-password -w`).
+    The command goes to `security -i` on its standard input, so the secret is never an argument
+    other processes can see; `security` made the item, so it reads it back without a prompt
+    (as can anything else that runs /usr/bin/security as this user). `security -i` does not
+    report a failed command in its status: the item is read back to check it."""
+    command = ' '.join(['add-generic-password', '-U', '-s', security_quote(service),
+                        '-a', security_quote(account), '-l', security_quote(f'{service} ({account})'),
+                        '-w', security_quote(secret)])
+    subprocess.run(['security', '-i'], input=command + '\n', text=True, check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    stored = subprocess.run(['security', 'find-generic-password', '-s', service, '-a', account, '-w'],
+                            capture_output=True, text=True)
+    # (`-w` prints a value that is not plain ASCII in hex.)
+    if stored.returncode != 0 or stored.stdout.rstrip('\n') not in (secret, secret.encode().hex()):
+        raise ValueError(f'the keychain did not take the item {service} ({account})')
 
 
 def check(server, webapi, community):
@@ -238,11 +294,21 @@ def main():
     keychain.add_argument('--npid', required=True, help='the shadNet account name')
     keychain.add_argument('--ini', help='also write shadnet_npid and shadnet_password=keychain here')
     sub.add_parser('check')
+    sub.add_parser('community', help='print the community server address (https://host)')
     a = parser.parse_args()
+    try:
+        run(a)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        sys.exit(f'online.py {a.command}: {error}')
+
+
+def run(a):
     server = os.environ.get('BB_SHADNET_SERVER') or SHADNET_SERVER
     community = community_address(os.environ.get('BB_COMMUNITY_SERVER'))
     webapi = webapi_setting(os.environ.get('BB_SHADNET_WEBAPI'), server, community)
-    if a.command == 'overrides':
+    if a.command == 'community':
+        print(community)
+    elif a.command == 'overrides':
         print(write_overrides(a.user, community, webapi))
     elif a.command == 'thd-overrides':
         print(write_thd_overrides(a.user, community))

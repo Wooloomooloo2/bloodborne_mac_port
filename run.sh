@@ -130,14 +130,17 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
             [[ -n $bundle && -r $bundle ]] && { export SSL_CERT_FILE=$bundle; break; }
         done
     fi
-    # A password or token in clear in bbport.ini should be the owner's to read only.
+    # A password or token in clear in bbport.ini should be the owner's to read only (no group or
+    # other permission bits; 400 and 600 alike are fine).
     ini=${BB_CONFIG:-$data/bbport.ini}
     if [[ -f $ini ]] && /usr/bin/grep -E '^(shadnet_password|thd_token)=.+$' "$ini" | /usr/bin/grep -qvE '=keychain$' \
-        && [[ $(stat -f %Lp "$ini" 2>/dev/null || stat -c %a "$ini") != 600 ]]; then
+        && (( 8#$(stat -f %Lp "$ini" 2>/dev/null || stat -c %a "$ini") & 8#077 )); then
         echo "Online: $ini holds a password or token other users of this Mac can read: chmod 600 it, or move the secret to the keychain (python3 scripts/online.py keychain shadnet --npid NAME --ini \"$ini\"; scripts/online.py signin --keychain)" >&2
     fi
+    # The community server (BB_COMMUNITY_SERVER, community_server=): https only, plain http only
+    # for a server on this Mac. Another address stops the launch here, with the reason.
+    community=$("$PYTHON" scripts/online.py community) || exit 1
     if [[ ${BB_NET_BACKEND:-} == thd ]]; then
-        community=$("$PYTHON" -c 'import sys; sys.path.insert(0, "scripts"); import online; print(online.community_address(sys.argv[1]))' "${BB_COMMUNITY_SERVER:-}")
         SHADPS4_HTTP_HOST_OVERRIDES_JSON=$("$PYTHON" scripts/online.py thd-overrides --user "${BB_USER_DIR:-$data/user}") || true
         export SHADPS4_HTTP_HOST_OVERRIDES_JSON
         export BB_THD_SERVER=${BB_THD_SERVER:-$community:18671} BB_THD_AUTH=${BB_THD_AUTH:-$community}
