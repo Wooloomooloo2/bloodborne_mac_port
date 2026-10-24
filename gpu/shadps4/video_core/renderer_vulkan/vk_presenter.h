@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "core/libraries/videoout/buffer.h"
+#include "bbport_framegen.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_object.h"
 #include "video_core/renderer_metal/mtl_present.h"
@@ -39,6 +40,8 @@ struct Frame {
     u32 width{};
     u32 height{};
     Metal::Object texture; ///< id<MTLTexture>, BGRA8Unorm render target (empty: never drawn)
+    Metal::Object generated; ///< optional post-processed intermediate image, same dimensions
+    BbFrameGen::FramePtr framegen; ///< pins inputs until both presents complete
     u64 ready_tick{};      ///< draw-scheduler tick that wrote it; 0: blank (Present clears)
     bool is_hdr{false};
     u32 id{};
