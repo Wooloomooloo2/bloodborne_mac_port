@@ -287,6 +287,7 @@ private:
 
     bool resources_ready = false; ///< the textures below match width/height/out size
     int resources_upscaler = -1;  ///< the provider they were made for
+    bool resources_reactive = false; ///< the full-size reactive resources are needed
     Metal::Object motion_image;   ///< RG16F, render size (BB_RENDER_RES: the colour's size)
     u32 motion_width = 0, motion_height = 0;
     Metal::Object output_image;   ///< output size RGBA16F

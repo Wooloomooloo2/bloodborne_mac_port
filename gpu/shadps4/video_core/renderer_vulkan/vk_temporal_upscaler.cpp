@@ -340,9 +340,10 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
         return false;
     }
     const auto [mw, mh] = MotionSize(w, h);
+    const bool reactive = ReactiveOn();
     if (resources_ready && w == width && h == height && ow == out_width && oh == out_height &&
         mw == motion_width && mh == motion_height && hdr == resources_hdr &&
-        upscaler == resources_upscaler) {
+        upscaler == resources_upscaler && reactive == resources_reactive) {
         return true;
     }
     // Recorded commands of earlier frames can still use the textures (a live output-size or
@@ -378,9 +379,15 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     scheduler.GetDynamicState().Invalidate();
     // Opaque: also TAA's diagnostic output (BB_TAA_DIAGNOSTICS; TAA runs at render = output
     // size), which the kernel binds as a storage texture every frame.
-    opaque_image = CreateTexture(device, vk::Format::eR16G16B16A16Sfloat, w, h, false, true,
-                                 false, "Upscaler opaque scene");
-    reactive_image = CreateTexture(device, vk::Format::eR8Unorm, w, h, false, true, false,
+    opaque_image = (reactive || upscaler == BbSettings::UpscalerTaa)
+                       ? CreateTexture(device, vk::Format::eR16G16B16A16Sfloat, w, h, false,
+                                       true, false, "Upscaler opaque scene")
+                       : Metal::Object{};
+    // The merge kernel binds a mask even when its branch is disabled. A valid 1x1
+    // stand-in avoids allocating a full render-size mask for MetalFX, TAA, or FSR
+    // with reactive masking off. TAA still needs its full-size diagnostic output.
+    reactive_image = CreateTexture(device, vk::Format::eR8Unorm, reactive ? w : 1,
+                                   reactive ? h : 1, false, true, false,
                                    "Upscaler reactive mask");
     // TAA's history: RGB and depth, written one frame and read the next (taa_next).
     for (auto& history : taa_history) {
@@ -416,6 +423,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
     reset = true;
     resources_ready = true;
     resources_upscaler = upscaler;
+    resources_reactive = reactive;
     std::printf("Upscaler: %s %ux%u -> %ux%u (%s)\n", BbSettings::UpscalerName(upscaler), w, h,
                 ow, oh, hdr ? "HDR scene color" : "tonemapped frame");
     return true;
