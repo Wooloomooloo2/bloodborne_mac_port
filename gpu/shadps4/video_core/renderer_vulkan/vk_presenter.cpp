@@ -410,6 +410,15 @@ double PacingSeconds() {
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame, u32) {
     last_present = {NowNs(), 0, 0, 0};
+    frame_rates->RealFrame(BbFrameRates::Now(), is_reusing_frame, is_game_frame);
+    std::function<void(double)> on_displayed;
+    if (BbSettings::Get().show_fps || BbOverlay::CapturesInput()) {
+        // Drawable callbacks can outlive the presenter. They own only the small
+        // tracker, and never touch ImGui, the device, or a frame-pool slot.
+        on_displayed = [rates = frame_rates](double timestamp) {
+            rates->Displayed(timestamp, BbFrameRates::Now());
+        };
+    }
     // nextDrawable and the present passes create autoreleased objects, and this thread
     // (bb:Present) has no pool of its own: without one, drawables never return to the layer.
     Metal::WithAutoreleasePool([&] {
@@ -417,7 +426,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         // to the pool at once, so PrepareFrame's Take never waits on a skipped present.
         if (!Metal::ShouldAcquireDrawable(window.IsVisible(), window.GetWidth(),
                                           window.GetHeight(), SnapshotRequested())) {
-            BbOverlay::Render(nullptr, nullptr, 0, 0); // FPS timing, the menu's pending save
+            BbOverlay::Render(nullptr, nullptr, 0, 0, frame_rates->Read(BbFrameRates::Now()));
             pool->Free(frame);
             return;
         }
@@ -434,7 +443,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             if (!logged.exchange(true)) {
                 LOG_WARNING(Render_Vulkan, "No drawable from the layer: skipping frame(s)");
             }
-            BbOverlay::Render(nullptr, nullptr, 0, 0); // FPS timing, the menu's pending save
+            BbOverlay::Render(nullptr, nullptr, 0, 0, frame_rates->Read(BbFrameRates::Now()));
             pool->Free(frame);
             return;
         }
@@ -458,8 +467,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             present_queue->WaitForDeviceTick(cb, *tick);
             pp_pass.Passes().Present(cb, frame->generated.Get(), frame->width, frame->height,
                 intermediate.texture, intermediate.width, intermediate.height);
-            BbOverlay::Render(cb, intermediate.texture, intermediate.width, intermediate.height);
-            present_queue->Commit(cb, intermediate.drawable.Get(), {}, duration);
+            BbOverlay::Render(cb, intermediate.texture, intermediate.width, intermediate.height,
+                              frame_rates->Read(BbFrameRates::Now()));
+            present_queue->Commit(cb, intermediate.drawable.Get(), {}, duration, on_displayed);
         }
 
         void* const command_buffer = present_queue->Begin();
@@ -478,12 +488,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         pp_pass.Passes().Present(command_buffer, source, frame->width, frame->height,
                                  drawable.texture, drawable.width, drawable.height);
         // The settings menu / FPS counter over the presented image, before the snapshot (which
-        // shows it) and the commit. Called every present: it also times the FPS readout and
-        // saves menu changes while nothing is drawn.
+        // shows it) and the commit. UI time advances once per real/generated pair;
+        // the FPS readings come from independent render/presentation measurements.
         if (intermediate.drawable) {
             BbOverlay::Replay(command_buffer, drawable.texture);
         } else {
-            BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height);
+            BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height,
+                              frame_rates->Read(BbFrameRates::Now()));
         }
         std::string snapshot_path = TakeSnapshotRequest();
         std::shared_ptr<Metal::Object> snapshot;
@@ -507,7 +518,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                         std::fflush(stdout);
                     }).detach();
                 }
-            }, intermediate.drawable ? duration : PacingSeconds());
+            }, intermediate.drawable ? duration : PacingSeconds(), on_displayed);
         last_present.submitted = NowNs();
         last_present.presented = last_present.submitted;
     });

@@ -42,7 +42,7 @@ struct Target {
 };
 
 /// Clears the target to Fill, then runs one present's overlay step.
-void Present(Target& t, bool clear) {
+void Present(Target& t, bool clear, BbFrameRates::Sample rates = {60, 120}) {
     id<MTLCommandBuffer> cmdbuf = [t.queue commandBuffer];
     if (clear) {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -53,7 +53,7 @@ void Present(Target& t, bool clear) {
             MTLClearColorMake(Fill[2] / 255.0, Fill[1] / 255.0, Fill[0] / 255.0, 1.0);
         [[cmdbuf renderCommandEncoderWithDescriptor:pass] endEncoding];
     }
-    BbOverlay::Render((__bridge void*)cmdbuf, (__bridge void*)t.texture, Width, Height);
+    BbOverlay::Render((__bridge void*)cmdbuf, (__bridge void*)t.texture, Width, Height, rates);
     [cmdbuf commit];
     [cmdbuf waitUntilCompleted];
     Expect(cmdbuf.status == MTLCommandBufferStatusCompleted, "overlay command buffer completed");
@@ -175,6 +175,17 @@ int main() {
         Expect(Changed(t, Width - 320, 0, Width, 90) > 0.05, "FPS counter drawn top right");
         Expect(Changed(t, 0, Height / 2, Width / 2, Height) == 0.0,
                "FPS counter leaves the rest of the frame");
+        const auto counter = [&] {
+            std::vector<u8> pixels(420 * 180 * 4);
+            [t.texture getBytes:pixels.data() bytesPerRow:420 * 4
+                     fromRegion:MTLRegionMake2D(Width - 420, 0, 420, 180) mipmapLevel:0];
+            return pixels;
+        };
+        const auto counter_before = counter();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(counter() != counter_before, "displayed FPS changes independently of real FPS");
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 120});
+        Expect(counter() == counter_before, "FPS labels return to the same measured values");
         // A generated/real pair reuses one UI frame. Replaying must draw exactly
         // the same pixels without sampling the FPS clock or consuming input twice.
         Target repeated{t.queue, [mtl newTextureWithDescriptor:desc]};
