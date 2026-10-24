@@ -4,6 +4,7 @@
 // follow the direct-Metal port's frame_generation.mm at b395cf4; adapted to
 // this port's two queues.
 #include "bbport_framegen.h"
+#include "bbport_settings.h"
 
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
@@ -114,8 +115,7 @@ void Pin(Metal::Encoder& e, const FramePtr& frame) {
 } // namespace
 
 bool Requested() {
-    const char* env = std::getenv("BB_METAL_FRAMEGEN");
-    return env && std::strcmp(env, "1") == 0;
+    return BbSettings::Get().startup_framegen;
 }
 bool Supported(Metal::Device& device) {
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
