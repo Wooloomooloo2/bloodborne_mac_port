@@ -8,6 +8,7 @@
 #include <mach/mach.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -519,6 +520,77 @@ void TestResourceBindingCache() {
     Expect(std::memcmp(out.contents, expected, sizeof(expected)) == 0,
            "buffer offsets, texture/sampler changes, external work, reopen and submit keep GPU results");
     Expect(device.ErrorCount() == 0, "resource binding cache ran without GPU errors");
+}
+
+void TestInlineBindingCache() {
+    Metal::Device device;
+    Metal::Encoder encoder{device};
+    id<MTLComputePipelineState> copy = Kernel(device, TestLibrary(device), @"copy_constants");
+    id<MTLBuffer> out = SharedBuffer(device, 9 * 32), input = SharedBuffer(device, 32);
+    std::array<u32, 8> values{1,2,3,4,5,6,7,8};
+    const auto original = values;
+    std::memcpy(input.contents, values.data(), 32);
+    encoder.SetComputePipeline((__bridge void*)copy, Metal::Access::None);
+    for (u32 i = 0; i < 32; ++i) {
+        const auto identical = values; // equal bytes at another address
+        encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out));
+        encoder.SetBytes(Metal::Stage::Compute, 1, identical.data(), 32);
+        encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    }
+    const char* stats = std::getenv("BB_ENCODER_STATS");
+    if (stats && stats[0] == '1') {
+        const char* setting = std::getenv("BB_METAL_BINDING_CACHE");
+        const bool cached = !(setting && std::strcmp(setting, "0") == 0);
+        const auto counts = encoder.GetBindingStats();
+        Expect(counts.emitted == (cached ? 2u : 64u) &&
+                   counts.skipped == (cached ? 62u : 0u),
+               "32 repeated inline dispatches emit 2 cached bindings or 64 reference bindings");
+        std::printf("Inline binding fixture: %llu Metal calls, %llu identical setters skipped\n",
+                    (unsigned long long)counts.emitted, (unsigned long long)counts.skipped);
+    }
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 32));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    values[0] = 99; // a reused source pointer must not hide a changed payload
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 64));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 16);
+    encoder.Dispatch({1, 1, 1}, {4, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 96));
+    encoder.SetBuffer(Metal::Stage::Compute, 1, Ref(input));
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 128));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    std::vector<u32> large(2048, 17);
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 160));
+    encoder.SetBytes(Metal::Stage::Compute, 1, large.data(), u32(large.size() * 4));
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 192));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 224));
+    id<MTLComputeCommandEncoder> external =
+        (__bridge id<MTLComputeCommandEncoder>)encoder.ComputeEncoder(Metal::Access::None);
+    const std::array<u32, 8> zero{};
+    [external setBytes:zero.data() length:32 atIndex:1];
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.EndEncoding();
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 256));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    device.Wait(encoder.Submit());
+    const u32* result = static_cast<const u32*>(out.contents);
+    for (u32 row = 0; row < 9; ++row) {
+        for (u32 i = 0; i < 8; ++i) {
+            const u32 expected = row == 5 ? 17 : row == 2 && i >= 4 ? 0 :
+                                 row == 0 || row == 3 ? original[i] : values[i];
+            Expect(result[row * 8 + i] == expected,
+                   "inline identity includes exact bytes, size, buffer/large transitions and reapply");
+        }
+    }
+    Expect(device.ErrorCount() == 0, "inline binding cache ran without GPU errors");
 }
 
 void TestLargeBytes() {
@@ -2807,6 +2879,7 @@ int main() {
         TestWaitMeansCompleted();
         TestCompute();
         TestResourceBindingCache();
+        TestInlineBindingCache();
         TestLargeBytes();
         TestClearOnlyPass();
         TestPassReopenKeepsDrawing();

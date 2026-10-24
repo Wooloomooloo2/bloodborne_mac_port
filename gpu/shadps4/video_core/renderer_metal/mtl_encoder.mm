@@ -1371,6 +1371,10 @@ void Encoder::SetBytes(Stage stage, u32 slot, const void* data, u32 size) {
     }
     StageState& s = impl->StateOf(stage);
     StageState::Slot& b = s.buffers[slot];
+    if (binding_cache && b.bytes.size() == size && std::memcmp(b.bytes.data(), data, size) == 0) {
+        impl->BindingSkipped();
+        return;
+    }
     b.buffer = nullptr;
     b.offset = 0;
     b.stride = 0;
