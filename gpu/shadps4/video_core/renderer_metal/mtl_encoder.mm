@@ -1412,7 +1412,8 @@ void Encoder::BeginRenderPass(const RenderPassDesc& desc) {
         a.level = c.level;
         a.slice = c.slice;
         a.depthPlane = c.depth_plane;
-        a.loadAction = c.clear ? MTLLoadActionClear : MTLLoadActionLoad;
+        a.loadAction = c.clear ? MTLLoadActionClear :
+                       c.discard_load ? MTLLoadActionDontCare : MTLLoadActionLoad;
         a.storeAction = MTLStoreActionStore;
         a.clearColor = MTLClearColorMake(c.clear_color[0], c.clear_color[1], c.clear_color[2],
                                          c.clear_color[3]);
