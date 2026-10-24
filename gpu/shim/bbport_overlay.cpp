@@ -98,9 +98,9 @@ bool dirty = false; // settings changed: saved shortly after the last change, an
 std::chrono::steady_clock::time_point last_change{};
 float base_scale = 1.0f;
 
-// Present rate for the FPS counter.
+// UI time advances once per pair. FPS comes from real-frame and drawable events.
 std::chrono::steady_clock::time_point last_present{};
-float frame_ms_avg = 0.0f;
+BbFrameRates::Sample frame_rates;
 // "Capture Frame": FrameCapture::Written() when it was pressed (~0: no request), and when.
 u64 capture_base = ~u64{0};
 std::chrono::steady_clock::time_point capture_time;
@@ -1170,8 +1170,8 @@ void Menu() {
             ImGui::Unindent(r * 2.0f + 8.0f * base_scale);
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
-            ImGui::Text("%.0f FPS  (%.1f ms)   Saved to bbport.ini",
-                        frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
+            ImGui::Text("Real %.0f / Displayed %.0f FPS   Saved to bbport.ini",
+                        frame_rates.real_fps, frame_rates.displayed_fps);
             ImGui::PopStyleColor();
         }
         const char* apply = "Apply and Restart Game";
@@ -1227,9 +1227,15 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
     const auto& s = BbSettings::Get();
-    ImGui::Text("%.0f FPS", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f);
-    ImGui::SameLine();
-    ImGui::TextColored(kSecondary, "%.1f ms", frame_ms_avg);
+    const auto row = [](const char* label, double fps) {
+        ImGui::Text("%s %.0f FPS", label, fps);
+        if (fps > 0) {
+            ImGui::SameLine();
+            ImGui::TextColored(kSecondary, "%.1f ms", 1000.0 / fps);
+        }
+    };
+    row("Real", frame_rates.real_fps);
+    row("Displayed", frame_rates.displayed_fps);
     // Scene size from the upscaler or native G-buffer, and the output in effect: a
     // startup-patched session keeps its launch output until restart.
     const char* upscaler = s.upscaler == BbSettings::UpscalerFsr3      ? "FSR 3.1"
@@ -1709,19 +1715,18 @@ void ScriptedInput() {
 
 } // namespace
 
-void Render(void* command_buffer, void* target, u32 width, u32 height) {
+void Render(void* command_buffer, void* target, u32 width, u32 height,
+            const BbFrameRates::Sample& rates) {
     ScriptedInput();
-    // Present interval for the FPS readout (measured also while nothing is drawn).
+    // UI delta only. Replay must not add a timing/FPS sample for the second image.
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
-    if (ms > 0.0f && ms < 1000.0f) {
-        frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
-    }
     if (!initialized) {
         return;
     }
     std::scoped_lock lock{imgui_mutex};
+    frame_rates = rates;
     // Save 0.3 s after the last change (a slider drag writes once), not only when the menu
     // closes: closing the window or a crash with the menu open used to lose the changes. Under
     // the lock: the window thread's SetOpen(false) saves and clears `dirty` too.

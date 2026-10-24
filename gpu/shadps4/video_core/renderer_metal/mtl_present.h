@@ -124,8 +124,10 @@ public:
     /// completed (also on error).
     /// `min_duration` > 0 (seconds): presentDrawable:afterMinimumDuration: (the previous drawable
     /// stays on screen at least that long), for even frame pacing on variable-refresh displays.
+    /// `on_presented`: actual drawable presentation time, not GPU completion. May arrive after
+    /// WaitIdle or queue destruction; capture independent owned state, never the queue/caller.
     void Commit(void* command_buffer, void* drawable, std::function<void()> on_complete,
-                double min_duration = 0);
+                double min_duration = 0, std::function<void(double)> on_presented = {});
     /// Blocks until nothing is in flight.
     void WaitIdle();
     /// Blocks until nothing is in flight or `milliseconds` passed; true when idle.

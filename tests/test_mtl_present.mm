@@ -504,13 +504,15 @@ void TestEventWait(Device& device, PresentQueue& queue) {
     // tick: without the wait it would copy the buffer before the fill.
     const u64 tick = device.CurrentTick();
     std::atomic<int> done{0};
+    std::atomic<int> displayed{0};
     WithAutoreleasePool([&] {
         void* cb = queue.Begin();
         queue.WaitForDeviceTick(cb, tick);
         id<MTLBlitCommandEncoder> blit = [(__bridge id<MTLCommandBuffer>)cb blitCommandEncoder];
         [blit copyFromBuffer:gpu_only sourceOffset:0 toBuffer:result destinationOffset:0 size:256];
         [blit endEncoding];
-        queue.Commit(cb, nullptr, [&done] { ++done; });
+        queue.Commit(cb, nullptr, [&done] { ++done; }, 0,
+                     [&displayed](double) { ++displayed; });
     });
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     Expect(queue.InFlight() == 1 && done == 0, "present command buffer waits for the device tick");
@@ -527,6 +529,7 @@ void TestEventWait(Device& device, PresentQueue& queue) {
     u32 value;
     std::memcpy(&value, result.contents, 4);
     Expect(done == 1 && value == kPattern, "present queue reads what the device tick wrote");
+    Expect(displayed == 0, "GPU completion without a displayed drawable is not displayed FPS");
 
     // Tick 0: no wait.
     std::memset(result.contents, 0, 256);
