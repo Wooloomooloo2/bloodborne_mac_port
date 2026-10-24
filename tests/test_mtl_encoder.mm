@@ -577,6 +577,51 @@ void TestPassReopenKeepsDrawing() {
     Expect(device.ErrorCount() == 0, "no errors reopening a pass");
 }
 
+void TestDiscardColorLoad() {
+    Metal::Device device;
+    Metal::Encoder encoder{device};
+    id<MTLLibrary> library = TestLibrary(device);
+    id<MTLRenderPipelineState> solid = SolidPipeline(device, library, @"fullscreen");
+    id<MTLTexture> target = Texture(device, kSize, kSize);
+    auto pass = ColorPass(target, false, kBlack);
+    pass.colors[0].discard_load = true;
+    encoder.BeginRenderPass(pass);
+    encoder.SetRenderPipeline((__bridge void*)solid);
+    encoder.SetViewport({0, 0, float(kSize), float(kSize), 0, 1});
+    encoder.SetScissor({0, 0, kSize / 2, kSize});
+    SetColor(encoder, kRed);
+    encoder.Draw(Metal::Primitive::Triangle, 3);
+    // Both halves will be written, but a blit interrupts the pass halfway. The
+    // reopened encoder must Load the already stored left half, not discard it.
+    id<MTLBuffer> scratch = SharedBuffer(device, 16);
+    encoder.FillBuffer(Ref(scratch), 16, 0);
+    encoder.SetScissor({kSize / 2, 0, kSize / 2, kSize});
+    SetColor(encoder, kGreen);
+    encoder.Draw(Metal::Primitive::Triangle, 3);
+    encoder.EndRenderPass();
+    id<MTLBuffer> out = Readback(device, encoder, target);
+    device.Wait(encoder.Submit());
+    bool ok = true;
+    for (u32 y = 0; y < kSize; ++y) {
+        for (u32 x = 0; x < kSize; ++x) {
+            ok &= Pixel(out, kSize, x, y) == (x < kSize / 2 ? kRed : kGreen);
+        }
+    }
+    Expect(ok, "DontCare only affects the first encoder; reopened passes preserve prior draws");
+    pass = ColorPass(target, true, kBlue);
+    pass.colors[0].discard_load = true;
+    encoder.BeginRenderPass(pass);
+    encoder.EndRenderPass(); // clear-only must still run, and Clear wins over DontCare
+    out = Readback(device, encoder, target);
+    device.Wait(encoder.Submit());
+    ok = true;
+    for (u32 y = 0; y < kSize; ++y) {
+        for (u32 x = 0; x < kSize; ++x) ok &= Pixel(out, kSize, x, y) == kBlue;
+    }
+    Expect(ok, "clear-only passes take precedence over discard-load hints");
+    Expect(device.ErrorCount() == 0, "discard color load ran without GPU errors");
+}
+
 void TestStatePersistsAcrossPasses() {
     Metal::Device device;
     Metal::Encoder encoder{device};
@@ -2705,6 +2750,7 @@ int main() {
         TestLargeBytes();
         TestClearOnlyPass();
         TestPassReopenKeepsDrawing();
+        TestDiscardColorLoad();
         TestStatePersistsAcrossPasses();
         TestIndexedDraw();
         TestBindingsEndAtSubmit();
