@@ -136,7 +136,10 @@ bool Continuous(const Description& previous, const Description& current) {
 double PresentDuration(float interval, uint32_t game_limit) {
     if (!std::isfinite(interval) || interval < 1.f / 240.f || interval > .1f)
         return 0;
-    const double period = game_limit ? std::max(double(interval), 1.0 / game_limit) : interval;
+    // Measured cadence includes nextDrawable backpressure. Feeding that delay
+    // back into the minimum display time lengthens later waits and can collapse
+    // the real-frame rate. Only the configured cap may request an extra hold.
+    const double period = game_limit ? 1.0 / game_limit : 0;
     return period * .5 * .97;
 }
 

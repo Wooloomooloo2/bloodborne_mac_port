@@ -74,12 +74,14 @@ void Policy() {
         Expect(!BbFrameGen::Continuous(previous, next), "invalid timing discards history");
         Expect(BbFrameGen::PresentDuration(interval, 60) == 0, "invalid timing cannot pace a pair");
     }
-    Expect(std::abs(BbFrameGen::PresentDuration(1.f / 30.f, 60) - .97 / 60) < 1e-8,
-           "a slower-than-cap real frame still divides its whole period evenly");
+    for (float interval : {1.f / 120.f, 1.f / 60.f, 1.f / 30.f, 1.f / 20.f, 1.f / 12.f}) {
+        Expect(std::abs(BbFrameGen::PresentDuration(interval, 120) - .97 / 240) < 1e-8,
+               "drawable backpressure cannot lengthen the next pair's display hold");
+    }
     Expect(std::abs(BbFrameGen::PresentDuration(1.f / 60.f, 30) - .97 / 60) < 1e-8,
            "a queued real frame cannot outrun the game frame cap");
-    Expect(std::abs(BbFrameGen::PresentDuration(1.f / 30.f, 0) - .97 / 60) < 1e-8,
-           "uncapped pacing follows the measured interval");
+    Expect(BbFrameGen::PresentDuration(1.f / 30.f, 0) == 0,
+           "uncapped output adds no measured-cadence display hold");
 }
 
 id<MTLDevice> Dev(Metal::Device& device) { return (__bridge id<MTLDevice>)device.NativeDevice(); }

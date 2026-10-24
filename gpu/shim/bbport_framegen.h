@@ -37,7 +37,9 @@ using FramePtr = std::shared_ptr<Frame>;
 // Only contiguous real frames with finite camera/timing inputs can share
 // history.
 bool Continuous(const Description& previous, const Description& current);
-// Half a real frame's period. The game FPS cap is a minimum period (0 = uncapped).
+// Half the configured cap's period, with scheduling slack. Measured real-frame
+// cadence only validates timing; drawable waits must not lengthen future holds.
+// Invalid timing or an uncapped game (0) requests no minimum display duration.
 double PresentDuration(float interval, uint32_t game_limit);
 
 class Generator {
