@@ -191,6 +191,10 @@ typedef struct {
      * for the game's pad emulation; keys_valid once written. Input proper is M5. */
     uint32_t keys_valid, overlay_captures; /* overlay_captures: the settings menu is open */
     uint8_t keys[512];
+    /* Mouse, window process -> game: motion since the game last read it (1/16 pixel units)
+     * and held buttons (bit0 left, 1 middle, 2 right, 3 x1, 4 x2). */
+    int32_t mouse_dx, mouse_dy;
+    uint32_t mouse_buttons, controls_seq; /* controls_seq: bumped when the overlay applies controls */
     /* Text entry in the host window (IME dialog): text_state 0 typing, 1 confirmed, 2 cancelled;
      * text_seq bumps with each update (written by the host, the game polls). */
     uint32_t text_active, text_state, text_seq, pad1;

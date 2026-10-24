@@ -245,6 +245,12 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
     return 0;
 }
 
+namespace Frontend {
+void BbMouseTake(int& dx, int& dy, uint32_t& buttons);
+}
+
+static uint32_t g_controls_dirty;
+
 extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
     BbSplit::InitHost(static_cast<BbGpuShared*>(shared));
     const int result = bbgpu_init(config);
@@ -262,6 +268,16 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
                 if (keys) {
                     std::memcpy(s->keys, keys, std::min<size_t>(size_t(count), sizeof s->keys));
                     __atomic_store_n(&s->keys_valid, 1u, __ATOMIC_RELEASE);
+                }
+                {
+                    int mdx = 0, mdy = 0;
+                    uint32_t mb = 0;
+                    Frontend::BbMouseTake(mdx, mdy, mb);
+                    if (mdx) __atomic_fetch_add(&s->mouse_dx, mdx, __ATOMIC_RELAXED);
+                    if (mdy) __atomic_fetch_add(&s->mouse_dy, mdy, __ATOMIC_RELAXED);
+                    __atomic_store_n(&s->mouse_buttons, mb, __ATOMIC_RELEASE);
+                    if (__atomic_exchange_n(&g_controls_dirty, 0u, __ATOMIC_ACQ_REL))
+                        __atomic_fetch_add(&s->controls_seq, 1u, __ATOMIC_RELEASE);
                 }
                 __atomic_store_n(&s->overlay_captures, BbOverlay::CapturesInput() ? 1u : 0u,
                                  __ATOMIC_RELAXED);
@@ -342,6 +358,28 @@ extern "C" const bool* bbgpu_split_keyboard(void) {
     }
     static_assert(sizeof(bool) == 1);
     return reinterpret_cast<const bool*>(BbSplit::Shared()->keys);
+}
+
+extern "C" int bbgpu_split_mouse(int* dx, int* dy, uint32_t* buttons) {
+    if (!BbSplit::Remote() || !__atomic_load_n(&BbSplit::Shared()->keys_valid, __ATOMIC_ACQUIRE)) {
+        return 0;
+    }
+    auto* s = BbSplit::Shared();
+    *dx = __atomic_exchange_n(&s->mouse_dx, 0, __ATOMIC_ACQ_REL);
+    *dy = __atomic_exchange_n(&s->mouse_dy, 0, __ATOMIC_ACQ_REL);
+    *buttons = __atomic_load_n(&s->mouse_buttons, __ATOMIC_ACQUIRE);
+    return 1;
+}
+
+extern "C" uint32_t bbgpu_split_controls_seq(void) {
+    if (!BbSplit::Remote() || !__atomic_load_n(&BbSplit::Shared()->keys_valid, __ATOMIC_ACQUIRE)) {
+        return 0;
+    }
+    return __atomic_load_n(&BbSplit::Shared()->controls_seq, __ATOMIC_ACQUIRE);
+}
+
+extern "C" void bbgpu_controls_applied(void) {
+    __atomic_store_n(&g_controls_dirty, 1u, __ATOMIC_RELEASE);
 }
 
 extern "C" void bbgpu_split_push(const void* record) {

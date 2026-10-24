@@ -1,3 +1,9 @@
+// bbport controls includes
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 // SPDX-License-Identifier: GPL-2.0-or-later
 #define IMGUI_DEFINE_MATH_OPERATORS // ImVec2 arithmetic for the custom-drawn controls
 #include "bbport_overlay.h"
@@ -637,7 +643,531 @@ bool IsStartupOption(int e) {
     return !std::strcmp(key, "skip_intro") || !std::strncmp(key, "debug_", 6);
 }
 
-enum Tab : int { TabDisplay = 0, TabGraphics, TabAdvanced, TabCount };
+// ---- bbport Controls tab: edit keyboard and mouse bindings (input.ini) in the overlay ----
+// Edits are staged in memory. "Apply controls" writes input.ini and tells the game to reload it.
+extern "C" void bbgpu_controls_applied(void);
+const ImVec4 kCtlWarn(1.0f, 0.62f, 0.04f, 1.0f); // orange: key used by two buttons
+
+struct CtlOutput {
+    const char* name;   // name in input.ini
+    const char* action; // what it does in Bloodborne
+    const char* pad;    // the controller button
+    const char* group;
+};
+constexpr CtlOutput kCtlOutputs[] = {
+    {"cross", "Action (interact / confirm)", "Cross", "Buttons"},
+    {"circle", "Backstep / Roll / Run", "Circle", "Buttons"},
+    {"square", "Use item", "Square", "Buttons"},
+    {"triangle", "Restore HP (Uses Blood Vial)", "Triangle", "Buttons"},
+    {"r1", "Attack (Right hand weapon) / Visceral attack", "R1", "Buttons"},
+    {"r2", "Strong attack (Right hand weapon)", "R2", "Buttons"},
+    {"l1", "Transform weapon / Transforming attack", "L1", "Buttons"},
+    {"l2", "Shoot (Left hand weapon)", "L2", "Buttons"},
+    {"r3", "Lock-on / Release target", "R3", "Buttons"},
+    {"l3", "Left stick click", "L3", "Buttons"},
+    {"options", "Open menu", "Options", "Buttons"},
+    {"up", "Quicksilver Bullet replenishment (drains HP)", "Up", "D-pad"},
+    {"down", "Toggle items", "Down", "D-pad"},
+    {"left", "Switch weapons (left hand)", "Left", "D-pad"},
+    {"right", "Switch weapons (right hand)", "Right", "D-pad"},
+    {"touchpad_left", "Gesture menu", "Touchpad L", "Touchpad"},
+    {"touchpad_right", "Personal Effects menu", "Touchpad R", "Touchpad"},
+    {"lstick_up", "Move forward", "Left stick up", "Movement"},
+    {"lstick_down", "Move back", "Left stick down", "Movement"},
+    {"lstick_left", "Move left", "Left stick left", "Movement"},
+    {"lstick_right", "Move right", "Left stick right", "Movement"},
+    {"rstick_up", "Camera up", "Right stick up", "Camera (keys)"},
+    {"rstick_down", "Camera down", "Right stick down", "Camera (keys)"},
+    {"rstick_left", "Camera left", "Right stick left", "Camera (keys)"},
+    {"rstick_right", "Camera right", "Right stick right", "Camera (keys)"},
+};
+constexpr int kCtlCount = int(sizeof(kCtlOutputs) / sizeof(kCtlOutputs[0]));
+constexpr int kCtlSlots = 6;
+constexpr int kCtlNameLen = 28;
+
+// The defaults the game itself uses when input.ini does not exist.
+constexpr const char* kCtlDefaults[][2] = {
+    {"cross", "space"}, {"cross", "return"}, {"cross", "keypad_enter"},
+    {"circle", "left_shift"}, {"circle", "escape"},
+    {"square", "e"}, {"triangle", "q"},
+    {"l1", "1"}, {"r1", "3"}, {"l2", "r"}, {"r2", "f"}, {"l3", "z"}, {"r3", "c"},
+    {"options", "f1"}, {"options", "o"},
+    {"up", "i"}, {"down", "k"}, {"left", "j"}, {"right", "l"},
+    {"up", "up"}, {"down", "down"}, {"left", "left"}, {"right", "right"},
+    {"touchpad_left", "tab"}, {"touchpad_right", "backspace"},
+    {"lstick_up", "w"}, {"lstick_down", "s"}, {"lstick_left", "a"}, {"lstick_right", "d"},
+    {"rstick_up", "up"}, {"rstick_down", "down"}, {"rstick_left", "left"}, {"rstick_right", "right"},
+    {"r1", "mouse_left"}, {"r2", "mouse_right"}, {"r3", "mouse_middle"},
+};
+
+struct CtlState {
+    char keys[kCtlCount][kCtlSlots][kCtlNameLen]; // "" = unused slot
+    float sens = 1.0f, full_px = 12.0f, deadzone = 0.10f;
+    bool invert_y = false;
+    bool loaded = false, dirty = false;
+    char status[96] = "";
+};
+CtlState ctl;
+// Capture ("press a key") is fed from the window thread (HandleEvent), consumed while drawing.
+std::atomic<bool> ctl_capturing{false};
+std::atomic<int> ctl_pending{-1}; // -1 none, -2 cancelled, 1..1023 scancode, 2000+n mouse button
+int ctl_cap_out = -1, ctl_cap_slot = -1; // slot -1 = add a new binding
+
+bool CtlCapturing() { return ctl_capturing.load(); }
+void CtlFeedKey(SDL_Scancode sc, bool repeat) {
+    if (repeat) {
+        return;
+    }
+    ctl_pending = sc == SDL_SCANCODE_ESCAPE ? -2 : int(sc);
+    ctl_capturing = false;
+}
+void CtlFeedMouse(int button) {
+    ctl_pending = 2000 + button;
+    ctl_capturing = false;
+}
+
+char* CtlTrim(char* s) {
+    while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') {
+        ++s;
+    }
+    char* e = s + std::strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) {
+        *--e = 0;
+    }
+    return s;
+}
+// "Left Shift" -> "left_shift" (the form input.ini uses).
+void CtlNormalize(const char* in, char* out, size_t n) {
+    size_t j = 0;
+    for (const char* p = in; *p && j + 1 < n; ++p) {
+        char c = *p;
+        if (c >= 'A' && c <= 'Z') {
+            c = char(c + 32);
+        }
+        out[j++] = c == ' ' ? '_' : c;
+    }
+    out[j] = 0;
+}
+// "left_shift" -> "Left Shift" (what the page shows).
+void CtlDisplay(const char* key, char* out, size_t n) {
+    size_t j = 0;
+    bool up = true;
+    for (const char* p = key; *p && j + 1 < n; ++p) {
+        char c = *p;
+        if (c == '_') {
+            out[j++] = ' ';
+            up = true;
+            continue;
+        }
+        if (up && c >= 'a' && c <= 'z') {
+            c = char(c - 32);
+        }
+        up = false;
+        out[j++] = c;
+    }
+    out[j] = 0;
+}
+int CtlFind(const char* name) {
+    for (int i = 0; i < kCtlCount; ++i) {
+        if (!std::strcmp(kCtlOutputs[i].name, name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+// Drops empty and repeated slots, keeping order.
+void CtlCompact(int out) {
+    char tmp[kCtlSlots][kCtlNameLen] = {};
+    int n = 0;
+    for (int s = 0; s < kCtlSlots; ++s) {
+        const char* k = ctl.keys[out][s];
+        if (!k[0]) {
+            continue;
+        }
+        bool dup = false;
+        for (int t = 0; t < n; ++t) {
+            dup |= !std::strcmp(tmp[t], k);
+        }
+        if (!dup) {
+            std::snprintf(tmp[n++], kCtlNameLen, "%s", k);
+        }
+    }
+    std::memset(ctl.keys[out], 0, sizeof ctl.keys[out]);
+    for (int t = 0; t < n; ++t) {
+        std::snprintf(ctl.keys[out][t], kCtlNameLen, "%s", tmp[t]);
+    }
+}
+bool CtlAdd(int out, const char* key) {
+    for (int s = 0; s < kCtlSlots; ++s) {
+        if (!std::strcmp(ctl.keys[out][s], key)) {
+            return true;
+        }
+    }
+    for (int s = 0; s < kCtlSlots; ++s) {
+        if (!ctl.keys[out][s][0]) {
+            std::snprintf(ctl.keys[out][s], kCtlNameLen, "%s", key);
+            return true;
+        }
+    }
+    return false;
+}
+int CtlUses(const char* key) { // how many different buttons use this key
+    int n = 0;
+    for (int i = 0; i < kCtlCount; ++i) {
+        for (int s = 0; s < kCtlSlots; ++s) {
+            if (!std::strcmp(ctl.keys[i][s], key)) {
+                ++n;
+                break;
+            }
+        }
+    }
+    return n;
+}
+void CtlDefaults() {
+    std::memset(ctl.keys, 0, sizeof ctl.keys);
+    for (const auto& d : kCtlDefaults) {
+        if (const int i = CtlFind(d[0]); i >= 0) {
+            CtlAdd(i, d[1]);
+        }
+    }
+    ctl.sens = 1.0f;
+    ctl.full_px = 12.0f;
+    ctl.deadzone = 0.10f;
+    ctl.invert_y = false;
+}
+// Same lookup order as the game (runtime_pad.c), so both always use the same file.
+void CtlPath(char* out, size_t n) {
+    out[0] = 0;
+    const char* env = std::getenv("BB_INPUT_INI");
+    const char* home = std::getenv("HOME");
+    if (env && *env) {
+        std::snprintf(out, n, "%s", env);
+    } else if (FILE* f = std::fopen("input.ini", "rb")) {
+        std::fclose(f);
+        std::snprintf(out, n, "input.ini");
+    } else if (home) {
+        std::snprintf(out, n, "%s/Library/Application Support/Bloodborne/input.ini", home);
+    }
+}
+void CtlLoad() {
+    CtlDefaults();
+    char path[1024];
+    CtlPath(path, sizeof path);
+    FILE* f = path[0] ? std::fopen(path, "rb") : nullptr;
+    ctl.loaded = true;
+    ctl.dirty = false;
+    ctl.status[0] = 0;
+    if (!f) {
+        return; // no file yet: the page shows the defaults
+    }
+    std::memset(ctl.keys, 0, sizeof ctl.keys);
+    char line[256];
+    while (std::fgets(line, sizeof line, f)) {
+        char* s = CtlTrim(line);
+        if (!*s || *s == '#') {
+            continue;
+        }
+        char* eq = std::strchr(s, '=');
+        if (!eq) {
+            continue;
+        }
+        *eq = 0;
+        char name[64];
+        CtlNormalize(CtlTrim(s), name, sizeof name);
+        char* val = CtlTrim(eq + 1);
+        if (!std::strncmp(name, "mouse_", 6)) {
+            const float v = float(std::atof(val));
+            if (!std::strcmp(name, "mouse_sensitivity")) ctl.sens = v;
+            else if (!std::strcmp(name, "mouse_invert_y")) ctl.invert_y = v != 0.0f;
+            else if (!std::strcmp(name, "mouse_full_px")) ctl.full_px = v;
+            else if (!std::strcmp(name, "mouse_deadzone")) ctl.deadzone = v;
+            continue;
+        }
+        const int i = CtlFind(name);
+        if (i >= 0 && *val) {
+            char key[kCtlNameLen];
+            CtlNormalize(val, key, sizeof key);
+            CtlAdd(i, key);
+        }
+    }
+    std::fclose(f);
+    ctl.sens = std::clamp(ctl.sens, 0.1f, 5.0f);
+    ctl.full_px = std::clamp(ctl.full_px, 2.0f, 60.0f);
+    ctl.deadzone = std::clamp(ctl.deadzone, 0.0f, 0.5f);
+}
+// Writes to a temporary file and renames it over input.ini, so the game never reads half a file.
+bool CtlSave() {
+    char path[1024];
+    CtlPath(path, sizeof path);
+    if (!path[0]) {
+        return false;
+    }
+    char tmp[1100], bak[1100];
+    std::snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    std::snprintf(bak, sizeof bak, "%s.bak", path);
+    if (FILE* b = std::fopen(bak, "rb")) { // keep the very first version as a backup
+        std::fclose(b);
+    } else if (FILE* src = std::fopen(path, "rb")) {
+        if (FILE* dst = std::fopen(bak, "wb")) {
+            char buf[4096];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof buf, src)) > 0) {
+                std::fwrite(buf, 1, n, dst);
+            }
+            std::fclose(dst);
+        }
+        std::fclose(src);
+    }
+    FILE* f = std::fopen(tmp, "wb");
+    if (!f) {
+        return false;
+    }
+    std::fputs("# Controls: output = key. Written by the in-game Controls tab.\n"
+               "# Keys are SDL names with _ for spaces; mouse_left/right/middle/x1/x2 are mouse buttons.\n",
+               f);
+    for (int i = 0; i < kCtlCount; ++i) {
+        bool any = false;
+        for (int s = 0; s < kCtlSlots; ++s) {
+            if (!ctl.keys[i][s][0]) {
+                continue;
+            }
+            if (!any) {
+                std::fprintf(f, "# %s (%s)\n", kCtlOutputs[i].action, kCtlOutputs[i].pad);
+                any = true;
+            }
+            std::fprintf(f, "%s = %s\n", kCtlOutputs[i].name, ctl.keys[i][s]);
+        }
+    }
+    std::fprintf(f,
+                 "# Mouse look\nmouse_sensitivity = %.2f\nmouse_invert_y = %d\n"
+                 "mouse_full_px = %.1f\nmouse_deadzone = %.2f\n",
+                 double(ctl.sens), ctl.invert_y ? 1 : 0, double(ctl.full_px), double(ctl.deadzone));
+    if (std::fclose(f) != 0) {
+        return false;
+    }
+    return std::rename(tmp, path) == 0;
+}
+
+// Reset / Revert / Apply for the overlay footer, next to Close (the footer never scrolls away).
+// Draws the three buttons, each followed by a SameLine(), so Close continues on the same row.
+void CtlFooterButtons(bool same_line_after = true) {
+    if (ImGui::Button("Reset to defaults")) {
+        ctl_capturing = false;
+        ctl_cap_out = ctl_cap_slot = -1;
+        CtlDefaults();
+        ctl.dirty = true;
+        ctl.status[0] = 0;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert")) {
+        ctl_capturing = false;
+        ctl_cap_out = ctl_cap_slot = -1;
+        CtlLoad();
+    }
+    ImGui::SameLine();
+    if (PrimaryButton("Apply controls")) {
+        if (CtlSave()) {
+            bbgpu_controls_applied();
+            ctl.dirty = false;
+            std::snprintf(ctl.status, sizeof ctl.status, "Controls applied");
+        } else {
+            std::snprintf(ctl.status, sizeof ctl.status, "Could not write input.ini");
+        }
+    }
+    if (same_line_after) {
+        ImGui::SameLine();
+    }
+}
+
+// Fallback when the overlay footer cannot be extended: the same buttons plus a status note on the page.
+constexpr bool kCtlPageButtons = true;
+void CtlPageBar(int which) {
+    ImGui::PushID(which + 2000);
+    CtlFooterButtons(false);
+    if (ctl.dirty) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, kCtlWarn);
+        ImGui::TextUnformatted("Unapplied changes");
+        ImGui::PopStyleColor();
+    } else if (ctl.status[0]) {
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
+        ImGui::TextUnformatted(ctl.status);
+        ImGui::PopStyleColor();
+    }
+    ImGui::PopID();
+}
+
+// Shortens text with "..." until it fits in maxw pixels (so labels never run into the key chips).
+void CtlFit(const char* text, float maxw, char* out, size_t n) {
+    std::snprintf(out, n, "%s", text);
+    if (ImGui::CalcTextSize(out).x <= maxw) {
+        return;
+    }
+    size_t len = std::strlen(text);
+    while (len > 1) {
+        --len;
+        std::snprintf(out, n, "%.*s...", int(len), text);
+        if (ImGui::CalcTextSize(out).x <= maxw) {
+            break;
+        }
+    }
+}
+
+void ControlsTab() {
+    if (!ctl.loaded) {
+        CtlLoad();
+    }
+    // A key or mouse button arrived from the window thread: put it where it was asked for.
+    const int pending = ctl_pending.exchange(-1);
+    if (pending != -1 && ctl_cap_out >= 0) {
+        if (pending > 0) {
+            char key[kCtlNameLen] = "";
+            if (pending >= 2000) {
+                static const char* const names[] = {"", "mouse_left", "mouse_middle", "mouse_right",
+                                                    "mouse_x1", "mouse_x2"};
+                const int b = pending - 2000;
+                if (b >= 1 && b <= 5) {
+                    std::snprintf(key, sizeof key, "%s", names[b]);
+                }
+            } else if (const char* nm = SDL_GetScancodeName(SDL_Scancode(pending)); nm && *nm) {
+                CtlNormalize(nm, key, sizeof key);
+            }
+            if (key[0]) {
+                if (ctl_cap_slot >= 0) {
+                    std::snprintf(ctl.keys[ctl_cap_out][ctl_cap_slot], kCtlNameLen, "%s", key);
+                    CtlCompact(ctl_cap_out);
+                } else {
+                    CtlAdd(ctl_cap_out, key);
+                }
+                ctl.dirty = true;
+            }
+        }
+        ctl_cap_out = ctl_cap_slot = -1;
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
+    ImGui::TextWrapped("Click a key to change it, right-click it to remove it, + adds another. "
+                       "Press Esc while waiting to cancel (Esc itself cannot be bound here). "
+                       "Orange keys are used by more than one button.");
+    ImGui::PopStyleColor();
+    if (kCtlPageButtons) {
+        CtlPageBar(0);
+    }
+
+    const float gap = 6.0f * base_scale;
+    float widest = 0.0f;
+    for (int i = 0; i < kCtlCount; ++i) {
+        char padtxt[48];
+        std::snprintf(padtxt, sizeof padtxt, "(%s)", kCtlOutputs[i].pad);
+        widest = std::max(widest, ImGui::CalcTextSize(kCtlOutputs[i].action).x + gap +
+                                      ImGui::CalcTextSize(padtxt).x);
+    }
+    const float col = std::min(widest + 16.0f * base_scale, ImGui::GetContentRegionAvail().x * 0.55f);
+    const char* group = nullptr;
+    for (int i = 0; i < kCtlCount; ++i) {
+        const CtlOutput& o = kCtlOutputs[i];
+        if (!group || std::strcmp(group, o.group)) {
+            group = o.group;
+            ImGui::SeparatorText(group);
+        }
+        ImGui::PushID(i);
+        const float x0 = ImGui::GetCursorPosX();
+        char padtxt[48], action[96];
+        std::snprintf(padtxt, sizeof padtxt, "(%s)", o.pad);
+        CtlFit(o.action, col - gap - ImGui::CalcTextSize(padtxt).x - 12.0f * base_scale, action,
+               sizeof action);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(action);
+        if (std::strcmp(action, o.action) && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", o.action);
+        }
+        ImGui::SameLine(0.0f, gap);
+        ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
+        ImGui::TextUnformatted(padtxt);
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(x0 + col);
+        int used = 0;
+        for (int s = 0; s < kCtlSlots; ++s) {
+            char* key = ctl.keys[i][s];
+            if (!key[0]) {
+                continue;
+            }
+            ++used;
+            if (used > 1) {
+                ImGui::SameLine();
+            }
+            const bool waiting = ctl_cap_out == i && ctl_cap_slot == s;
+            char label[64], shown[kCtlNameLen + 4];
+            CtlDisplay(key, shown, sizeof shown);
+            std::snprintf(label, sizeof label, "%s###k%d", waiting ? "Press a key..." : shown, s);
+            const bool clash = !waiting && CtlUses(key) > 1;
+            if (clash) {
+                ImGui::PushStyleColor(ImGuiCol_Text, kCtlWarn);
+            }
+            const bool clicked = ImGui::Button(label);
+            if (clash) {
+                ImGui::PopStyleColor();
+            }
+            if (clicked) {
+                if (waiting) { // click again to cancel
+                    ctl_capturing = false;
+                    ctl_cap_out = ctl_cap_slot = -1;
+                } else {
+                    ctl_pending = -1;
+                    ctl_cap_out = i;
+                    ctl_cap_slot = s;
+                    ctl_capturing = true;
+                }
+            } else if (ImGui::IsItemClicked(ImGuiMouseButton_Right) && !ctl_capturing) {
+                key[0] = 0;
+                CtlCompact(i);
+                ctl.dirty = true;
+            }
+        }
+        const bool adding = ctl_cap_out == i && ctl_cap_slot == -1;
+        if (adding) {
+            if (used) {
+                ImGui::SameLine();
+            }
+            if (ImGui::Button("Press a key...###knew")) {
+                ctl_capturing = false;
+                ctl_cap_out = ctl_cap_slot = -1;
+            }
+        } else if (used < kCtlSlots) {
+            if (used) {
+                ImGui::SameLine();
+            }
+            if (ImGui::SmallButton("+")) {
+                ctl_pending = -1;
+                ctl_cap_out = i;
+                ctl_cap_slot = -1;
+                ctl_capturing = true;
+            }
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::SeparatorText("Mouse look");
+    bool changed = false;
+    changed |= ImGui::SliderFloat("Sensitivity", &ctl.sens, 0.1f, 5.0f, "%.2f");
+    changed |= ImGui::Checkbox("Invert vertical look", &ctl.invert_y);
+    ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
+    ImGui::TextWrapped("Higher sensitivity turns the camera faster. F6 releases or captures the mouse in game.");
+    ImGui::PopStyleColor();
+    if (changed) {
+        ctl.dirty = true;
+        ctl.status[0] = 0;
+    }
+    if (kCtlPageButtons) {
+        ImGui::Spacing();
+        CtlPageBar(1);
+    }
+}
+
+
+enum Tab : int { TabDisplay = 0, TabGraphics, TabAdvanced, TabControls, TabCount };
 int current_tab = TabDisplay;
 std::atomic<bool> gamepad_in_use{false}; // last menu input came from a pad: show L1/R1 hints
 
@@ -1045,7 +1575,7 @@ void Menu() {
 
     // Tabs: a centred segmented control. Gamepad L1/R1 switch tabs as in console menus.
     {
-        static const char* tabs[TabCount] = {"Display", "Graphics", "Advanced"};
+        static const char* tabs[TabCount] = {"Display", "Graphics", "Advanced", "Controls"};
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
             !ImGui::IsAnyItemActive()) {
             if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
@@ -1091,6 +1621,7 @@ void Menu() {
         switch (current_tab) {
         case TabDisplay: DisplayTab(s); break;
         case TabGraphics: GraphicsTab(s); break;
+        case TabControls: ControlsTab(); break;
         default: AdvancedTab(s); break;
         }
         ImGui::EndChild();
@@ -1439,6 +1970,10 @@ bool HandleEvent(const SDL_Event& event) {
         if (toggle && event.key.repeat) {
             return true; // auto-repeat of the shortcut: never reaches the game
         }
+        if (down && is_open && !toggle && current_tab == TabControls && CtlCapturing()) {
+            CtlFeedKey(event.key.scancode, event.key.repeat); // Controls tab: binding a key
+            return true;
+        }
         if (down && (toggle || (is_open && event.key.key == SDLK_ESCAPE))) {
             SetOpen(toggle ? !is_open : false);
             held_scancode = event.key.scancode;
@@ -1518,6 +2053,10 @@ bool HandleEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_BUTTON_UP: {
         if (!is_open) {
             return false;
+        }
+        if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && current_tab == TabControls && CtlCapturing()) {
+            CtlFeedMouse(event.button.button); // Controls tab: binding a mouse button
+            return true;
         }
         const int button = event.button.button == SDL_BUTTON_LEFT    ? 0
                            : event.button.button == SDL_BUTTON_RIGHT  ? 1

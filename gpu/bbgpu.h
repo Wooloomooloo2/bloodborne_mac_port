@@ -46,6 +46,13 @@ void bbgpu_split_push(const void *record);
 /* Game side: the host window's keyboard state (SDL scancode-indexed, 512 entries) while the
  * renderer runs in the GPU host, else NULL. */
 const bool *bbgpu_split_keyboard(void);
+/* Game side: mouse motion since the last call (1/16 pixels) and held buttons from the host
+ * window; 0 when there is no split host. */
+int bbgpu_split_mouse(int *dx, int *dy, uint32_t *buttons);
+/* Game side: counter that changes when the overlay applies new controls (0 without a split host). */
+uint32_t bbgpu_split_controls_seq(void);
+/* Overlay side: tells the game to reload its control bindings. */
+void bbgpu_controls_applied(void);
 /* Registers kernel event queues (needed with or without graphics). */
 void bbgpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
