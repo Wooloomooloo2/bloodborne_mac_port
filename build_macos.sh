@@ -122,6 +122,10 @@ if [[ ${1:-} == --test ]]; then
     out/mac-menu-test
     "$CC" "${cflags[@]}" -I. -Isrc tests/test_exit_menu.c -o out/exit-menu-test
     out/exit-menu-test
+
+    /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Werror -pthread -Igpu/shim \
+        tests/test_frame_rates.cpp -o out/frame-rates-test
+    out/frame-rates-test
     bash tests/test_launch_settings.sh
     bash scripts/macos/build_launcher.sh --test
     # Shared control block rings between bb-probe (x86-64) and bbgpu-host (arm64).
