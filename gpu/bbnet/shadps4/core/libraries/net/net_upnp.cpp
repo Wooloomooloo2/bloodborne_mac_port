@@ -17,6 +17,10 @@
 
 namespace Libraries::Net {
 
+// bbport: the lease of a mapping, renewed at half of it (RefreshThread).
+constexpr int UpnpLeaseSeconds = 3600;
+constexpr int UpnpOnlyPermanentLeases = 725;
+
 UPnPClient& UPnPClient::Instance() {
     static UPnPClient instance;
     return instance;
@@ -27,7 +31,14 @@ UPnPClient::~UPnPClient() {
         m_thread.join();
     if (m_map_thread.joinable())
         m_map_thread.join();
-    // Mappings have no lease time: leave nothing behind on the router.
+    {
+        std::scoped_lock lock{m_refresh_mutex};
+        m_refresh_stop = true;
+    }
+    m_refresh_cv.notify_all();
+    if (m_refresh_thread.joinable())
+        m_refresh_thread.join();
+    // Leave nothing behind on the router (a lease would end within the hour anyway).
     if (const u16 port = m_mapped_port.exchange(0); port != 0)
         RemoveMapping(port);
     if (const u16 port = m_mapped_external.exchange(0); port != 0)
@@ -134,11 +145,21 @@ void UPnPClient::AddMapping(u16 external, u16 internal) {
 
     const std::string external_str = std::to_string(external);
     const std::string internal_str = std::to_string(internal);
-    const int ret =
-        UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype, external_str.c_str(),
-                            internal_str.c_str(), m_lan_addr, "shadPS4", "UDP", nullptr, "0");
+    // bbport: a lease ("0" was permanent), unless the router takes only permanent mappings.
+    const std::string lease = std::to_string(UpnpLeaseSeconds);
+    auto add = [&](const char* duration) {
+        return UPNP_AddPortMapping(m_urls.controlURL, m_data.first.servicetype,
+                                   external_str.c_str(), internal_str.c_str(), m_lan_addr,
+                                   "shadPS4", "UDP", nullptr, duration);
+    };
+    int ret = add(m_permanent_only.load() ? "0" : lease.c_str());
+    if (ret == UpnpOnlyPermanentLeases && !m_permanent_only.exchange(true)) {
+        LOG_INFO(Lib_Net, "UPNP: the router takes only permanent mappings (removed on exit)");
+        ret = add("0");
+    }
 
     if (ret == UPNPCOMMAND_SUCCESS) {
+        StartRefresh();
         m_external_port.store(external);
         if (external == internal)
             LOG_INFO(Lib_Net, "UPNP: mapped UDP port {}", external);
@@ -163,6 +184,7 @@ void UPnPClient::MapExternalPortAsync(u16 external, u16 internal) {
             LOG_INFO(Lib_Net, "UPNP: no IGD, router UDP port {} is not forwarded", external);
             return;
         }
+        m_mapped_internal.store(internal);
         const u16 previous = m_mapped_external.exchange(external);
         if (previous != 0 && previous != external)
             RemoveMapping(previous);
@@ -193,6 +215,27 @@ void UPnPClient::UnmapPort(u16 port) {
     u16 expected = port;
     if (m_mapped_port.compare_exchange_strong(expected, 0))
         RemoveMapping(port);
+}
+
+void UPnPClient::StartRefresh() {
+    std::scoped_lock lock{m_refresh_mutex};
+    if (!m_refresh_stop && !m_refresh_thread.joinable())
+        m_refresh_thread = std::thread(&UPnPClient::RefreshThread, this);
+}
+
+void UPnPClient::RefreshThread() {
+    std::unique_lock lock{m_refresh_mutex};
+    while (!m_refresh_cv.wait_for(lock, std::chrono::seconds(UpnpLeaseSeconds / 2),
+                                  [this] { return m_refresh_stop; })) {
+        if (m_permanent_only.load())
+            continue;
+        lock.unlock();
+        if (const u16 port = m_mapped_port.load(); port != 0)
+            AddMapping(port);
+        if (const u16 port = m_mapped_external.load(); port != 0)
+            AddMapping(port, m_mapped_internal.load());
+        lock.lock();
+    }
 }
 
 void UPnPClient::RemoveMapping(u16 port) {

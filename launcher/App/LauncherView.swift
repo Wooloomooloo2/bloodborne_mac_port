@@ -262,6 +262,8 @@ struct LauncherView: View {
             }
             Section("Connection") {
                 Toggle("Ask the router to forward the co-op port (UPnP)", isOn: $model.online.upnp)
+                Text("On by default: while the game runs on the shadNet pool, the router forwards the co-op UDP port to this Mac (an hour at a time, renewed; removed on exit). Off, forward the port by hand if bells are not answered.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("Co-op UDP port", text: $model.p2pPortText)
                     .onChange(of: model.p2pPortText) { _, text in
                         let digits = String(text.filter { $0.isASCII && $0.isNumber }.prefix(5))

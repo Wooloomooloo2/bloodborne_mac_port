@@ -59,6 +59,11 @@ private:
     UPnPClient& operator=(const UPnPClient&) = delete;
 
     void DiscoverThread();
+    // bbport: mappings are leased for an hour and renewed every half hour while the game runs,
+    // so a crashed game leaves nothing forwarded for long; routers that only take permanent
+    // mappings get one (removed on exit as before).
+    void StartRefresh();
+    void RefreshThread();
 
     std::atomic<bool> m_started{false};
     std::atomic<bool> m_p2p_features_enabled{true};
@@ -68,6 +73,8 @@ private:
     std::atomic<u16> m_external_port{0};
     std::atomic<u16> m_mapped_port{0}; // forwarded by MapPortAsync, removed on exit
     std::atomic<u16> m_mapped_external{0}; // bbport: MapExternalPortAsync's router port
+    std::atomic<u16> m_mapped_internal{0}; // bbport: ... and the port it goes to
+    std::atomic<bool> m_permanent_only{false}; // bbport: the router refused a lease (725)
     char m_external_ip_str[16]{};
 
     char m_lan_addr[64]{};
@@ -79,6 +86,10 @@ private:
     std::thread m_thread;
     std::mutex m_map_mutex; // serializes MapPortAsync / UnmapPort
     std::thread m_map_thread;
+    std::mutex m_refresh_mutex; // bbport: the lease renewal
+    std::condition_variable m_refresh_cv;
+    bool m_refresh_stop = false;
+    std::thread m_refresh_thread;
 };
 
 } // namespace Libraries::Net

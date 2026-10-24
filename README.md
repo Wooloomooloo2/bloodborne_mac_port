@@ -565,9 +565,11 @@ connection, backing off on errors), and the game's play log goes out at the game
   opt-out). **The shadNet protocol itself is plain TCP** (its server offers no TLS listener: the
   password goes to `srv.shadps4.net:31313` unencrypted) and its WebAPI is plain HTTP, so use a
   password that is only for shadNet. The Hunter's Dream pool has no such exposure.
-- **The network.** Co-op opens one UDP port (`p2p_port`, 3658) and asks the router to forward it
-  through UPnP while the game runs (removed on exit); peers reach it directly or through the
-  server's relay. What arrives is parsed by the game's own network code, as on a PS4. `upnp=0`
+- **The network.** Co-op opens one UDP port (`p2p_port`, 3658) and, on the shadNet pool, asks the
+  router to forward it through UPnP (on by default) while the game runs: an hour's lease renewed
+  every half hour and removed on exit, so a game that crashed leaves the port forwarded for an
+  hour at most (routers that take only permanent mappings get one, removed on exit). Peers reach
+  it directly or through the server's relay. What arrives is parsed by the game's own network code, as on a PS4. `upnp=0`
   keeps the router untouched.
 - **Identity.** The module reports itself to shadNet as `shadPS4 v0.20.0` (the server signs out
   other names) and to The Hunter's Dream as `bbport-mac <version>` (`BB_CLIENT_VERSION`); the Discord
