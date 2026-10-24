@@ -459,6 +459,41 @@ void TestSnapshot(Device& device, PresentPasses& passes, PresentQueue& queue) {
     unlink(path);
 }
 
+void TestFramePair(Device& device, PresentPasses& passes, PresentQueue& queue) {
+    CAMetalLayer* layer = OffscreenLayer(device, 64, 36, 3);
+    Object source = RedFrame(device);
+    auto packet = std::make_shared<int>(1);
+    std::weak_ptr<int> lifetime = packet;
+    const u64 tick = device.CurrentTick();
+    std::atomic<int> done{0};
+    WithAutoreleasePool([&] {
+        auto real = NextDrawable((__bridge void*)layer);
+        auto generated = NextDrawable((__bridge void*)layer);
+        Expect(real.drawable && generated.drawable, "three-drawable layer admits a frame pair");
+        if (!real.drawable || !generated.drawable) return;
+        void* first = queue.Begin();
+        queue.WaitForDeviceTick(first, tick);
+        passes.Present(first, source.Get(), 64, 36, generated.texture, 64, 36);
+        queue.Commit(first, generated.drawable.Get(), [&done] { ++done; }, .97 / 120);
+        void* second = queue.Begin();
+        queue.WaitForDeviceTick(second, tick);
+        passes.Present(second, source.Get(), 64, 36, real.texture, 64, 36);
+        queue.Commit(second, real.drawable.Get(), [packet, &done] { ++done; }, .97 / 120);
+    });
+    packet.reset();
+    Expect(!lifetime.expired() && done == 0,
+           "pair retains its source while both presents wait for the render tick");
+    Encoder render{device};
+    render.CommandBuffer();
+    const u64 submitted = render.Submit();
+    Expect(submitted == tick, "pair waits for the correct render submission");
+    queue.WaitIdle();
+    // Completion handlers release captured state just after notifying WaitIdle.
+    for (int n = 0; !lifetime.expired() && n < 100; ++n)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    Expect(done == 2 && lifetime.expired(), "both images complete before source retirement");
+}
+
 void TestEventWait(Device& device, PresentQueue& queue) {
     constexpr u32 kPattern = 0x5a5a5a5au;
     id<MTLBuffer> gpu_only = [Dev(device) newBufferWithLength:256
@@ -632,6 +667,7 @@ int main() {
             PresentQueue queue{device};
             TestPresentLetterbox(device, passes, queue);
             TestSnapshot(device, passes, queue);
+            TestFramePair(device, passes, queue);
             TestEventWait(device, queue);
             TestAutoreleaseLoop(device, passes, queue);
         }
