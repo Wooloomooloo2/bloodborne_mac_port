@@ -12,6 +12,8 @@
 #import <Metal/Metal.h>
 
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -74,6 +76,20 @@ double Changed(Target& t, u32 x0, u32 y0, u32 x1, u32 y1) {
         }
     }
     return double(changed) / double(size_t(x1 - x0) * (y1 - y0));
+}
+
+std::array<int, 4> CounterBounds(Target& t) {
+    constexpr int w = 600, h = 240;
+    std::vector<u8> pixels(w * h * 4);
+    [t.texture getBytes:pixels.data() bytesPerRow:w * 4
+             fromRegion:MTLRegionMake2D(Width - w, 0, w, h) mipmapLevel:0];
+    std::array<int, 4> bounds{w, h, -1, -1};
+    for (int y = 0; y < h; ++y) for (int x = 0; x < w; ++x) {
+        if (std::memcmp(&pixels[(y * w + x) * 4], Fill, 4) == 0) continue;
+        bounds[0] = std::min(bounds[0], x); bounds[1] = std::min(bounds[1], y);
+        bounds[2] = std::max(bounds[2], x); bounds[3] = std::max(bounds[3], y);
+    }
+    return bounds;
 }
 
 SDL_Event Key(SDL_Keycode key, SDL_Keymod mod, bool down) {
@@ -186,6 +202,22 @@ int main() {
         Expect(counter() != counter_before, "displayed FPS changes independently of real FPS");
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 120});
         Expect(counter() == counter_before, "FPS labels return to the same measured values");
+        const auto normal_bounds = CounterBounds(t);
+        s.startup_framegen = true;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        const auto framegen_bounds = CounterBounds(t);
+        Expect(framegen_bounds[2] - framegen_bounds[0] > normal_bounds[2] - normal_bounds[0],
+               "framegen reserves a wider FPS counter");
+        const std::array<BbFrameRates::Sample, 6> changing_rates{{
+            {9, 18}, {99, 198}, {100, 200}, {999, 1998}, {0, 0}, {60, 120}}};
+        for (const auto rates : changing_rates) {
+            for (int i = 0; i < 4; ++i) Present(t, true, rates);
+            Expect(CounterBounds(t) == framegen_bounds,
+                   "FPS digit counts and unavailable readings cannot shift the counter bounds");
+        }
+        s.startup_framegen = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(CounterBounds(t) == normal_bounds, "normal counter width is restored");
         // A generated/real pair reuses one UI frame. Replaying must draw exactly
         // the same pixels without sampling the FPS clock or consuming input twice.
         Target repeated{t.queue, [mtl newTextureWithDescriptor:desc]};

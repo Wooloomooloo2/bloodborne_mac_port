@@ -1213,10 +1213,22 @@ void Menu() {
 
 void FpsCounter() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const auto& s = BbSettings::Get();
     const float pad = 14.0f * base_scale;
+    const float gap = 8.0f * base_scale;
+    const float fps_width = ImGui::CalcTextSize("9999 FPS").x;
+    const float ms_width = ImGui::CalcTextSize("9999.9 ms").x;
+    const float row_width = ImGui::CalcTextSize("Displayed").x + fps_width + ms_width + gap * 2;
+    const float resolution_width =
+        ImGui::CalcTextSize("9999x9999 -> 9999x9999  MetalFX").x * .82f;
+    const float width = std::max(row_width, resolution_width) + 22.0f * base_scale +
+                        (s.startup_framegen ? 16.0f * base_scale : 0.0f);
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - pad,
                                    viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // Reserve digit/frametime space once. Auto height still follows the resolution
+    // line, but changing FPS values cannot resize the box or move either column.
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.62f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * base_scale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(11.0f, 7.0f) * base_scale);
@@ -1226,12 +1238,17 @@ void FpsCounter() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
-    const auto& s = BbSettings::Get();
-    const auto row = [](const char* label, double fps) {
-        ImGui::Text("%s %.0f FPS", label, fps);
+    const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    const auto row = [&](const char* label, double fps) {
+        ImGui::TextUnformatted(label);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%.0f FPS", fps);
+        ImGui::SameLine(right - ms_width - gap - ImGui::CalcTextSize(text).x);
+        ImGui::TextUnformatted(text);
         if (fps > 0) {
-            ImGui::SameLine();
-            ImGui::TextColored(kSecondary, "%.1f ms", 1000.0 / fps);
+            std::snprintf(text, sizeof(text), "%.1f ms", 1000.0 / fps);
+            ImGui::SameLine(right - ImGui::CalcTextSize(text).x);
+            ImGui::TextColored(kSecondary, "%s", text);
         }
     };
     row("Real", frame_rates.real_fps);
