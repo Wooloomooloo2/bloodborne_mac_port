@@ -53,6 +53,10 @@ and the final real-frame present pin the relevant sets until all reads complete.
 The two presents wait on the same render tick. A three-drawable layer admits the
 pair; a missing second drawable presents the real frame alone. The same overlay
 draw data is rendered over both images without advancing UI/input/FPS timing twice.
+The minimum display interval comes only from the configured real FPS cap (half its
+period, with scheduling slack). Measured frame cadence includes drawable waits;
+using it to extend the next display hold creates a feedback loop that can collapse
+real FPS. Uncapped output requests no additional minimum display duration.
 
 Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
 timing, and gaps in real-frame sequence reset history. Menus/loading screens with
@@ -67,13 +71,9 @@ the scene hidden by the previous HUD. Moving/fading HUD elements, transparency a
 disocclusions can still leave artifacts. Extended gameplay, input latency, GPU cost,
 and long-session behavior still require QA.
 
-A short DLC-enabled smoke check on an M4 Max (macOS 27, 1920x1080 MetalFX Native AA,
-30 FPS real-frame cap, private save clone) showed 30 real / 30 displayed FPS on a
-real-only menu and approximately 20 real / 40 displayed FPS in the fixed city-gate
-scene with interpolation active. The wider counter and aligned columns were also
-checked in that scene. This verifies the counter and presentation path; it is not
-a controlled performance comparison or a latency/long-session test. Frame generation
-can lower the real-frame rate through its additional GPU work.
+The counter, wider layout and presentation path have also been checked in the
+DLC-enabled city-gate scene. The timed comparison below includes actual real and
+displayed cadence; generation still adds GPU work and can lower real FPS.
 
 Offscreen checks (no game/window):
 
@@ -106,6 +106,51 @@ geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
 pixels interpolated to the expected midpoint 49.5. These are fixture results,
 not gameplay or FPS measurements. The existing present and overlay fixtures also
 cover paired drawable retirement and identical overlay pixels.
+
+### Gameplay benchmark and pacing regression (2026-10-24)
+
+An M4 Max with 48 GiB memory and macOS 27.0 (26A428), on battery power, ran the
+same stationary city-gate scene at 1920x1080 MetalFX Native AA. Each launch used
+private copies of the same DLC-dependent save and warmed GPU cache, with neutral
+scripted input. All three add-ons, including `SPEXPANSIONDLC03`, were recognized.
+This is a base-game scene with DLC loaded, not a DLC-area benchmark. The common
+benchmark runtime included the existing DLC-folder discovery provider from
+`bloodborne_mac`; that helper is separate from this renderer PR.
+
+The original presentation policy fed measured frame cadence back into minimum
+display holds. Two 60-second framegen-on samples at a 120 FPS cap averaged
+17.51–21.01 real / 34.83–41.91 displayed FPS. Changing only the hold policy to use
+the configured cap recovered 58.11 real / 116.22 displayed FPS, with the same
+capture, interpolation and HUD work. Regression tests now ensure that observed
+slow frames cannot lengthen future display holds. The display-link loop in the
+original port releases its producer independently of those presentation updates.
+
+The corrected 60 FPS-cap comparison used the **same binary**, changing only
+`framegen=0|1`. Both modes had at least 30 seconds of gameplay warmup followed by
+a 60-second sample, with snapshots outside the timing window. Thermal state was
+fair throughout both samples. GPU builds used arm64 RelWithDebInfo, LTO off;
+Metal validation was off for timing and the FPS overlay was on.
+
+| Mode | Stream | FPS | Mean ms | P95 ms | P99 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Off | Real | 60.00 | 16.67 | 16.69 | 16.70 |
+| Off | Displayed | 60.00 | 16.67 | 16.67 | 16.67 |
+| On, corrected | Real | 59.06 | 16.93 | 16.99 | 25.02 |
+| On, corrected | Displayed | 118.12 | 8.47 | 8.33 | 16.67 |
+
+Real throughput was 1.6% lower; displayed throughput was 96.9% higher in this
+pair. Real intervals count new game frames at the presenter; displayed intervals
+use distinct positive drawable presentation timestamps. These are cadence
+intervals, not GPU durations or input latency. Included windows had no logged
+occlusion, render errors or render stalls; an interrupted control was excluded.
+All original source-save hashes remained unchanged.
+
+At a 120 FPS real cap, valid off controls varied from 63.28 to 77.04 FPS. Battery
+and thermal conditions do not establish constant clocks. Showing two images per
+real frame on this 120 Hz panel also bounds the paired path near 60 real FPS, so
+that uncapped comparison does not isolate interpolation's GPU cost. The observed
+60-cap result is specific to this scene and target; traversal, latency, AC-power
+performance and long-session behavior remain untested.
 
 API reference: [Apple's frame interpolator documentation](https://developer.apple.com/documentation/metalfx/mtlfxframeinterpolatorbase).
 Snapshot/presentation ideas were adapted from the direct-Metal `bloodborne_mac`
