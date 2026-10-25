@@ -457,6 +457,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
   targets created at the 16:9 size for the first frames before the native-size patch's sizes are
   seen (`vk_rasterizer.cpp` "observed scene depth"). Capture a frame (`BB_FRAME_CAPTURE`) while it
   happens.
+- **Small ABI and safety items from the Paleblood assessment (2026-10-25, low).** Verified against
+  master; none affects the shipped game: semaphore handles are written as 4 bytes
+  (`src/runtime_sema.c`, libkernel stores 8); sysmodule IDs are `uint16_t`
+  (`src/runtime_content.c`); `BBPORT_GS_SLOT` overrides in `scripts/link_libc.py` are not checked
+  against the runtime's fixed slot 384 (record the slot in link.json, refuse a mismatch);
+  `address + size` checks in `src/runtime_memory.c` can wrap on garbage sizes (check before
+  adding); `tools/bbrecomp/proto/check4.c` (static-recompilation branch) exits 0 on mismatches.
+  Fix independently; do not copy Paleblood's GPL-3 sources.
 
 ## 2. Performance
 
