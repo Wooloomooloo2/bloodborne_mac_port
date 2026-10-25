@@ -535,13 +535,18 @@ void on_server_event(const Json& ev) {
 
 // ---- the imports -----------------------------------------------------------------------------------
 
+// Serialize context transitions, but release g.mu before waiting for network workers: the
+// poller's event handler also takes g.mu.
+std::mutex g_context_lifecycle_mu;
+
 s32 PS4_SYSV_ABI m2_initialize(const void*) {
     Log("sceNpMatching2Initialize");
     return 0;
 }
 s32 PS4_SYSV_ABI m2_terminate() {
-    std::lock_guard lk(g.mu);
+    std::lock_guard lifecycle(g_context_lifecycle_mu);
     PollerStop();
+    std::lock_guard lk(g.mu);
     g.started = false;
     return 0;
 }
@@ -561,6 +566,7 @@ s32 PS4_SYSV_ABI m2_register_context_cb(void* fn, void* arg) {
     return 0;
 }
 s32 PS4_SYSV_ABI m2_context_start(unsigned ctx, unsigned) {
+    std::lock_guard lifecycle(g_context_lifecycle_mu);
     std::lock_guard lk(g.mu);
     if (ctx != g.ctx_id) return kErrContext;
     if (g.started) return 0;
@@ -591,14 +597,16 @@ s32 PS4_SYSV_ABI m2_context_start(unsigned ctx, unsigned) {
     return 0;
 }
 s32 PS4_SYSV_ABI m2_context_stop(unsigned) {
-    std::lock_guard lk(g.mu);
+    std::lock_guard lifecycle(g_context_lifecycle_mu);
     PollerStop();
+    std::lock_guard lk(g.mu);
     g.started = false;
     return 0;
 }
 s32 PS4_SYSV_ABI m2_destroy_context(unsigned) {
-    std::lock_guard lk(g.mu);
+    std::lock_guard lifecycle(g_context_lifecycle_mu);
     PollerStop();
+    std::lock_guard lk(g.mu);
     end_session_locked("context destroyed");
     g.started = false;
     g.ctx_cb = g.room_cb = g.sig_cb = g.lobby_cb = nullptr;

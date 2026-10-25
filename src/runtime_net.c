@@ -73,6 +73,11 @@ static BbNetResolveFn module_resolve(void) {
         char *slash=strrchr(exe,'/');
         if (slash) *slash=0;
         snprintf(path,sizeof(path),"%s/gpu/%s",exe,BBNET_MODULE_FILE);
+#ifdef __APPLE__
+        /* Release apps keep libraries in Contents/Frameworks, next to MacOS/bb-probe. */
+        if (access(path,R_OK)!=0)
+            snprintf(path,sizeof(path),"%s/../Frameworks/%s",exe,BBNET_MODULE_FILE);
+#endif
     }
     /* RTLD_LOCAL: its C++ (network and NP libraries) stays out of the process's symbol scope. */
     void *module=dlopen(path,RTLD_NOW|RTLD_LOCAL);

@@ -202,6 +202,7 @@ struct HttpResult {
 };
 
 // The poller's connection, for PollerStop to cut a held poll short (bbport: long polling).
+std::atomic<bool> g_pollrun{false};
 std::mutex g_poll_client_mu;
 httplib::Client* g_poll_client = nullptr;
 thread_local bool t_is_poller = false;
@@ -216,15 +217,19 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
     const auto timeout = std::chrono::milliseconds(timeout_ms);
     const auto connect_timeout = std::chrono::milliseconds(std::min(timeout_ms, 5000));
     auto open = [&] {
-        cli = std::make_unique<httplib::Client>(base);
-        cli->set_keep_alive(true);
-        cli->set_follow_location(false);
+        auto next = std::make_unique<httplib::Client>(base);
+        next->set_keep_alive(true);
+        next->set_follow_location(false);
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        cli->enable_server_certificate_verification(Cfg().verify_tls);
+        next->enable_server_certificate_verification(Cfg().verify_tls);
 #endif
         if (t_is_poller) {
+            // Replacing a client must not invalidate the pointer PollerStop is using.
             std::lock_guard lk(g_poll_client_mu);
+            cli = std::move(next);
             g_poll_client = cli.get();
+        } else {
+            cli = std::move(next);
         }
     };
     const bool reused = cli != nullptr;
@@ -243,10 +248,15 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
         return post ? cli->Post(path, headers, *post, "application/json") : cli->Get(path, headers);
     };
     HttpResult r;
+    if (t_is_poller && !g_pollrun.load()) {
+        r.error = "polling stopped";
+        return r;
+    }
     httplib::Result res = send();
-    // A kept-alive connection the server closed meanwhile fails on its first read or write
-    // ("Failed to read connection"): once more on a new one, as bbhost's fresh request would.
-    if (!res && reused && (res.error() == httplib::Error::Read || res.error() == httplib::Error::Write)) {
+    // Retry safe reads on a stale keep-alive connection. A lost POST response may already
+    // have created/joined a room: replaying it can apply the action twice.
+    if (!res && !post && reused &&
+        (res.error() == httplib::Error::Read || res.error() == httplib::Error::Write)) {
         open();
         res = send();
     }
@@ -255,8 +265,10 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
         if (t_is_poller) {
             std::lock_guard lk(g_poll_client_mu);
             g_poll_client = nullptr;
-        }
-        cli.reset(); // a fresh connection next time
+            cli.reset();
+        } else {
+            cli.reset();
+        } // a fresh connection next time
         return r;
     }
     r.status = res->status;
@@ -742,7 +754,10 @@ void RoomClear() {
 namespace {
 std::mutex g_pollmu;
 std::condition_variable g_pollcv;
-std::atomic<bool> g_pollrun{false};
+// Start/stop serialize without holding the matching state or worker mutexes while joining.
+std::mutex g_poll_lifecycle_mu;
+std::thread g_poll_thread, g_keep_thread;
+bool g_poll_finished = true;
 std::function<void(const Json&)> g_handler;
 long long g_cursor = 0;
 
@@ -773,16 +788,22 @@ void PollerMain() {
         Json reply;
         std::string err;
         const int timeout_ms = wait_ms > 0 ? wait_ms + 5000 : 4000;
-        if (NpPost("/np/events/poll", body, reply, err, timeout_ms)) {
+        const auto poll_started = Clock::now();
+        const bool answered = NpPost("/np/events/poll", body, reply, err, timeout_ms);
+        if (!g_pollrun.load()) break; // a stopped context must not deliver or ack an old event
+        if (answered) {
             backoff_ms = 0;
-            // Every answer from a server that holds polls carries WaitMaxMs.
-            const int max_wait = static_cast<int>(IntOf(reply, "WaitMaxMs", 0));
-            wait_ms = max_wait > 0 ? std::min(kPollWaitMs, max_wait) : 0;
+            // Clamp in the wire integer's width before narrowing to avoid overflow.
+            const int max_wait = static_cast<int>(std::clamp<long long>(IntOf(reply, "WaitMaxMs", 0), 0, kPollWaitMs));
+            wait_ms = max_wait;
             if (wait_ms > 0 && !long_polling_logged) {
                 Log("np: the server holds polls (WaitMaxMs %d): long polling with WaitMs %d", max_wait, wait_ms);
                 long_polling_logged = true;
             }
-            interval_ms = wait_ms > 0 ? 0 : 250; // the server waited, or the old pace
+            // A server can advertise long polling yet return an empty answer immediately.
+            // Bound empty polls to the legacy pace instead of spinning on that response.
+            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - poll_started).count();
+            interval_ms = wait_ms > 0 ? static_cast<int>(std::max<long long>(0, 250 - elapsed)) : 250;
             const long long next = IntOf(reply, "NextCursor", g_cursor);
             if (IntOf(reply, "HasEvent", 0) != 0) {
                 std::function<void(const Json&)> handler;
@@ -798,6 +819,7 @@ void PollerMain() {
                         Log("np: event handler: %s", e.what());
                     }
                 }
+                if (!g_pollrun.load()) break;
                 Json ack = {{"OnlineId", me}, {"Cursor", next}};
                 Json ack_reply;
                 std::string ack_err;
@@ -816,8 +838,15 @@ void PollerMain() {
         std::unique_lock lk(g_pollmu);
         g_pollcv.wait_for(lk, std::chrono::milliseconds(interval_ms), [] { return !g_pollrun.load(); });
     }
-    std::lock_guard lk(g_poll_client_mu);
-    g_poll_client = nullptr;
+    {
+        std::lock_guard lk(g_poll_client_mu);
+        g_poll_client = nullptr;
+    }
+    {
+        std::lock_guard lk(g_pollmu);
+        g_poll_finished = true;
+        g_pollcv.notify_all();
+    }
 }
 
 std::atomic<bool> g_keeprun{false};
@@ -873,15 +902,22 @@ void KeepaliveMain() {
 } // namespace
 
 void PollerStart(std::function<void(const Json&)> handler) {
+    std::lock_guard lifecycle(g_poll_lifecycle_mu);
+    // Register after configuration initialization, so workers stop before its exit cleanup.
+    (void)Cfg();
+    static const bool cleanup = [] { std::atexit(PollerStop); return true; }();
+    (void)cleanup;
     std::lock_guard lk(g_pollmu);
     g_handler = std::move(handler);
     if (g_pollrun.exchange(true)) return;
     g_cursor = 0;
-    std::thread(PollerMain).detach();
-    if (!g_keeprun.exchange(true)) std::thread(KeepaliveMain).detach();
+    g_poll_finished = false;
+    g_poll_thread = std::thread(PollerMain);
+    if (!g_keeprun.exchange(true)) g_keep_thread = std::thread(KeepaliveMain);
 }
 
 void PollerStop() {
+    std::lock_guard lifecycle(g_poll_lifecycle_mu);
     {
         std::lock_guard lk(g_keepmu);
         g_keeprun.store(false);
@@ -892,10 +928,24 @@ void PollerStop() {
         g_pollrun.store(false);
         g_pollcv.notify_all();
     }
-    // A poll the server is holding (up to 25 s) is cut short: the poller then sees g_pollrun
-    // and exits, so a restarted poller never overlaps it.
-    std::lock_guard lk(g_poll_client_mu);
-    if (g_poll_client) g_poll_client->stop();
+    // Stop the held request and wait for both workers before a new context can start.
+    // A flag shared by detached workers let an immediate restart revive the old poller.
+    {
+        std::unique_lock lk(g_pollmu);
+        while (!g_poll_finished) {
+            lk.unlock();
+            {
+                std::lock_guard client_lk(g_poll_client_mu);
+                if (g_poll_client) g_poll_client->stop();
+            }
+            lk.lock();
+            // stop() cancels an in-flight socket, not a request which has yet to start.
+            // Repeat until the worker exits to cover a stop racing connection setup.
+            g_pollcv.wait_for(lk, std::chrono::milliseconds(20), [] { return g_poll_finished; });
+        }
+    }
+    if (g_poll_thread.joinable()) g_poll_thread.join();
+    if (g_keep_thread.joinable()) g_keep_thread.join();
 }
 
 // ---- game memory: 1.09's addresses (Binary Ninja, image base 0x400000) -------------------------------
