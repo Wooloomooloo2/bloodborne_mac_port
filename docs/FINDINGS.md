@@ -2399,3 +2399,12 @@ M4 Max, macOS 27, master 50274ee, scratch data dir with the reporters' saves, 10
   so a game that never flips ran until killed (1 min 47 s in the report). It now stops after
   `BB_HANG_FIRST_SECONDS` (180) with a thread dump. A normal start flips within 3 s of the
   watchdog starting (`BB_HANG_FIRST_SECONDS=3` did not trip).
+
+## 2026-10-25: native title-menu Exit Game (PR #76)
+
+22 asset fixtures, native/Rosetta exit-hook fixtures, existing Mac Settings hooks and
+launch-settings fixtures pass. After merging upstream, both GPU libraries, the runtime
+and both native hosts rebuild with protocol 6 (benchmark fields plus settings snapshot).
+The cross-architecture rings fixture passes: two million records, 500,000 events and
+20,000 requests, with zero corruptions. The new Exit Game entry has no live-game or
+packaged-app validation yet. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
