@@ -133,10 +133,10 @@ static void sample_host(PadData *d) {
         }
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_TAB]) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-        return;
     }
+    /* The keyboard works beside a controller: its buttons add to the pad's, and WASD / the arrow
+     * keys take over a stick only while held (with a controller connected the keyboard used to be
+     * ignored, so Enter could not press Play Offline). */
     if (!k) return;
     static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
         {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_KP_ENTER,BTN_CROSS},
@@ -151,12 +151,16 @@ static void sample_host(PadData *d) {
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
     if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
     if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-    if (d->buttons & BTN_L2) d->l2=255;
-    if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
-    d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    if (k[SDL_SCANCODE_R]) d->l2=255;
+    if (k[SDL_SCANCODE_F]) d->r2=255;
+    if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_D])
+        d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
+    if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_S])
+        d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
+    if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_RIGHT])
+        d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
+    if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_DOWN])
+        d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
