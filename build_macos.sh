@@ -125,6 +125,7 @@ if [[ ${1:-} == --test ]]; then
             -Wall -Wextra -Werror -Igpu/shim -Igpu/shadps4 -I"$ARM64_PREFIX/include" tests/test_mtl_encoder.mm gpu/shim/common/logging/log.cpp gpu/shim/common/assert.cpp out/gpu-arm64/libbbmetal_core.a -L"$ARM64_PREFIX/lib" -lfmt \
             -framework Metal -framework Foundation -o out/mtl-encoder-test
         glslang -V --quiet tests/data/spec_const.comp -o out/spec_const.spv  # the Specialize test's module
+        out/mtl-encoder-test
         BB_ENCODER_STATS=1 out/mtl-encoder-test
         BB_ENCODER_STATS=1 MTL_DEBUG_LAYER=1 out/mtl-encoder-test
         BB_ENCODER_STATS=1 BB_METAL_BINDING_CACHE=0 out/mtl-encoder-test

@@ -1323,6 +1323,9 @@ void Encoder::SetBuffer(Stage stage, u32 slot, BufferRef buffer) {
     // this Encoder's existing per-stage state and reapply/submit lifetime rules.
     // Never clear an existing dirty bit: a reopened or externally used encoder
     // still needs the binding even when the caller repeats the same value.
+    // Pointer identity requires no resource address reuse before Submit resets
+    // bindings. Deferred deletion or KeepAlive must preserve resource lifetime
+    // through GPU completion: command buffers use unretained references.
     if (binding_cache && (s.buffers_used & (1u << slot)) && b.bytes.empty() &&
         !b.attribute_stride && b.buffer == buffer.buffer && b.offset == buffer.offset) {
         impl->BindingSkipped();
