@@ -98,6 +98,12 @@ if [[ ${1:-} == --test ]]; then
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test
+    /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Werror -Igpu/shim tests/test_mac_settings.cpp \
+        gpu/shim/bbport_settings.cpp gpu/shim/bbport_mac_settings.cpp -o out/mac-settings-test
+    out/mac-settings-test
+    "${PYTHON:-python3}" -m unittest discover -s tests -p test_mac_menu_assets.py
+    "$CC" "${cflags[@]}" -I. -Isrc tests/test_mac_menu.c -o out/mac-menu-test
+    out/mac-menu-test
     bash tests/test_launch_settings.sh
     bash scripts/macos/build_launcher.sh --test
     # Shared control block rings between bb-probe (x86-64) and bbgpu-host (arm64).

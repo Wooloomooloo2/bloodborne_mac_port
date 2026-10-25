@@ -16,6 +16,13 @@
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
     local line cap='' full='' hud='' compress='' timing=''
+    # Clear values exported from the previous config, keeping explicit caller overrides.
+    if [[ ${BB_LAUNCH_AUTO_LIMIT:-} == "${BB_FPS_LIMIT:-unset}" ]]; then unset BB_FPS_LIMIT; fi
+    if [[ ${BB_LAUNCH_AUTO_FULLSCREEN:-} == "${BB_FULLSCREEN:-unset}" ]]; then unset BB_FULLSCREEN; fi
+    if [[ ${BB_LAUNCH_AUTO_HUD:-} == "${MTL_HUD_ENABLED:-unset}" ]]; then unset MTL_HUD_ENABLED; fi
+    if [[ ${BB_LAUNCH_AUTO_COMPRESSION:-} == "${BB_LAZY_TEXTURE_USAGE:-unset}" ]]; then unset BB_LAZY_TEXTURE_USAGE; fi
+    if [[ ${BB_LAUNCH_AUTO_VBLANK:-} == "${BB_VBLANK_HZ:-unset}" ]]; then unset BB_VBLANK_HZ; fi
+    unset BB_LAUNCH_AUTO_LIMIT BB_LAUNCH_AUTO_FULLSCREEN BB_LAUNCH_AUTO_HUD BB_LAUNCH_AUTO_COMPRESSION BB_LAUNCH_AUTO_VBLANK
     # BB_FPS chosen here for the previous launch is chosen again after an in-game restart.
     if [[ ${BB_FPS_AUTO:-} == 1 ]]; then unset BB_FPS BB_FPS_AUTO; fi
     [[ -f $1 ]] || return 0
@@ -33,10 +40,10 @@ bb_launch_settings() { # ini file
             case ${BB_FPS_LIMIT:-$cap} in 30|60|90) BB_FPS=${BB_FPS_LIMIT:-$cap} ;; esac
         fi
     fi
-    if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
-    if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
-    if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1; fi
-    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
+    if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap BB_LAUNCH_AUTO_LIMIT=$cap; fi
+    if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1 BB_LAUNCH_AUTO_FULLSCREEN=1; fi
+    if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1 BB_LAUNCH_AUTO_HUD=1; fi
+    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0 BB_LAUNCH_AUTO_COMPRESSION=0; fi
     return 0
 }
 
