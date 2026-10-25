@@ -15,7 +15,7 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-24)
+## Status (2026-10-25)
 
 **Current version: [mac-v0.5.5](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.5)** (download the app, or build it as below).
 
@@ -27,6 +27,40 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+### Coming in 0.6 (on master, not yet released)
+
+These are in the repository now; build from source to try them, or wait for the next release.
+
+- **Mods & Cheats** (asked for in #16 by @noelmiller): a **Mods & Cheats…** button in the
+  launcher opens its own window. See [Mods and cheats](#mods-and-cheats).
+  - **Mods:** your loose-file mods in load order, with on/off switches. You can reorder them, add
+    one from a folder or a .zip, or remove one (it goes to the Trash). A mod that can't load says
+    why, and a conflicts list shows which mod wins each file. Game files are never changed.
+  - **Cheats & Tweaks:** 12 switches for patches the game already had: can't die, enemies don't
+    see or hear you, rally, physics, analog sensitivity, camera distance and auto-rotation, text
+    size, all game languages.
+  - **Patch Files:** on/off switches for your own shadPS4/GoldHEN `.xml` patch files.
+  - Before the first launch with a new set of mods or cheats, the launcher **backs up your save**.
+- **Benchmark** (in the launcher): a recorded walk through Central Yharnam at 60 FPS, then 30
+  seconds uncapped, with a results window. It measures average and best FPS, 1% and 0.1% lows,
+  hitches during traversal and their likely cause (shader compiles, streaming, GPU, game CPU),
+  plus CPU, GPU, memory, swap and thermal state. It's meant for comparing Macs and for reports
+  about slowdowns. See [Benchmark](#benchmark).
+- **Dated session logs and fuller crash reports** (from [@satperm](https://github.com/satperm), #40):
+  one timestamped log per session, plus a JSON version for log tools. Warnings go to the macOS
+  system log. Crash reports include macOS's own crash files and a diagnostics zip. See [Logs](#logs).
+- **About panel and update check** (from @satperm, #23), and the **game's own icon in the Dock**
+  (from [@soulripper13](https://github.com/soulripper13), #66; made in memory from your game
+  folder, never saved).
+- **Audio dropout diagnostics** (from [@DiAvisoo](https://github.com/DiAvisoo), #32): opt-in
+  logging of the audio signal, queue and decoder, for reports of crackling or gaps.
+- **Fixes:**
+  - The arrow keys no longer also press the d-pad. Turning left swapped the left-hand item and
+    broke a sprint (#61, reported by @IlyaDylko). IJKL are still the d-pad.
+  - A GPU process stuck on hung GPU work no longer leaves the game hanging after it's killed, so
+    the launcher can start the game again (#71, reported by @wgorecodes).
+  - F9 pad recording (`BB_PAD_RECORD`) works again.
 
 ### New in 0.5.5: lifts, crash and upscaling fixes, no more red flashes
 
@@ -295,6 +329,7 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
+- **0.6:** online co-op (from @noelmiller's #9), with the mod manager and benchmark above.
 - Keyboard and mouse controls (mouse look, from #20).
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
@@ -350,7 +385,7 @@ game files are included.
 The app contains everything else (the game process, the native GPU process, the libraries and
 a small Python for the launch scripts). Saves and settings go to
 `~/Library/Application Support/Bloodborne` (another save folder can be chosen in the launcher),
-the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
+the logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
 
 **Updates.** The first time it opens, the app asks whether to check for updates automatically
@@ -429,8 +464,8 @@ This creates **`Bloodborne.app`** in the repository folder, with the game's own 
 your game folder, so the app is made on your Mac and never uploaded). Double-click it, or drag
 it to the Dock. It opens the same launcher window as the downloadable app (settings, game and
 save folders; see "New in 0.4.0" above), runs the game from this checkout without a Terminal
-window, and writes the game's log to `~/Library/Logs/Bloodborne/game.log` (the session before
-in `game.previous.log`). If the game stops with an error, the launcher offers the log. Run the
+window, and writes the game's logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). If the
+game stops with an error, the launcher offers a crash report and the log. Run the
 script again if you move the repository folder. Its update check only tells you about new releases: update a
 checkout with `git pull` and build again.
 
@@ -470,6 +505,108 @@ before copying saves.
 To keep them elsewhere, set `BB_DATA_DIR=/some/folder` in `launch.conf` (or the environment).
 A checkout that already has saves in its own folder (`user/`, from before this default) keeps
 using them; move `user/` and `bbport.ini` to the folder above to switch.
+
+### Mods and cheats
+
+**Mods & Cheats…** at the bottom left of the launcher opens the mod manager. The text next to the
+button shows what's on ("No mods or cheats", "2 mods · 1 cheat on").
+
+- **Mods** are folders in `~/Library/Application Support/Bloodborne/mods` (**Open Mods Folder**).
+  A mod can hold `dvdroot_ps4/`, or the game's own top-level folders (`chr/`, `parts/`, ...),
+  optionally inside one wrapper folder. **Add Mod…** takes a folder or a .zip and checks its layout
+  straight away.
+  - Mods later in the list win when two replace the same file. The **Conflicts** list shows each
+    case.
+  - Each launch gets a private merged view of the game made of links. Your game folder and the
+    mod folders are never written to.
+  - Replacements for `eboot.bin`, `sce_module` and `sce_sys` are refused.
+  - The order and switches are saved in `mods.json`. [docs/MODS.md](docs/MODS.md) has the folder
+    rules.
+- **Cheats & Tweaks** are patches from the community patch file (`patches/Bloodborne.xml`), each
+  with its own note. Pairs that do opposite things switch each other off: rally decay or no rally,
+  lighter or heavier corpse physics. The choices are stored as `cheats=` in `bbport.ini`. *Enemy
+  Control* is not offered: it rewrites the same code as the frame-rate patches.
+- **Patch Files** lists `.xml` patch files you put in `~/Library/Application
+  Support/Bloodborne/patches`, each with an on/off switch.
+- **Save backups:** before the first launch with a set of mods or cheats it hasn't seen,
+  **Play** copies your save folder to `save-backups/<date and time>/`, keeping the newest five.
+  Other folders in `save-backups` are never touched.
+
+### Benchmark
+
+**Benchmark…** in the launcher starts the game twice with its own save and settings, about 6
+minutes in all. Your save and settings are not used or changed, and mods, patch files and cheats
+are off, so results from different Macs compare like for like.
+
+1. **Traversal:** a recorded walk through Central Yharnam at 1080p, capped at 60 FPS. New areas
+   stream in and new shaders compile on the way, so this pass shows traversal stutter.
+2. **Throughput:** 30 seconds standing still, uncapped, for the highest frame rate the Mac
+   reaches.
+
+The results window shows, for each pass:
+
+- average and best FPS, 1% and 0.1% lows, the longest frame;
+- frames over 33, 50 and 100 ms, and milliseconds lost to hitches per minute;
+- the worst hitches with their time on the route and likely cause;
+- GPU busy time, shader compiles, the game's CPU use and memory, swap, memory pressure and thermal
+  state.
+
+Each run is kept in `~/Library/Logs/Bloodborne/Benchmarks/<date and time>/`:
+
+- `report.md` (the same text, ready to paste into an issue) and `summary.json`;
+- a per-frame CSV for each pass, `system.csv`, and each pass's game log.
+
+Please run it when you are reporting a performance problem. The benchmark save and route
+aren't in the repository yet: a build without them shows why the button is unavailable.
+[docs/DESIGN_BENCHMARK.md](docs/DESIGN_BENCHMARK.md) has the details.
+
+### Logs
+
+Each game session started from the launcher writes two logs to **`~/Library/Logs/Bloodborne`**,
+named by the time it started. The last 20 sessions are kept, at most 256 MB in all, and one
+session's logs stop at 64 MB (a normal session is well under 1 MB): past that only its last
+1,000 lines are written, when the game ends, after a line saying how many were left out.
+
+- `game-2026-10-22_14-03-05.log`: the game's output, each line with its time and a syslog
+  severity (`CRIT`, `ERROR`, `WARN`, `NOTICE`, `INFO`, `DEBUG`):
+
+  ```text
+  2026-10-22T14:03:05.869+03:00 NOTICE launcher: Bloodborne for Mac 0.5.4 on Mac15,8 (Apple M3 Max), 64 GB, ...
+  2026-10-22T14:03:06.284+03:00 WARN   GPU [Render.Vulkan] <Warning> vk_pipeline_serialization.cpp:369 ...
+  2026-10-22T14:09:41.604+03:00 CRIT   Crash: the GPU process crashed (signal 11 in ...)
+  ```
+
+- `game-2026-10-22_14-03-05.jsonl`: the same lines as JSON, one object per line, for Grafana Loki
+  (Alloy/Promtail), Elasticsearch (Filebeat), Vector and similar: `@timestamp` (UTC),
+  `log.level`, `syslog.severity.code`, `log.logger` (who wrote the line: `runtime`, `bbgpu-host`,
+  `gpu.render.vulkan`, ...), `message`, `session.id` and `service.version`.
+
+`game.log` and `game.previous.log` link to the last two sessions' `.log` files. Warnings and
+errors also go to the macOS system log (unified logging), with the line's source as its category:
+open **Console.app** and search for `bloodborne-mac-port`, or in Terminal:
+
+```sh
+/usr/bin/log stream --predicate 'subsystem == "io.github.wooloomooloo2.bloodborne-mac-port"'
+```
+
+The game never depends on the logs: if the launcher quits or a log can't be written (a full
+disk), the game keeps running and only those lines are lost.
+
+The severity is read from the line itself: `Crash:` lines are critical, `STOP:` and `ERROR:` lines
+errors, the GPU library's own levels (`<Warning>`, `<Error>`) are kept, and lines saying something
+failed are warnings. Your home folder appears as `~` in the system log and in crash reports.
+
+**Crash reports.** When the game stops with an error, the launcher shows what happened and, by
+itself, puts a diagnostics zip in `~/Library/Logs/Bloodborne/Reports` (the last 10 are kept): the
+crash report, the session's `.log` and `.jsonl`, `bbport.ini`, `launch.conf`, and macOS's own
+crash reports (`.ips`) of the game's processes from that session. Their exception and crashed
+thread also go into the report. Your home folder is shown as `~`, and the identifiers macOS puts
+in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. Other paths
+stay as they are: a game folder on an external drive shows as `/Volumes/<drive name>/...`, so
+check the report if a drive or folder name is private. **Report on
+GitHub** opens a new issue with the report already filled in (copied to the clipboard as well,
+for reports too long for the link) and shows the zip in Finder to drag onto the issue. Nothing is
+sent until you submit the issue.
 
 ### Typing text
 
@@ -650,6 +787,35 @@ This port stands entirely on the work of others:
 - **Community patch authors** — Kyo, Lance McDonald, illusion, emoose, auser1337 and others
   for the 60 FPS, camera and engine patches in `patches/Bloodborne.xml`.
 - **zackcage6** — testing and bug reports for the Windows port.
+
+### Contributors to this port
+
+Thank you to everyone who sent pull requests:
+
+- **[Noel Miller](https://github.com/noelmiller)**
+  - macOS 27 support for the GPU process (#7).
+  - A survivable GPU setup warning (#10).
+  - Touchpad gestures (#8).
+  - Buffer arena sizing for Macs with less memory (#13).
+  - The HUD item icon above 1080p (#17).
+  - Online play, coming in 0.6 (#9).
+- **[Mojahed Abushawish](https://github.com/MojahedAbushawish)**
+  - Lossless texture compression (#33).
+  - The upscaler haze fix (#48).
+  - Invariant vertex positions, copies held to the end of a render pass, and the loading-screen fix
+    (from #20).
+  - Benchmarks on an M3 Pro.
+- **[DiAvisoo](https://github.com/DiAvisoo)**
+  - Native ultrawide (#30).
+  - Duplicate-launch and game-folder checks (#28).
+  - The disappearing-geometry finding (#36).
+  - Audio dropout diagnostics (#32).
+- **[satperm](https://github.com/satperm)**
+  - The About panel and update check (#23).
+  - Dated session logs and crash reports (#40).
+- **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
+
+Thanks also to everyone who reports issues and tests builds on their Macs.
 
 Each third-party component keeps its own license file in its directory.
 

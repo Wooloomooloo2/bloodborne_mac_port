@@ -96,6 +96,53 @@ def effect_patches(settings):
     lod=MODEL_LOD.get(settings.get('model_lod','0'))
     if lod: names.append(lod)
     return names
+# Cheats and gameplay tweaks the launcher's Mods & Cheats window offers (bbport.ini
+# cheats=name;name): patch name -> (group, label, exclusive group or None). Graphics, frame rate,
+# resolution and debug patches stay with their own settings. Not offered: Enemy Control (it
+# rewrites code the frame rate patches also change).
+CHEATS={
+    'Player No Dead (Read note)':('Cheats','Player can\'t die',None),
+    'Player Stealth (Read note)':('Cheats','Enemies don\'t see you',None),
+    'Player Silent (Read note)':('Cheats','Enemies don\'t hear you',None),
+    'No Rally Decay':('Gameplay','Rally doesn\'t decay','rally'),
+    'Disable Rally (HP Regain)':('Gameplay','No rally (HP regain)','rally'),
+    'DS1-like physics':('Gameplay','Light corpses and objects (DS1 physics)','physics'),
+    'Lower object/corpse physics':('Gameplay','Heavy corpses and objects','physics'),
+    'Sensitive Analog Input (easier to run)':('Gameplay','Run with less stick travel',None),
+    'Disable Camera Auto Rotation via Movement':('Camera','No camera auto-rotation',None),
+    'Increased camera distance':('Camera','Camera further away',None),
+    '50% Text scale':('Interface','Smaller text (50%)',None),
+    'Unlock Game Region':('Interface','All game languages',None),
+}
+
+
+def cheat_patches(settings):
+    """The cheats= patches (unknown names are ignored, two of one exclusive group refused)."""
+    names=[n.strip() for n in settings.get('cheats','').split(';') if n.strip() in CHEATS]
+    groups={}
+    for name in names:
+        group=CHEATS[name][2]
+        if group and groups.setdefault(group,name)!=name:
+            raise ValueError(f'cheats: {groups[group]!r} and {name!r} cannot be on together')
+    return list(dict.fromkeys(names))
+
+
+def list_json(xml,app_version,patches_dir,patches_config):
+    """--list: the cheats and the external patch files for the launcher, as JSON."""
+    notes={m.get('Name'):(m.get('Note') or '').replace('\\n','\n')
+           for m in ET.parse(xml).getroot().iter('Metadata') if m.get('AppVer')==app_version}
+    cheats=[{'name':name,'group':group,'label':label,'exclusive':exclusive,'note':notes.get(name,'')}
+            for name,(group,label,exclusive) in CHEATS.items() if name in notes]
+    external=[]
+    if patches_dir:
+        found=external_patches(patches_dir,app_version,xml)
+        on={key for key,_,_ in external_selection(found,patches_config)}
+        external=[{'key':key,'file':path.name,'name':meta.get('Name'),'author':meta.get('Author',''),
+                   'note':(meta.get('Note') or '').replace('\\n','\n'),'enabled':key in on}
+                  for key,path,meta in found]
+    return json.dumps({'cheats':cheats,'external':external},indent=1)
+
+
 SCENE_WIDTH=0x02196A6B-EBOOT_BASE
 SCENE_HEIGHT=0x02196A7A-EBOOT_BASE
 UI_WIDTH=0x02358554-EBOOT_BASE
@@ -338,9 +385,13 @@ def main():
     p.add_argument('--print-preset-size',action='store_true',help='print the selected preset size, if reduced')
     p.add_argument('--output-res',default='',help='output resolution WxH (the upscaler\'s; the UI stays 1920x1080)')
     p.add_argument('--print-ultrawide',action='store_true', help='print the selected native wide patch')
+    p.add_argument('--list',action='store_true',help='print the cheats and external patches as JSON (launcher)')
     p.add_argument('--print-scaled',action='store_true',
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
     a=p.parse_args()
+    if a.list:
+        print(list_json(a.xml,a.app_version,a.patches_dir,a.patches_config))
+        return
     if a.print_ultrawide:
         print(ultrawide_patch(read_settings(a.settings)))
         return
@@ -362,6 +413,7 @@ def main():
         fps_patches = []
     raw_names = fps_patches + [n.strip() for n in a.extra.split(';') if n.strip()]
     raw_names += [n for n in effect_patches(read_settings(a.settings)) if n not in raw_names]
+    raw_names += [n for n in cheat_patches(read_settings(a.settings)) if n not in raw_names]
     if intel_tonemap_fix() and INTEL_TONEMAP not in raw_names:
         raw_names.append(INTEL_TONEMAP)
     names = []

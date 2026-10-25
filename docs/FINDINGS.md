@@ -1811,3 +1811,69 @@ value conversion instead of the bits. Second part: Metal's fast math (the defaul
 these ops) back into plain ones; NaN and Inf are now tested on the bit pattern, and the clamp
 output modifier turns NaN into 0 as GCN does. Shader cache meta version 11 (rebuilt once).
 City at 1080p still holds 60 FPS; all 214 pipelines of the test cache build in Metal.
+
+## PRs #39, #58, #59 merged onto 0.5.5, M4 Max (2026-10-24)
+
+Each PR merged onto master f5b7073 in a worktree; test saves only, upscaler off, uncapped
+(`BB_FPS=uncap BB_FPS_LIMIT=0 BB_VBLANK_HZ=480`). At 1440p every build, master included, sits at
+the presenter's 120 FPS ceiling in both scenes, so GPU time and 4K runs separate them.
+
+| Build | 4K Dream FPS | 4K city FPS | GPU ms/frame 1440p Dream / city | Recording µs/draw (city) | 300 s walking soak: frames > 1.5× median / worst |
+|---|---|---|---|---|---|
+| master | 77.7 | 73.8 | 7.97 / 8.33 | 4.5 | 119 / 52 ms |
+| #39 held draws | 80.5 (+4%) | 82.8 (+12%) | 7.64 / 7.50 | 4.5 | 150 / 156 ms (one run) |
+| #58 pass merge + no-op skip | 78.3 (+1%) | 75.6 (+2%) | 7.87 / 8.08 | 4.6 | — |
+| #59 smoothness | — | — | 8.14 / 8.27 | 3.6 | 78 / 44 ms |
+
+- #39: the biggest GPU win, survived the soak without a hang, but its one walking soak had worse
+  pacing than master's (p99 27 vs 14.6 ms). Repeat the soak before merging.
+- #58: small gains; the pass-variant map is keyed by a bare 64-bit hash (no key compare) — ask
+  for a full key compare before merging the pass merge; the profiler fix and no-op skip are fine.
+- #59: recording CPU −20% and fewer walking hitches, as claimed, but 2 of 4 standing city runs
+  were slower (99 and 113 FPS; master never below 117). Suspect the default user-interactive QoS on
+  spin loops; try with the QoS commit reverted. `BB_DIRECT_READBACK=verify`: 15 read-backs
+  checked, 0 mismatches — far too few to prove it (standing and walking cause few read-backs).
+- Scripts: scratchpad `prbench.sh`/`prbench2.sh` (driver over the usual run.sh harness).
+
+## macOS 27.0.1 on the M4 Max: first check (2026-10-24, evening)
+
+master eb10466 (0.5.5 + launcher merges), `bbgpu-host-macos27`, same conditions as the PR table
+above (test saves, upscaler off, uncapped, `BB_PRESENT_MODE=Immediate`), windowed 2992x1680,
+mean of the last six `Frame stats` windows, standing after the load, no compiles:
+
+| Scene | 4K FPS macOS 26.6 (master f5b7073) | 4K FPS macOS 27.0.1 | GPU ms/frame |
+|---|---|---|---|
+| Hunter's Dream (`loadcrash-20261014-134937`) | 77.7 | 74.4 (−4%) | 13.43 |
+| Central Yharnam lamp (`cages-20261016`) | 73.8 | 71.0 (−4%) | 14.08 |
+
+1080p sits at the 120 FPS presenter ceiling on both. Both GPU-bound (GPU ~100% busy). The user
+was using the Mac (Safari, Discord) during the 27 runs, the 26.6 runs had an idle Mac, so −4% is
+an upper bound; no sign of the 4x drop reported on an M3 Pro 18 GB (#69). Harness: scratchpad
+`bench.sh` (restores a snapshot, Continue twice through `BB_PAD_FILE`, `BB_FRAME_STATS=1`,
+kills the game if Frame stats stop for 20 s).
+
+## Benchmark: first runs, route repeatability, PR #39 (2026-10-24 night)
+
+Built-in benchmark (branch `benchmark`, `docs/DESIGN_BENCHMARK.md`), M4 Max, macOS 27.0.1, test
+data, `--benchmark` runs alternating builds, no compiles in any run.
+
+- **Repeatable route:** the same streaming hitches (100-150 MB of uploads in one frame) land at
+  6.9 s, 44.3 s and 63.5 s of the route in nearly every run, both builds. "Other" hitches (frame
+  44-50 ms with game ~16 ms and GPU ~8 ms: the present side) recur too; worth a "present" cause.
+- **Every frame** of the city walk uploads ~14 MB and takes ~46 GPU-tracked faults (median), so
+  the hitch classifier judges streaming against the run's medians.
+- **Standing uncapped at 1080p:** ~124 FPS, game-CPU-limited (game frame ~7.9 ms, GPU ~6.8 ms);
+  a 27-39 ms GPU frame every 5 s (the known long command buffer, 2026-10-18).
+- **PR #39** (held draws in tessellation runs) on master, 3 runs vs master 2:
+
+| | master | #39 |
+|---|---|---|
+| Standing FPS | 123.4 / 124.8 | 125.2 / 124.8 / 125.3 |
+| Standing GPU ms/frame | 6.90 / 6.76 | 6.23 / 6.16 / 6.11 (−9%) |
+| Route GPU ms/frame | 9.12 / 9.18 | 8.93 / 9.11 / 8.51 |
+| Route frames > 33 ms | 3 / 4 | 7 / 5 / 5 |
+| Route ms lost to hitches per minute | 34 / 39 | 74 / 53 / 46 |
+| Route 0.1% low FPS | 28.4 / 28.5 | 25.3 / 26.7 / 28.7 |
+
+  GPU time −9%, but more hitches on the route in every run (extra single frames of 35-60 ms GPU),
+  as in the 300 s soak. Repeat before merging (posted on #39).

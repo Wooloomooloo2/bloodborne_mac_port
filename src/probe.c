@@ -635,6 +635,9 @@ static int probe_main(int argc, char **argv) {
 int main(int argc, char **argv) {
 #endif
     setvbuf(stdout, NULL, _IONBF, 0);
+    /* stdout is the launcher's pipe: if the launcher goes away, a print fails with EPIPE (a
+     * lost log line) instead of SIGPIPE ending the game. (Also no SIGPIPE from closed sockets.) */
+    signal(SIGPIPE, SIG_IGN);
 #ifdef __APPLE__
     /* Before SDL maps anything: on macOS large host mmaps land in the guest range. */
     if (runtime_memory_reserve_space()) fail("cannot reserve guest address range");

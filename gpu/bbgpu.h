@@ -47,6 +47,12 @@ void bbgpu_split_push(const void *record);
 /* Game side: the host window's keyboard state (SDL scancode-indexed, 512 entries) while the
  * renderer runs in the GPU host, else NULL. */
 const bool *bbgpu_split_keyboard(void);
+/* Benchmark (BB_BENCHMARK, game side): the host's draws in its last presented frame and its
+ * presented frames so far (0 without a GPU host); the phase the host records by (0 waiting,
+ * 1 measuring, 2 done, 3 failed with `error`). */
+uint32_t bbgpu_bench_frame_draws(void);
+uint64_t bbgpu_bench_host_flips(void);
+void bbgpu_bench_set_phase(uint32_t phase, const char *error);
 /* Registers kernel event queues (needed with or without graphics). */
 void bbgpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */

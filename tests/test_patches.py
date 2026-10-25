@@ -185,5 +185,28 @@ class ExternalPatchTests(unittest.TestCase):
         self.assertEqual(external_patches(XML.parent), [])
 
 
+
+class CheatTests(unittest.TestCase):
+    def test_cheats_setting_selects_known_patches(self):
+        from patches import CHEATS, cheat_patches
+        names = cheat_patches({'cheats': 'Player No Dead (Read note);Unknown;Increased camera distance'})
+        self.assertEqual(names, ['Player No Dead (Read note)', 'Increased camera distance'])
+        self.assertEqual(cheat_patches({}), [])
+        self.assertNotIn('Enemy Control', CHEATS)
+
+    def test_exclusive_cheats_are_refused_together(self):
+        from patches import cheat_patches
+        with self.assertRaises(ValueError):
+            cheat_patches({'cheats': 'No Rally Decay;Disable Rally (HP Regain)'})
+
+    def test_every_cheat_exists_and_has_a_group(self):
+        from patches import CHEATS, list_json
+        import json
+        listed = json.loads(list_json(XML, '01.09', None, None))
+        self.assertEqual([c['name'] for c in listed['cheats']], list(CHEATS))
+        self.assertTrue(all(c['group'] and c['label'] for c in listed['cheats']))
+        self.assertEqual(listed['external'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

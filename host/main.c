@@ -387,6 +387,9 @@ static int reserve_guest_range(void) {
 int main(int argc, char **argv) {
     /* bbgpu-host --msl-check <spv dir> [msl cache dir]: the Metal back end's shader check. */
     if (argc >= 3 && !strcmp(argv[1], "--msl-check")) return bbgpu_msl_check(argv[2], argc >= 4 ? argv[3] : NULL);
+    /* stdout is the launcher's pipe (shared with bb-probe): if the launcher goes away, say()
+     * fails with EPIPE (a lost log line) instead of SIGPIPE ending the host. */
+    signal(SIGPIPE, SIG_IGN);
     /* A signal ends the host as a signal, not as SDL's polite quit event (exit status 0). */
     setenv("SDL_NO_SIGNAL_HANDLERS", "1", 1);
     say("pid %d, %s, page %d bytes", (int)getpid(), translated() ? "TRANSLATED (Rosetta)" : "native arm64", getpagesize());

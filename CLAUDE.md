@@ -157,6 +157,21 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   launch.conf `BB_CHECK_UPDATES` absent = not asked, `BB_UPDATE_TEST_BUILDS`, `BB_UPDATE_SKIP`,
   `BB_UPDATE_CHECKED`). Test builds = GitHub pre-releases and `-test` tags; 0.5.2-test1 < 0.5.2 <
   0.5.2-5-g…. Release apps replace themselves in place; checkout apps only notify.
+- **Session logs (2026-10-22):** the launcher pipes the game's output through
+  `launcher/App/SessionLogWriter.swift` (`launcher/Model/SessionLog.swift`): per session
+  `~/Library/Logs/Bloodborne/game-<start>.log` (ISO 8601 time + syslog severity + the raw line) and
+  `.jsonl` (ECS-style fields for Loki/ELK), last 20 kept, `game.log`/`game.previous.log` are links;
+  warnings/errors also to unified logging (subsystem `io.github.wooloomooloo2.bloodborne-mac-port`, category = source;
+  zsh's builtin `log` shadows `/usr/bin/log`). Severity comes from the line (`Crash:` critical,
+  `STOP:`/`ERROR:` error, GPU `<Warning>`...). The writer must hold the `Pipe` until the end:
+  released, it closes the read end and a still-writing bbgpu-host dies of SIGPIPE.
+  Limits: 64 MB per session (then the last 1,000 lines at the end), 256 MB for the folder. Write
+  errors stop the files, never the reading. bb-probe and bbgpu-host ignore SIGPIPE (PR #40 review):
+  the game must survive the launcher quitting.
+  On a crash `launcher/App/CrashBundle.swift` collects the session's `.ips` reports
+  (`launcher/Model/NativeCrash.swift`: exception + crashed thread into the report; `.ips` escapes
+  slashes as `\/`, unescape before redacting) and zips report, logs, ini and conf into
+  `Logs/Bloodborne/Reports`; the issue link carries the report (compact version if needed).
 - **0.5.0 = the full native Metal renderer** (separate branch; `renderer=metal`).
 
 ## State as of 2026-10-21 (after 0.5.3, local master, not pushed)
@@ -171,6 +186,68 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 - Traversal hitches on an M4 Max are GPU headroom (frames-ahead waits), not compiles or the
   archive; the city's tessellated draws split 67 render passes a frame (FINDINGS 2026-10-21,
   MACOS_BACKLOG Performance: tessellation kernels out of the pass).
+
+## State as of 2026-10-24 (mac-v0.5.5, full release, Latest)
+
+- **0.5.5** = 0.5.4.3-0.5.4.5 + the red-flash shader fix (GCN legacy/clamped float ops, NaN/Inf
+  tested on bits so Metal fast math can't fold them; shader cache meta version 11; FINDINGS
+  2026-10-24). User had not yet re-checked the Cainhurst rooftop after part 2.
+- Merged today: #23 (About + update check), #32 (audio diagnostics), #66 (Dock icon in memory).
+  Copyright lines (`SPDX-FileCopyrightText: Copyright 2026 Mark Hall`) added to 275 files.
+- **PR status:** #41 answered (updater declined; #66 replaced it). #40 changes requested (SIGPIPE
+  in bb-probe/bbgpu-host, `write(contentsOf:)`, log size cap, rebase after #23). #20 asked to
+  rebase (drop f0e27f0; conflict only `frame_pacing` in bbport_settings). #11 waits for a long
+  co-op session. #31 needs a rebase after #23. #64 (evill33t, MetalFX frame generation, draft):
+  asked to split 103a436/6e0a611; owner promised a gameplay run with the watchdog (not done yet).
+  #39/#58/#59 measured (FINDINGS "PRs #39, #58, #59"), not yet answered on GitHub.
+- **Online play = 0.6.0** (with other features): PR #9 merged with master on local branch
+  `online-0.6` (worktree `../bb-online`, merge cb860e7). Security review findings (2 blockers:
+  libbbnet not bundled by package_app.sh, GPL-3 notes missing; should-fix: https-only community
+  server, no keychain/env secrets when offline, no secrets on argv, version in User-Agent, token
+  only to the community host, UDP queue caps, shadNet `ExtractBlob` overflow, UPnP lease, crash
+  report redaction, sign-in link checks) were being fixed on that branch by an agent when the
+  session ended: check `git log online-0.6` and `git stash list` there. Ask Noel before pushing to
+  his branch (maintainer edits allowed). THD must confirm `bbport-mac` matches Windows players.
+- **Plans written:** `docs/DESIGN_FRAME_GENERATION.md` (macOS 26 is enough, not 27),
+  `docs/DESIGN_ONLINE_COOP.md` (#9 first, Nightwatch seamless co-op later as a separate mode:
+  ~105k lines, GPL-3 + Lantern section 7 terms, must run x86 in bb-probe, hooks don't collide
+  with our loader by literal scan). Backlog: evaluate bloodborne-native/bloodborne-recomp as the
+  post-Rosetta path after 0.6.0.
+- **Open bugs:** #46/#50/#51 freeze in the very first cutscene (new game, all reporters on macOS
+  27.0.1; nothing fixed yet; a new-game test on 26.6 was started 2026-10-24); #55 FPS sinking
+  over long sessions (waiting for logs); #63 is the 0.5.4.1 GPU fault fixed in 0.5.4.2.
+- Local branches: `zero-copy` (declined prototype, keep for reference), `online-0.6`,
+  `test-pr39/58/59` + worktree `../bb-prtest` (benchmark only, can be deleted).
+- **macOS 27.0.1 on this Mac (2026-10-24 evening):** 4K Dream/city −4% vs 26.6 (user was using
+  the Mac; FINDINGS), no 4x drop. New-game opening movie plays through to character creation at
+  60 FPS here (48 GB), so #46's freeze is not macOS 27 alone; suspect 16–18 GB memory pressure.
+
+## State as of 2026-10-24 night (benchmark, triage)
+
+- **Benchmark** (merged into master 2026-10-25, branch `benchmark`):
+  `docs/DESIGN_BENCHMARK.md`. Launcher button + `--benchmark` (scripted); traversal = recorded
+  route through Central Yharnam at fixed 60 (replay steps by host flips), throughput = 30 s
+  uncapped stand; per-frame CSV from the GPU host, launcher sampler/report in
+  `~/Library/Logs/Bloodborne/Benchmarks/`. Assets (not in git): `out/macdata/save-backups/
+  bench-cleared-20261024/{savedata,route.pad}` (copy to `out/benchmark/`). Shipping the save in
+  the release app is the owner's call (package_app.sh copies out/benchmark only if present).
+  Shared block version 5 (#70 also bumps to 5: renumber whichever merges second).
+- **Fixes** (merged into master 2026-10-25, branch `fixes-0.5.6`): F9 pad recording
+  in split mode, arrow keys no longer press the d-pad (#61), bounded wait for a stuck GPU host
+  (#71). Launcher "end the previous copy" prompt (#71) and preferred display (#60) in backlog.
+- **Merged and pushed:** #40 (session logs; tested from the app). Closed as duplicates: memmove
+  #37/#38/#54/#57/#62 → #34 (fix 3497dea in 0.5.4.4+), cutscene #24/#50/#51 → #46, #63 → #42.
+- **Waiting on authors:** #20 (asked mouse_look default off), #31 (rebase), #58 (full key
+  compare), #59 (rebase + QoS test), #64 (back to draft, FPS counter), #67 (keep plain test run,
+  confirm deferred deletion). **Waiting on us:** gameplay/visual tests for #65, #68, #70, #64's
+  promised run; #39 re-measured with the benchmark (ab-39 branch in ../bb-prtest).
+- **Mod manager (0.6, owner-approved with cheats):** merged into master 2026-10-25 (branch
+  `mod-manager`): launcher "Mods & Cheats…" window (mods,
+  cheats/tweaks via bbport.ini `cheats=`, patch files), save backups before a new mod/cheat set,
+  `docs/DESIGN_MOD_MANAGER.md`. Enemy Control not offered (overlaps the FPS patches). Online rule
+  still open (with online-0.6). The benchmark disables mods/patch files/cheats; its passes log
+  through SessionLogWriter (moved to `<pass>.log/.jsonl` next to the CSV). README has a "Coming in
+  0.6" section and PR contributor credits.
 
 ## Next steps (in order)
 
