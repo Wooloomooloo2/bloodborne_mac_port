@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Build the native Mac Settings movie and texts from the user's own game files.
+"""Build native Mac Settings and optional Exit Game assets from the user's own files.
 
 ``generate(game, cache, messages)`` returns an immutable mod-layer directory containing
 dvdroot_ps4/menu/optionsetting.gfx and every existing language's menu.msgbnd.dcx.
@@ -11,7 +11,8 @@ GFX cloning is adapted from engine/menu_assets.cpp, add_option_section, in
 bloodborne_mac's bbhost vendor tree at bbacb95c3338efcd627c0edaec05ff7534e555da.
 The FMG/BND4 rebuild follows that project's scripts/quit_menu.py. This focused
 generator keeps six donor widgets, removes Defaults and static donor labels, and
-adds one hidden MacSettings sprite. No original game file is changed or bundled.
+adds one hidden MacSettings sprite. The optional title-menu expansion follows the
+same revision's scripts/quit_menu.py. No original game file is changed or bundled.
 """
 import argparse
 import fcntl
@@ -33,6 +34,8 @@ SECTION_DEPTH = 383
 MAX_ARCHIVE = 128 * 1024 * 1024
 MANIFEST = '.mac-menu-assets.json'
 RECIPE_VERSION = 1
+EXIT_ID = 401307  # The title menu's unused Opinion Box entry.
+TITLE_MOVIES = ('title.gfx', 'title_dlc.gfx', 'title_dlc_eu.gfx')
 
 
 def _span(data, start, length):
@@ -70,6 +73,10 @@ class _Bits:
 
     def end(self):
         return (self.bit + 7) // 8
+
+    def signed(self, count):
+        value = self.read(count)
+        return value - (1 << count) if count and value >> (count - 1) else value
 
 
 def _matrix_end(data, offset):
@@ -137,8 +144,9 @@ def _place(data, code, start, end):
     cid_at = at if flags & 2 else None
     cid = _unpack('<H', body, at)[0] if cid_at is not None else None
     at += 2 if cid_at is not None else 0
-    matrix = None
+    matrix = matrix_at = matrix_end = None
     if flags & 4:
+        matrix_at = at
         matrix_end = _matrix_end(body, at)
         matrix = body[at:matrix_end]
         at = matrix_end
@@ -155,6 +163,7 @@ def _place(data, code, start, end):
         raw, name_end = _cstr(body, at, len(body))
         name = raw.decode('latin-1')
     return dict(depth=depth, cid=cid, cid_at=cid_at, matrix=matrix,
+                matrix_at=matrix_at, matrix_end=matrix_end,
                 name=name, name_at=name_at, name_end=name_end)
 
 
@@ -274,6 +283,98 @@ def build_movie(data):
             result += _tag(70, hidden)
     struct.pack_into('<I', result, 4, len(result))
     return bytes(result)
+
+
+def _read_matrix(data):
+    bits = _Bits(data, 0)
+    pairs = []
+    for _ in range(2):
+        width = bits.read(5) if bits.read(1) else None
+        pairs.append(tuple(bits.signed(width) for _ in range(2)) if width is not None else None)
+    width = bits.read(5)
+    return (*pairs, (bits.signed(width), bits.signed(width)))
+
+
+def _write_matrix(matrix):
+    bits = []
+
+    def write(value, count):
+        bits.extend((value >> shift) & 1 for shift in reversed(range(count)))
+
+    def pair(values):
+        width = max((value if value >= 0 else ~value).bit_length() + 1 for value in values)
+        if width > 31:
+            raise ValueError('GFX matrix translation is too large')
+        write(width, 5)
+        for value in values:
+            write(value, width)
+
+    for values in matrix[:2]:
+        write(values is not None, 1)
+        if values is not None:
+            pair(values)
+    pair(matrix[2])
+    bits.extend([0] * (-len(bits) % 8))
+    return bytes(sum(bit << (7 - i) for i, bit in enumerate(bits[at:at + 8]))
+                 for at in range(0, len(bits), 8))
+
+
+def build_title(data):
+    """Give the title menu a sixth animated row, adapted from bloodborne_mac/quit_menu.py."""
+    start = _stage_start(data)
+    tags = list(_tags(data, start, len(data)))
+    sprites = {_unpack('<H', data, body)[0]: (head, body, end)
+               for code, head, body, end in tags if code == 39}
+
+    def places(begin, end):
+        result = {}
+        for code, _, body, stop in _tags(data, begin, end):
+            if code == 1:
+                break
+            if code in (26, 70):
+                p = _place(data, code, body, stop)
+                if p['name']:
+                    result[p['name']] = p
+        return result
+
+    try:
+        top = sprites[places(start, len(data))['Top']['cid']]
+        timeline = sprites[places(top[1] + 4, top[2])['CommandList']['cid']]
+        rows = places(timeline[1] + 4, timeline[2])
+        if 'Item_5_0' in rows:
+            return data
+        donor = rows['Item_4_0']
+        step = _read_matrix(donor['matrix'])[2][1] - _read_matrix(rows['Item_3_0']['matrix'])[2][1]
+    except (KeyError, TypeError) as exc:
+        raise ValueError('title movie lacks Top/CommandList or its last two rows') from exc
+    if step <= 0 or donor['cid'] is None:
+        raise ValueError('title movie has an invalid row spacing or donor')
+    records = list(_tags(data, timeline[1] + 4, timeline[2]))
+    used = {_place(data, code, body, end)['depth']
+            for code, _, body, end in records if code in (26, 70)}
+    depth = next((d for d in range(donor['depth'] + 1, 65536) if d not in used), None)
+    if depth is None:
+        raise ValueError('title movie has no free row depth')
+    result = bytearray(data[timeline[1]:timeline[1] + 4])
+    for code, head, body, end in records:
+        result += data[head:end]
+        if code in (26, 70):
+            p = _place(data, code, body, end)
+            if p['depth'] != donor['depth']:
+                continue
+            copy = bytearray(data[body:end])
+            struct.pack_into('<H', copy, 2 if code == 70 else 1, depth)
+            if p['name'] == 'Item_4_0':
+                copy[p['name_at']:p['name_end']] = b'Item_5_0\0'
+            if p['matrix'] is not None:
+                scale, rotate, (x, y) = _read_matrix(p['matrix'])
+                copy[p['matrix_at']:p['matrix_end']] = _write_matrix((scale, rotate, (x, y + step)))
+            result += _tag(code, copy)
+        elif code == 28 and _unpack('<H', data, body)[0] == donor['depth']:
+            result += _tag(28, struct.pack('<H', depth))
+    output = bytearray(data[:timeline[0]] + _tag(39, result) + data[timeline[2]:])
+    struct.pack_into('<I', output, 4, len(output))
+    return bytes(output)
 
 
 def read_fmg(data):
@@ -398,7 +499,7 @@ def bnd4_files(data):
     return entries
 
 
-def build_messages(archive, messages):
+def build_messages(archive, messages, *, exit_game=False):
     bnd = _unpack_dcx(archive)
     files = bnd4_files(bnd)
     if not {200, 201} <= {mid for _, _, _, mid in files}:
@@ -413,6 +514,8 @@ def build_messages(archive, messages):
             if mid in strings:
                 raise ValueError(f'message id {mid} already exists in FMG {group}')
             strings[mid] = message['help' if group == 201 else 'text'] or None
+        if exit_game:
+            strings[EXIT_ID] = 'Exit Game' if group == 200 else 'Close the game and return to the desktop.'
         replacements[group] = write_fmg(template, strings)
     result = bytearray(bnd[:min(offset for _, offset, _, _ in files)])
     for entry, offset, size, group in sorted(files, key=lambda e: e[1]):
@@ -459,9 +562,11 @@ def _digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def generate(game, out, messages):
+def generate(game, out, messages, *, mac_settings=True, exit_game=False):
     """Return a cached mod-layer root. Failures never publish an incomplete generation."""
-    messages = _messages(messages)
+    messages = _messages(messages) if mac_settings else {}
+    if not mac_settings and not exit_game:
+        raise ValueError('no native menu features selected')
     game, out = Path(game).resolve(), Path(out).resolve()
     dvd = (game if game.name.casefold() == 'dvdroot_ps4' else game / 'dvdroot_ps4').resolve()
     dump = dvd.parent if game.name.casefold() == 'dvdroot_ps4' else game
@@ -469,12 +574,19 @@ def generate(game, out, messages):
         raise ValueError('asset cache must be outside the original game dump')
     movie = dvd / 'menu/optionsetting.gfx'
     languages = sorted((dvd / 'msg').glob('*/menu.msgbnd.dcx'))
-    if not movie.is_file() or not languages:
-        raise ValueError('game dump lacks optionsetting.gfx or language message archives')
+    if not languages or (mac_settings and not movie.is_file()):
+        raise ValueError('game dump lacks required menu assets or language message archives')
+    movies = [movie] if mac_settings else []
+    if exit_game:
+        titles = [dvd / 'menu' / name for name in TITLE_MOVIES if (dvd / 'menu' / name).is_file()]
+        if not titles:
+            raise ValueError('game dump lacks title menu movies')
+        movies += titles
     sources = {f'dvdroot_ps4/{p.relative_to(dvd).as_posix()}': p.read_bytes()
-               for p in [movie, *languages]}
+               for p in [*movies, *languages]}
     identity = dict(version=RECIPE_VERSION, generator=_digest(Path(__file__).read_bytes()),
-                    messages=messages, sources={key: _digest(data) for key, data in sources.items()})
+                    messages=messages, mac_settings=mac_settings, exit_game=exit_game,
+                    sources={key: _digest(data) for key, data in sources.items()})
     key = _digest(json.dumps(identity, sort_keys=True, ensure_ascii=True).encode())
     out.mkdir(parents=True, exist_ok=True, mode=0o700)
     if out.stat().st_uid != os.getuid():
@@ -503,7 +615,12 @@ def generate(game, out, messages):
         try:
             outputs = {}
             for relative, data in sources.items():
-                body = build_movie(data) if relative.endswith('.gfx') else build_messages(data, messages)
+                if relative.endswith('/optionsetting.gfx'):
+                    body = build_movie(data)
+                elif relative.endswith('.gfx'):
+                    body = build_title(data)
+                else:
+                    body = build_messages(data, messages, exit_game=exit_game)
                 destination = staging / relative
                 destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 fd = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)

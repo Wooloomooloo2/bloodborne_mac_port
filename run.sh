@@ -56,13 +56,14 @@ if [[ $game != "$(realpath "$original_game")" ]]; then
     mod_views+=("$mod_game")
     trap cleanup_mod_views EXIT
 fi
-unset BB_MAC_SETTINGS_READY
-if [[ ${BB_MAC_SETTINGS:-1} != 0 ]]; then
+unset BB_MAC_SETTINGS_READY BB_EXIT_GAME_READY
+if [[ ${BB_MAC_SETTINGS:-1} != 0 || ${BB_EXIT_GAME:-1} != 0 ]]; then
     if mac_game=$("$PYTHON" scripts/mac_menu.py "$game" "$out") && [[ -n $mac_game && -d $mac_game ]]; then
         game=$mac_game
         mod_game=$mac_game
         mod_views+=("$mac_game")
         export BB_MAC_SETTINGS_READY=1
+        export BB_EXIT_GAME_READY=1
         trap cleanup_mod_views EXIT
     fi
 fi

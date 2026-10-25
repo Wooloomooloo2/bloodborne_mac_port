@@ -492,6 +492,10 @@ saves and settings as the Finder launcher.
   setting. The menu uses English captions in every supported game language.
   Its assets are generated privately from your game files after user mods; originals stay
   untouched. Set `BB_MAC_SETTINGS=0` to disable it. Unsupported assets/code leave it disabled.
+- **Exit Game:** the last entry in the native title menu closes the game and returns to
+  the launcher when launched from it. All six menu choices are visible, including in the
+  DLC title menus. The in-world System menu's save-and-return-to-title action is unchanged.
+  Set `BB_EXIT_GAME=0` to disable this entry independently of Mac Settings.
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.
