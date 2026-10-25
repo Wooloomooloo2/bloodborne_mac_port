@@ -21,6 +21,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Life after Rosetta: evaluate bloodborne-recomp (2026-10-24, after 0.6.0).** The game side
+  (bb-probe and the HLE runtime in `src/`) runs under Rosetta 2, which Apple supports fully only
+  through macOS 27. github.com/bloodborne-native/bloodborne-recomp (GPL-2.0-or-later) recompiles
+  all 241,031 eligible game functions to C and runs the whole game natively on arm64 (with bbcpu,
+  an interpreter and translator, as the fallback), but uses 20-30% more CPU than their translator
+  and has not been compared with Rosetta. Our `static-recompilation` branch stopped at 47,125
+  lifted functions. *Next:* a spike, not adoption: can our loader call their `librecomp.dylib`;
+  what building `src/` for arm64 takes; recompiled vs Rosetta CPU time on the M4 Max.
+  Collaborating beats duplicating.
 - **Signals into guest threads break the game (2026-10-21).** SIGPROF sent to the main thread
   every 1 ms (a sampler's first version) made texture streaming fail every time within minutes
   (`CSGXTextureCreateFragment.cpp(137)` panic, then the game's deliberate null write), even with
@@ -701,6 +710,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Preferred display (#60, 2026-10-24).** The window always opens centred on the main display
+  (`gpu/shim/window.cpp`, `SDL_WINDOWPOS_CENTERED`) and the default resolution comes from it
+  (`gpu/shim/bbgpu.cpp`). Add a `display=` setting chosen in the launcher, applied with
+  `SDL_WINDOWPOS_CENTERED_DISPLAY(id)`, and keep resolution/ultrawide per display so docking does
+  not reset them.
+- **Leftover game processes (#71, 2026-10-24).** After a force-quit of a hung game, `bb-probe`
+  and a GPU host stuck in exit stay alive and the launcher refuses to start ("only one copy").
+  `stop_host` no longer waits forever after SIGKILL (fixes-0.5.6); the launcher should also offer
+  "End the previous copy" (SIGKILL the pgrep'd PIDs, check again, else say a restart is needed).
 - **Show the release version in the launcher (user, 2026-10-23).** Nothing in the window says
   which build is installed, so players (and bug reports) can't tell 0.5.4.2 from 0.5.4.4 without
   opening About. The bundle already carries it: `package_app.sh` writes `CFBundleShortVersionString`
@@ -709,6 +727,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
   every time", with the full `CFBundleVersion` as its tooltip, and "development build" when the
   key is missing (`make_app.sh` copies). Later: compare it with the latest GitHub release (PR #23,
   auto-update).
+
+- **Session log times of GPU library lines (2026-10-22, session logs).** The launcher stamps each
+  line when it arrives (`launcher/App/SessionLogWriter.swift`). bb-probe's stdout is unbuffered
+  and bbgpu-host's own lines are single `write`s, but the GPU library inside bbgpu-host prints
+  through stdio, which is block-buffered on a pipe: its `GPU [...]` lines can arrive in batches,
+  later than written, with one time. *Proper fix:* `setvbuf(stdout, NULL, _IOLBF, 0)` at the
+  start of `host/main.c` (one syscall per line; a few thousand lines a session), or the game's
+  processes stamp lines themselves. Also possible later: the severity as a field the game writes
+  instead of the launcher's heuristics (`SessionLog.classify`).
 
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
   text box opens in full screen, takes typing and Escape cancels, but the letters are not

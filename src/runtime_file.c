@@ -169,9 +169,12 @@ static int game_path(const char *p) {
     return (!strncmp(p,"/app0",5) && (!p[5] || p[5]=='/')) ||
            (!strncmp(p,"/hostapp",8) && (!p[8] || p[8]=='/'));
 }
+/* Benchmark (runtime_pad.c): set once the game opens a map file, i.e. a save is loading. */
+volatile int runtime_bench_map_opened;
 /* All operations return >=0 or -(host errno); wrappers adapt the convention. */
 static int64_t do_open(const char *guest,int flags,int mode) {
     if (game_path(guest) && (flags & (3|0x8|0x200|0x400|0x800))) return -EROFS;
+    if (!runtime_bench_map_opened && strstr(guest,"/map/m")) runtime_bench_map_opened=1;
     char path[1024];
     int e=translate(guest,path,sizeof(path));
     int host=-1;

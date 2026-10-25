@@ -20,6 +20,31 @@ enum GameRunner {
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
+    /// Runs a short command whose output is data (the scripts' JSON): stdout and stderr apart.
+    static func runSeparately(_ command: [String]) -> (status: Int32, output: String, errors: String) {
+        final class Box: @unchecked Sendable { var data = Data() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return (-1, "", error.localizedDescription) }
+        // Both pipes at once: a full stderr pipe would block the script while we wait on stdout.
+        let errors = Box()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errors.data = err.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        let output = out.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self), String(decoding: errors.data, as: UTF8.self))
+    }
+
     /// The game's processes (one copy at a time).
     static var isGameRunning: Bool {
         run(["/usr/bin/pgrep", "-x", "bbgpu-host"]).status == 0 ||
@@ -47,30 +72,28 @@ enum GameRunner {
         return reason.isEmpty ? "The game check failed (status \(result.status))." : reason
     }
 
-    /// Starts the game; `done` gets its exit status on the main queue. The output goes to
-    /// `log` (the previous session's log is kept as game.previous.log).
-    static func start(_ plan: LaunchPlan, log: URL, done: @escaping (Int32) -> Void) throws -> Process {
-        let fm = FileManager.default
-        try fm.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let previous = log.deletingLastPathComponent().appendingPathComponent("game.previous.log")
-        if fm.fileExists(atPath: log.path) {
-            try? fm.removeItem(at: previous)
-            try? fm.moveItem(at: log, to: previous)
-        }
-        fm.createFile(atPath: log.path, contents: nil)
-        let output = try FileHandle(forWritingTo: log)
+    /// Starts the game; `done` gets its exit status on the main queue, after the session log
+    /// (`log`: the game's output, timestamped line by line) is complete.
+    static func start(_ plan: LaunchPlan, log: SessionLogWriter, done: @escaping (Int32) -> Void) throws -> Process {
+        let pipe = Pipe()
         let process = Process()
         process.executableURL = plan.executable
         process.arguments = plan.arguments
         process.environment = plan.environment
         process.currentDirectoryURL = plan.directory
         process.standardInput = FileHandle.nullDevice
-        process.standardOutput = output
-        process.standardError = output
+        process.standardOutput = pipe
+        process.standardError = pipe
         process.terminationHandler = { finished in
-            try? output.close()
-            DispatchQueue.main.async { done(finished.terminationStatus) }
+            let status = finished.terminationStatus
+            DispatchQueue.global(qos: .userInitiated).async {
+                log.finish(status: status) // waits briefly for the rest of the output
+                DispatchQueue.main.async { done(status) }
+            }
         }
+        log.read(pipe)
+        // (Process closes our copy of the write end once the game started: the pipe ends when
+        // every process of the game has exited. Closing it again could close a reused descriptor.)
         try process.run()
         return process
     }

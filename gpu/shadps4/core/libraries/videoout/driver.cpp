@@ -11,6 +11,8 @@
 #include <vector>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <SDL3/SDL_events.h>
 #include <time.h>
 #ifndef _WIN32
 #include <sys/resource.h>
@@ -346,6 +348,8 @@ struct FrameTrace {
         game_busiest_ms;
     char game_busiest[32];
     u64 preempted, draws, compiles, gpu_done, game_faults;
+    // Cumulative at the flip, for the benchmark's per-frame deltas.
+    u64 gpu_busy_ns, upload_bytes;
 };
 
 /// Counter deltas between flips. Counters the 5 s summary resets are re-based by Rebase().
@@ -430,6 +434,79 @@ u64 DisplayTimeToSteady(u64 display_time) {
 #endif
 }
 
+/// Benchmark (BB_BENCHMARK, docs/DESIGN_BENCHMARK.md): one CSV row per presented frame while
+/// the game's phase is "measuring" (BB_BENCH_OUT); at "done" or "failed" the footer, then the
+/// window closes and the game exits. Runs on the presenting thread.
+class BenchRecorder {
+public:
+    void OnFrame(const FrameTrace& t, const FrameTrace& prev, double frame_ms, double game_ms) {
+        static const char* path = std::getenv("BB_BENCH_OUT");
+        BbGpuShared* shared = BbSplit::Host() ? BbSplit::Shared() : nullptr;
+        if (!path || !*path || !shared || finished) {
+            return;
+        }
+        const u32 phase = __atomic_load_n(&shared->bench_phase, __ATOMIC_ACQUIRE);
+        if (phase == 0) {
+            return;
+        }
+        if (!file) {
+            file = std::fopen(path, "w");
+            if (!file) {
+                std::printf("Benchmark: cannot write %s\n", path);
+                finished = true;
+                return;
+            }
+            const char* pass = std::getenv("BB_BENCHMARK");
+            std::fprintf(file, "# bloodborne-benchmark 1\n# pass=%s\n# started=%.3f\n",
+                         pass ? pass : "", UnixSeconds());
+            std::fprintf(file, "t_ms,frame_ms,game_ms,gpu_ms,draws,compiles,compile_wait_ms,"
+                               "upload_mb,game_cpu_ms,gpu_thread_ms,ahead_ms,game_faults\n");
+            start_ns = t.present.presented;
+            std::printf("Benchmark: measuring (%s)\n", path);
+        }
+        if (phase == 1) {
+            const auto delta = [](u64 a, u64 b) { return a >= b ? a - b : 0; };
+            std::fprintf(file, "%.2f,%.2f,%.2f,%.2f,%llu,%llu,%.2f,%.2f,%.2f,%.2f,%.2f,%llu\n",
+                         (double(t.present.presented) - double(start_ns)) / 1e6, frame_ms, game_ms,
+                         delta(t.gpu_busy_ns, prev.gpu_busy_ns) / 1e6,
+                         static_cast<unsigned long long>(t.draws),
+                         static_cast<unsigned long long>(t.compiles), t.compile_wait_ms,
+                         delta(t.upload_bytes, prev.upload_bytes) / 1e6, t.game_cpu_ms,
+                         t.gpu_cpu_ms, t.ahead_ms, static_cast<unsigned long long>(t.game_faults));
+            return;
+        }
+        char error[sizeof(shared->bench_error)];
+        std::memcpy(error, shared->bench_error, sizeof(error));
+        error[sizeof(error) - 1] = 0;
+        std::fprintf(file, "# ended=%.3f\n", UnixSeconds());
+        if (phase == 2) {
+            std::fprintf(file, "# result=ok\n");
+        } else {
+            std::fprintf(file, "# result=error: %s\n", error[0] ? error : "unknown");
+        }
+        std::fclose(file);
+        file = nullptr;
+        finished = true;
+        std::printf("Benchmark: %s; closing the window\n", phase == 2 ? "done" : error);
+        std::fflush(stdout);
+        SDL_Event quit{};
+        quit.type = SDL_EVENT_QUIT;
+        SDL_PushEvent(&quit);
+    }
+
+private:
+    static double UnixSeconds() {
+        return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    }
+
+    std::FILE* file = nullptr;
+    u64 start_ns = 0;
+    bool finished = false;
+};
+
+BenchRecorder bench_recorder;
+
 /// Runs on the presenting thread: matches display times to frames and reports late ones.
 class SpikeLog {
 public:
@@ -484,6 +561,7 @@ private:
         const double flip = gap(t.flip_ns, prev.flip_ns);
         const double present = gap(t.present.presented, prev.present.presented);
         const double display = gap(t.display_ns, prev.display_ns);
+        bench_recorder.OnFrame(t, prev, display > 0 ? display : present, game);
         const bool late_game = game > limit_ms, late_flip = flip > limit_ms,
                    late_present = present > limit_ms, late_display = display > limit_ms;
         spikes_game += late_game;
@@ -600,6 +678,14 @@ void VideoOutDriver::Flip(const Request& req) {
         trace->queued_ns = req.queued_ns;
         trace->flip_ns = NowNs();
         spike_counters.Fill(*trace);
+        trace->gpu_busy_ns = presenter->GetDevice().GpuBusyNs();
+        trace->upload_bytes = BbStats::image_upload_bytes.load(std::memory_order_relaxed) +
+                              BbStats::buffer_upload_bytes.load(std::memory_order_relaxed);
+        if (BbSplit::Host()) {
+            // Benchmark: the game waits for gameplay (thousands of draws a frame).
+            __atomic_store_n(&BbSplit::Shared()->bench_frame_draws, u32(trace->draws),
+                             __ATOMIC_RELAXED);
+        }
         spike_log.display_timing = presenter->IsDisplayTimingSupported();
     }
     // Update HDR status before presenting, then present the frame (bbport: on the swap thread).

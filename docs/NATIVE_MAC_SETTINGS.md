@@ -57,7 +57,7 @@ original vtables.
 
 Settings reads in the Rosetta process use the shared snapshot. Edits are asynchronous
 records on the existing renderer submit ring. The keyboard publisher refreshes settings;
-there is no synchronous per-frame settings request. Shared protocol version is 5, so the
+there is no synchronous per-frame settings request. Shared protocol version is 6, so the
 game-side library and native GPU host must be rebuilt together.
 
 ## Provenance
@@ -118,6 +118,14 @@ before it completed, and no renderer synchronization change is included here.
   installation; invoking the installed callback in a child exits with status 0.
 - Generation against the player's dump covers all three title movies and 22 language
   bundles. All 26 source-file hashes remain unchanged; warm-cache generation is about 7 ms.
-- The complete x86-64 runtime compiles/links with `-Wall -Wextra -Werror`, reusing the
-  existing GPU library. The existing native Mac Settings hook fixture still passes.
+- Both GPU libraries rebuild after the upstream merge. The complete x86-64 runtime and
+  both native host variants compile/link with `-Wall -Wextra -Werror` using protocol 6.
+  The existing native Mac Settings hook and launch-settings fixtures still pass.
+- The existing Rosetta-to-arm64 shared-rings fixture passes with protocol 6: two million
+  records, 500,000 events and 20,000 requests, with no corruption or incorrect events.
 - The new title entry has not been exercised in a live game session or packaged app.
+
+The branch also merges current upstream master. The shared block retains upstream's
+benchmark fields alongside the native settings snapshot; protocol version 6 distinguishes
+that layout from upstream's benchmark-only version 5. Game and GPU processes must use
+matching rebuilt libraries.
