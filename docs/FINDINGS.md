@@ -1885,7 +1885,8 @@ presets (`ultrawide_writes`: scene/UI size, camera aspect, the texture pool abov
 M4 Max, benchmark save in Central Yharnam, upscaler off: both 1920x1200 and 2560x1600 render the
 whole scene at that size ("observed scene depth"), the HUD and item boxes sit correctly, 60 FPS
 at the cap. 2560x1600 gets the under-24 GB memory warning like the 1440p ultrawides.
-# 2026-10-25: native title-menu Exit Game (PR #76)
+
+## 2026-10-25: native title-menu Exit Game (PR #76)
 
 The title menu's unused Opinion Box is shown as Exit Game. Its condition and relocated
 callback are guarded against the original 1.09 code; the callback exits the runtime with
@@ -1900,4 +1901,3 @@ and both native hosts rebuild with protocol 6 (benchmark fields plus settings sn
 The cross-architecture rings fixture passes: two million records, 500,000 events and
 20,000 requests, with zero corruptions. The new Exit Game entry has no live-game or
 packaged-app validation yet. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
-
