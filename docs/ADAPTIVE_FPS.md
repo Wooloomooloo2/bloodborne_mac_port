@@ -54,7 +54,19 @@ and uncapped, updates 1,001 variable frames per converted rate, executes the
 installed jump into the host replacement, checks patch conflicts and rejects
 deliberately corrupted timing sites without changing any image bytes.
 
-These are CPU and private-image fixtures. Moving-platform collision, camera feel,
-combat timing, frame pacing, visual output and actual FPS remain unverified in
-this port. Adaptive is not a claim that the legacy variable-mode lift problem is
-fixed. See [source credits and exact adaptation boundaries](../src/fps/PROVENANCE.md).
+Live gameplay checks on 2026-10-25 also passed with 60 and 120 FPS targets on an
+M4 Max, macOS 27.0, using the current rebuilt x86-64 runtime and native ARM64 GPU
+host. A fresh base-game character exercised walking, camera movement, attacks,
+dodging, lock-on, enemy AI/damage, death and loading into Hunter's Dream at the
+60 FPS target. A copy of that save reloaded at the 120 FPS target and exercised
+sprinting upstairs, stamina, a gift dialog/menu, heavy attack, dodging and camera
+movement. The user also visually checked the game and closed the second session.
+The original saves and source executable remained unchanged.
+
+These are bounded gameplay checks, not a fixed/variable A/B comparison or a
+presentation benchmark. The 120 target did not sustain 120 FPS in Hunter's Dream;
+the adapter followed the measured frame time above and below 60 FPS. Moving-lift
+collision, exact animation/camera-speed equivalence and wider-area stability
+remain unverified. Adaptive is not a claim that the legacy variable-mode lift
+problem is fixed. See [live findings](FINDINGS.md#adaptive-fps-live-gameplay-checks-2026-10-25)
+and [source credits and exact adaptation boundaries](../src/fps/PROVENANCE.md).

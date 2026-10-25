@@ -1894,18 +1894,51 @@ uncapped, including 1,001 variable frames per converted rate, post-protection
 writes, the installed entry jump, whole-patch-set conflicts, and seven admission
 corruptions that left the image unchanged.
 
-The full x86-64 runtime compiled and linked against existing GPU/SDL/ATRAC9
-libraries; the native ARM64 launcher compiled and its model tests passed. Launch
-settings, seven preparation/restart tests, 13 patch tests and renderer-settings
-persistence passed. The existing restart fixture's final 1080p expectation was
-updated to match the Mac startup-patch path already covered by `test_patches.py`.
-No renderer rebuild, game/app launch, FPS measurement or moving-lift test occurred.
-This is not proof that the reported variable-mode lift issue is fixed.
-See [setup and boundaries](ADAPTIVE_FPS.md) and [provenance](../src/fps/PROVENANCE.md).
+After merging upstream `c5ab1e0`, the native ARM64 launcher and its expanded model
+tests pass, as do all 16 patch tests, seven preparation/restart tests,
+launch-settings checks and renderer-settings persistence. The restart fixture's
+final 1080p expectation matches the Mac startup-patch path already covered by
+`test_patches.py`. See [setup and boundaries](ADAPTIVE_FPS.md) and
+[provenance](../src/fps/PROVENANCE.md).
 
-After merging upstream `c5ab1e0`, the only manual conflict resolution retained both
-appended findings sections. The current x86-64 loader, pad runtime and GPU-process
-objects compile, the ARM64 launcher and its expanded model tests pass, and all
-16 patch tests, seven preparation/restart tests and launch-settings checks pass.
-The earlier full runtime link used the pre-merge GPU library; a full rebuild with
-the new upstream benchmark protocol was not performed.
+## Adaptive FPS: live gameplay checks (2026-10-25)
+
+Built both current GPU libraries (`x86_64` and `arm64`, RelWithDebInfo, LTO on),
+the full x86-64 runtime and both native host variants from `356daba`, including
+the current upstream benchmark protocol. Reused the existing pinned SDL/FFmpeg
+and ATRAC9 dependencies. Tested the split-process game on an M4 Max, macOS 27.0
+(26A428), 1920x1080 MetalFX, with frame generation off. The normal ini selection
+(`game_timing=adaptive`) installed the adapter; no legacy FPS++ preset was applied.
+
+The old copied save required DLC that the base-game content provider does not
+expose, so the gameplay tests used a newly created base-game character and private
+save/settings/cache folders. No DLC-provider change was used in these builds.
+
+- **60 target, approximately 22 minutes including setup and idle:** character
+  creation, Iosefka's Clinic, walking, camera rotation, stairs and door opening,
+  unarmed attacks, dodging, target lock, the first enemy's AI and damage, death,
+  loading into Hunter's Dream, then the normal Exit Game path to the title.
+- **120 target, approximately 12 minutes including loading and idle:** reloaded
+  a copy of the new save into Hunter's Dream, sprinted upstairs with stamina
+  consumption, opened the messengers' gift dialog/menu, performed a heavy attack
+  and dodge, and rotated the camera. The user visually checked the result and
+  closed the game window; SDL quit, pipeline-cache flush and runtime exit were
+  logged. No test game process remained afterward.
+- No fatal runtime error or Metal command-buffer failure was logged in either
+  gameplay interval. Original source-save, seed-save, executable and param.sfo
+  hashes were unchanged.
+
+The post-load five-second **flip-rate** windows ranged from 37.9 to 60.0 FPS at
+the 60 target, and 45.7 to 87.7 FPS at the 120 target. These mixed standing,
+movement, menus and streaming diagnostics are not a clean presentation benchmark
+or a comparison with fixed/variable mode. In the 120 run's standing Dream scene,
+the rate was around 78-80 FPS; the logged step followed it at roughly 12-13 ms,
+with cloth stiffness around 0.58-0.60. Logged steps across both runs stayed within
+their configured floor and the 33.33 ms ceiling. The 120 target is not a claim
+of sustained 120 FPS.
+
+The basic gameplay checks passed; no implementation change was needed. Moving
+lifts, exact animation/camera-speed equivalence and longer runs in other areas
+remain unverified. This does not establish that the reported lift issue is fixed.
+Private build hashes, inputs, screenshots, logs and results are kept under
+`out/fps-gameplay-2026-10-25/`; no game or save files are included in the PR.
