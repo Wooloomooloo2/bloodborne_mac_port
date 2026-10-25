@@ -85,6 +85,7 @@ else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
 fi
 if [[ ${1:-} == --test ]]; then
+    python3 tests/test_launcher_stop.py
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
     out/pad-test
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test

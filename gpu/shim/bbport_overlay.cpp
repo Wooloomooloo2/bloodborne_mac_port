@@ -834,6 +834,14 @@ void DisplayTab(BbSettings::Values& s) {
         HintBelow("Holding \xE2\x8C\xA5 Option while opening Bloodborne shows it once.");
         EndCard();
     }
+
+    BeginCard("Mouse");
+    Toggle("Mouse camera", s.mouse_look);
+    SliderRow("Sensitivity", s.mouse_sensitivity, 0.2f, 4.0f);
+    Toggle("Invert vertical", s.mouse_invert_y);
+    HintBelow("Click in the game window to use the mouse; Cmd gives the cursor back. Left click "
+              "R1, right click L2, middle click R3 (lock on), side buttons R2 and L1.");
+    EndCard();
 }
 
 void GraphicsTab(BbSettings::Values& s) {

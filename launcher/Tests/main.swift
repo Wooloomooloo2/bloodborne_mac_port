@@ -555,7 +555,7 @@ do {
     let checkout = Layout.checkout(repo: repo, app: app)
     let env = ["HOME": "/Users/h", "PATH": "/usr/bin:/bin", "BB_FPS_LIMIT": "40", "BB_PRESENT_MODE": "Fifo"]
     check(packaged.benchmarkAssets(env: env).path == contents.appendingPathComponent("Resources/benchmark").path, "packaged benchmark assets")
-    check(checkout.benchmarkAssets(env: env).path == repo.appendingPathComponent("out/benchmark").path, "checkout benchmark assets")
+    check(checkout.benchmarkAssets(env: env).path == repo.appendingPathComponent("benchmark").path, "checkout benchmark assets")
     check(checkout.benchmarkAssets(env: env.merging(["BB_BENCH_ASSETS": "/b"]) { $1 }).path == "/b", "BB_BENCH_ASSETS")
 
     let assets = root.appendingPathComponent("assets")

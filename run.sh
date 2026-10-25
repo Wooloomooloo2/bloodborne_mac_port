@@ -27,6 +27,10 @@ out=$data/out
 mkdir -p "$out"
 export BB_CONFIG=${BB_CONFIG:-$data/bbport.ini}
 # The launcher's fps_cap / fullscreen (bbport.ini) as BB_FPS_LIMIT / BB_FULLSCREEN.
+# The windowless guest does not pump SDL quit events. Leave SIGTERM at its normal
+# disposition so Stop works after SDL audio/gamepad init, including the mod-view child.
+# The native GPU host installs its own termination handling and watches parent exit.
+export SDL_NO_SIGNAL_HANDLERS=1
 source scripts/launch_settings.sh
 bb_launch_settings "$BB_CONFIG"
 # GPU caches (pipelines, shaders) next to the saves. Exported before anything starts: the GPU

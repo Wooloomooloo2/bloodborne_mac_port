@@ -7,6 +7,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_mouse.h"
 #include "bbport_overlay.h"
 
 namespace Frontend {
@@ -16,6 +17,9 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         UNREACHABLE_MSG("Failed to initialize SDL video: {}", SDL_GetError());
     }
+    // bbport: a close request is handled in PollEvents (Cmd+W is ignored there), so SDL must not
+    // turn it into a quit as well. Cmd+Q and the menu bar's Quit still send SDL_EVENT_QUIT.
+    SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
@@ -137,7 +141,15 @@ bool WindowSDL::PollEvents() {
         BbOverlay::UpdateTextInput(window);
     }
     SDL_Event event;
+    // bbport: Cmd as of the event being handled (SDL_GetModState is the state after the pump,
+    // which misses a Cmd+W whose Cmd was let go within the same frame).
+    static bool cmd_held = false;
     while (SDL_PollEvent(&event)) {
+        if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
+            cmd_held = (event.key.mod & SDL_KMOD_GUI) != 0;
+        } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+            cmd_held = false;
+        }
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
@@ -160,7 +172,7 @@ bool WindowSDL::PollEvents() {
         if (event.type == SDL_EVENT_GAMEPAD_ADDED) {
             SDL_OpenGamepad(event.gdevice.which);
         }
-        if (BbOverlay::HandleEvent(event)) {
+        if (BbOverlay::HandleEvent(event) || BbMouse::HandleEvent(window, event)) {
             continue;
         }
         switch (event.type) {
@@ -186,8 +198,17 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             UpdateVisible();
             break;
-        case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            // bbport: Cmd+W. W is "move forward", so pressing Cmd while running (to free the
+            // mouse, or Cmd+, for the menu) auto-repeats the held W as Cmd+W and closed the game.
+            // The window's close button and Cmd+Q still quit.
+            if (cmd_held || (SDL_GetModState() & SDL_KMOD_GUI)) {
+                std::printf("Window: Cmd+W ignored (Cmd+Q quits)\n");
+                std::fflush(stdout);
+                break;
+            }
+            [[fallthrough]];
+        case SDL_EVENT_QUIT:
             // bbport: say which, so an unexpected close can be traced.
             std::printf("Window: %s; closing\n", event.type == SDL_EVENT_QUIT
                                                      ? "quit requested (SDL_EVENT_QUIT)"
@@ -199,6 +220,7 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    BbMouse::Update(window);
     return is_open;
 }
 

@@ -81,14 +81,14 @@ enum Layout: Equatable {
         return FileManager.default.fileExists(atPath: game.appendingPathComponent("eboot.bin").path) ? game : nil
     }
 
-    /// The benchmark's save and recorded route (docs/DESIGN_BENCHMARK.md; not in git):
-    /// BB_BENCH_ASSETS, else Contents/Resources/benchmark in the release app, out/benchmark in a
+    /// The benchmark's save and recorded route (docs/DESIGN_BENCHMARK.md; benchmark/ in git):
+    /// BB_BENCH_ASSETS, else Contents/Resources/benchmark in the release app, benchmark/ in a
     /// checkout. Benchmark.assetsProblem says whether they are there.
     func benchmarkAssets(env: [String: String]) -> URL {
         if let path = env["BB_BENCH_ASSETS"], !path.isEmpty { return URL(fileURLWithPath: path) }
         switch self {
         case let .packaged(contents): return contents.appendingPathComponent("Resources/benchmark")
-        case let .checkout(repo, _): return repo.appendingPathComponent("out/benchmark")
+        case let .checkout(repo, _): return repo.appendingPathComponent("benchmark")
         }
     }
 

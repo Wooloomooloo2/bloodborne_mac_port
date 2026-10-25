@@ -73,9 +73,17 @@ def intel_tonemap_fix(env=os.environ, cpuinfo='/proc/cpuinfo'):
 MODEL_LOD={'-2':'Model LOD -2 (Highest)','1':'Model LOD 1 (Lower)','2':'Model LOD 2 (Lowest)'}
 
 
+# Enemy Control rewrites bytes the frame rate patches also change (0x1972a7d-0x1972a83: 4 bytes
+# with 60/90 FPS++, 7 with Uncap FPS++), so the two cannot be combined.
+FPS_PATCH_NAMES=('30 FPS++','60 FPS++','90 FPS++','Uncap FPS++')
+
+
 def validate_patch_requirements(names, game):
     if 'Restore Debug Camera' in names and 'Enemy Control' in names:
         raise ValueError('Restore Debug Camera conflicts with Enemy Control; enable only one')
+    if 'Enemy Control' in names and any(n in names for n in FPS_PATCH_NAMES):
+        raise ValueError('Enemy Control changes the same code as the frame rate patch; it only '
+                         'works with the 30 FPS cap and fixed game timing')
     if 'Restore Debug Menu (READ NOTES)' in names:
         font = game / 'dvdroot_ps4/font'
         missing = [name for name in ('DbgFont14h.ccm', 'DbgFont14h.tpf')
@@ -299,6 +307,22 @@ def encode(line):
     raise ValueError(f'unsupported patch type {kind!r}')
 
 
+# Writes that are never applied, from any patch file. The FPS++ patches (30/60/90/Uncap) put
+# RET + 4 NOPs over the timed-wait call at 0x02483EC1 inside the game's condition wait
+# (0x02483E80). Its prologue pushed rbp, r15, r14, rbx and rax, so a RET there returns to the
+# saved rax value: any timed wait would crash. Untimed waits take another branch, which is why
+# it never showed. Without the write the game's own wait runs (found by an assessment against
+# Paleblood, verified by disassembly, 2026-10-25).
+UNSAFE_WRITES=((0x02483EC1-EBOOT_BASE, 5, 'RET over the timed condition wait call'),)
+
+
+def unsafe_write(offset, data):
+    """The UNSAFE_WRITES reason when this write touches one of them, else None."""
+    for start,length,reason in UNSAFE_WRITES:
+        if offset<start+length and offset+len(data)>start: return reason
+    return None
+
+
 def compile_patches(xml, names, app_version, segments):
     found={}
     for meta in ET.parse(xml).getroot().iter('Metadata'):
@@ -314,6 +338,7 @@ def compile_patches(xml, names, app_version, segments):
             if not any(start<=offset and offset+len(data)<=end for start,end in segments):
                 print(f'Warning: {name}: address {line.get("Address")} is outside the eboot; skipping', file=sys.stderr)
                 continue
+            if unsafe_write(offset,data): continue  # see UNSAFE_WRITES
             writes.append((offset,data))
     return writes
 
@@ -364,6 +389,9 @@ def compile_external(selected, segments):
                 data=encode(line)
                 if not any(start<=offset and offset+len(data)<=end for start,end in segments):
                     raise ValueError(f'address {line.get("Address")} is outside the eboot')
+                if reason:=unsafe_write(offset,data):
+                    print(f'Patches: {key}: skipped the write at {line.get("Address")} ({reason})',file=sys.stderr)
+                    continue
                 ours.append((offset,data))
         except ValueError as error:
             print(f'Patches: skipped {key}: {error}',file=sys.stderr)

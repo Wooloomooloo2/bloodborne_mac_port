@@ -57,7 +57,7 @@ original vtables.
 
 Settings reads in the Rosetta process use the shared snapshot. Edits are asynchronous
 records on the existing renderer submit ring. The keyboard publisher refreshes settings;
-there is no synchronous per-frame settings request. Shared protocol version is 6, so the
+there is no synchronous per-frame settings request. Shared protocol version is 8, so the
 game-side library and native GPU host must be rebuilt together.
 
 ## Provenance
@@ -140,6 +140,27 @@ before it completed, and no renderer synchronization change is included here.
   return/relaunch behavior and packaged-app shutdown remain untested here.
 
 The branch also merges current upstream master. The shared block retains upstream's
-benchmark fields alongside the native settings snapshot; protocol version 6 distinguishes
-that layout from upstream's benchmark-only version 5. Game and GPU processes must use
-matching rebuilt libraries.
+benchmark and mouse-input fields alongside the native settings snapshot. Protocol version 8
+distinguishes this layout from upstream's version 6 and the independent achievements PR #70's
+version 7. Game and GPU processes must use matching rebuilt libraries.
+
+## Upstream refresh, 25 October 2026
+
+Merged upstream `master` (`af0fae2`) while retaining its mouse controls, keyboard fixes,
+launcher Stop behavior, benchmark and session logs. Native and overlay settings writers
+keep mouse enablement, sensitivity and inversion; the concurrent-writer fixture now
+checks their persistence together with the native launch settings. Protocol version 8
+requires rebuilding both game and GPU-host binaries.
+
+Fresh arm64 and x86-64 GPU builds, the complete runtime, both native hosts and the launcher
+compile successfully with LTO disabled. Native settings/persistence, provider support,
+menu and Exit Game hook guards on both architectures, all 22 synthetic menu-asset tests,
+13 mod tests, 19 patch tests, launcher model and both Stop lifecycle tests, runtime,
+semaphore, pad and launch/restart settings checks pass. The cross-architecture rings
+verify two million records, 500,000 events and 20,000 requests without corruption.
+The offscreen Metal overlay passes normally and with `MTL_DEBUG_LAYER=1`.
+
+These are build and synthetic-fixture results. The full Ninja-based `build_macos.sh --test`
+was not run; GPU builds used CMake/Unix Makefiles. No gameplay, real-asset generation or
+packaged-app session was repeated for this upstream refresh; the live results above
+describe the earlier protocol-6 builds.

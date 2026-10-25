@@ -6,7 +6,9 @@
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
  *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ *   IJKL d-pad (I up, K down, J left, L right).
+ * Mouse (split mode, after a click in the window): the camera (right stick), left button R1,
+ * right L2, middle R3, side buttons R2 and L1; the arrow keys are then the d-pad. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -16,7 +18,11 @@
 #include <pthread.h>
 #include <time.h>
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <sys/stat.h>
+#ifdef __APPLE__
+#include "host/bbgpu_shared.h"
+#endif
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
 #define ERR_INVALID_HANDLE ((int32_t)0x80920003)
@@ -93,7 +99,8 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
-static void sample_host(PadData *d) {
+static int mouse_look_active(void);
+static void sample_devices(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
     d->orientation[3]=1.0f;
@@ -133,11 +140,12 @@ static void sample_host(PadData *d) {
         }
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_TAB]) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-        return;
     }
-    if (!k) return;
+    /* The keyboard works beside a controller: its buttons add to the pad's, and WASD / the arrow
+     * keys take over a stick only while held (with a controller connected the keyboard used to be
+     * ignored, so Enter could not press Play Offline). While Cmd is held the keys are Mac
+     * shortcuts (Cmd+Q, Cmd+, ...), not game input: Cmd+Q drank a Blood Vial. */
+    if (!k || k[SDL_SCANCODE_LGUI] || k[SDL_SCANCODE_RGUI]) return;
     static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
         {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_KP_ENTER,BTN_CROSS},
         {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_ESCAPE,BTN_CIRCLE},
@@ -151,12 +159,76 @@ static void sample_host(PadData *d) {
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
     if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
     if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-    if (d->buttons & BTN_L2) d->l2=255;
-    if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
-    d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    if (k[SDL_SCANCODE_R]) d->l2=255;
+    if (k[SDL_SCANCODE_F]) d->r2=255;
+    if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_D])
+        d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
+    if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_S])
+        d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
+    if (mouse_look_active()) {
+        /* The mouse has the camera, so the arrow keys are the d-pad: menus scroll with them and in
+         * game they switch weapons, tools and quick items. Without mouse look they turn the camera. */
+        if (k[SDL_SCANCODE_UP]) d->buttons|=BTN_UP;
+        if (k[SDL_SCANCODE_DOWN]) d->buttons|=BTN_DOWN;
+        if (k[SDL_SCANCODE_LEFT]) d->buttons|=BTN_LEFT;
+        if (k[SDL_SCANCODE_RIGHT]) d->buttons|=BTN_RIGHT;
+        return;
+    }
+    if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_RIGHT])
+        d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
+    if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_DOWN])
+        d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+}
+
+/* Mouse look: the host window publishes the mouse's speed while it holds the cursor
+ * (gpu/shim/bbport_mouse.cpp). The speed sets the right stick's deflection, full at
+ * MOUSE_FULL_SPEED points/s (the sensitivity is applied by the host), and never below
+ * MOUSE_MIN_DEFLECTION so slow moves still clear the game's stick dead zone. The stick is only
+ * taken over while the mouse moves; gamepad and keyboard keep it otherwise. */
+#define MOUSE_FULL_SPEED 650.0
+#define MOUSE_MIN_DEFLECTION 24.0
+/* The GPU process's shared control block: gpu_process.c registers its accessor when it starts.
+ * Without one (the unit tests link the runtime without gpu_process.c) there is no mouse. */
+static void *(*pad_shared)(void);
+void runtime_pad_set_shared(void *(*shared)(void)) { pad_shared=shared; }
+/* Mouse look is on when the Mouse camera setting is (bbport.ini mouse_look, read at start; the
+ * launcher sets it) or while the host window holds the cursor (switched on in the in-game menu).
+ * The arrow keys are then the d-pad, from the title screen on. */
+static int mouse_look_active(void) {
+    if (bbgpu_mouse_look_enabled()) return 1;
+#ifdef __APPLE__
+    const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
+    return s && __atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE);
+#else
+    return 0;
+#endif
+}
+static void add_mouse(PadData *d) {
+#ifdef __APPLE__
+    const BbGpuShared *s=pad_shared ? (const BbGpuShared *)pad_shared() : NULL;
+    if (!s || !__atomic_load_n(&s->mouse_captured,__ATOMIC_ACQUIRE) || bbgpu_overlay_captures_input()) return;
+    const uint32_t b=__atomic_load_n(&s->mouse_buttons,__ATOMIC_RELAXED);
+    if (b & SDL_BUTTON_LMASK) d->buttons|=BTN_R1;
+    if (b & SDL_BUTTON_RMASK) { d->buttons|=BTN_L2; d->l2=255; }
+    if (b & SDL_BUTTON_MMASK) d->buttons|=BTN_R3;
+    if (b & SDL_BUTTON_X1MASK) { d->buttons|=BTN_R2; d->r2=255; }
+    if (b & SDL_BUTTON_X2MASK) d->buttons|=BTN_L1;
+    const double vx=__atomic_load_n(&s->mouse_vx,__ATOMIC_RELAXED);
+    const double vy=__atomic_load_n(&s->mouse_vy,__ATOMIC_RELAXED);
+    const double speed=sqrt(vx*vx+vy*vy);
+    if (speed<1.0) return;
+    const double fraction=speed>=MOUSE_FULL_SPEED ? 1.0 : speed/MOUSE_FULL_SPEED;
+    const double deflection=MOUSE_MIN_DEFLECTION+(127.0-MOUSE_MIN_DEFLECTION)*fraction;
+    d->right_x=(uint8_t)lround(128.0+vx/speed*deflection);
+    d->right_y=(uint8_t)lround(128.0+vy/speed*deflection);
+#else
+    (void)d;
+#endif
+}
+
+static void sample_host(PadData *d) {
+    sample_devices(d);
+    add_mouse(d);
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -245,12 +317,17 @@ static void record_sample(const PadData *d) {
     fflush(record_file);
 }
 static PadSample *replay; static size_t replay_count, replay_next;
-/* Benchmark traversal: the replay's clock is the GPU host's presented frames at 60 per second
- * (the fixed timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. */
+/* Benchmark traversal: the replay's clock is the game's own frames at 60 per second (the fixed
+ * timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. The game
+ * reads the pad once per frame (7815 reads for 7815 frames shown on the route), so the read count
+ * is that clock. The GPU host's presented frames lag the game by a varying frame or two: as the
+ * clock they let an input land a frame early or late, and the route split into different paths
+ * after about a minute. */
 static int replay_by_frames;
 static uint64_t replay_start_flips;
+static size_t replay_start_reads;
 static uint32_t replay_ms(void) {
-    if (replay_by_frames) return (uint32_t)((bbgpu_bench_host_flips()-replay_start_flips)*1000/60);
+    if (replay_by_frames) return (uint32_t)((reads-replay_start_reads)*1000/60);
     return (uint32_t)((now_us()-replay_start)/1000);
 }
 static void replay_sample(PadData *d) {
@@ -272,13 +349,18 @@ static void replay_sample(PadData *d) {
         }
         replay_start=now_us();
         replay_start_flips=bbgpu_bench_host_flips();
+        replay_start_reads=reads;
         replay_next=0;
     }
     const uint32_t ms=replay_ms();
     while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
     if (!replay_next) return;
     if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
-        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
+        if (replay_armed==1) {
+            printf("Runtime: pad replay finished (%zu pad reads, %llu frames shown)\n",reads-replay_start_reads,
+                   (unsigned long long)(bbgpu_bench_host_flips()-replay_start_flips));
+            replay_armed=2;
+        }
         return;
     }
     const PadSample *s=&replay[replay_next-1];

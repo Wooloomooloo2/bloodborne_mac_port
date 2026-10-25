@@ -15,6 +15,7 @@ final class LauncherModel: ObservableObject {
     private var settingsFile = IniFile()
     private var updaterChanges: AnyCancellable?
     private var benchmarkChanges: AnyCancellable?
+    private var gameProcess: Process?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -23,6 +24,7 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var checkingGame = false
     @Published private(set) var saveProblem: String?
     @Published private(set) var running = false
+    @Published private(set) var stopping = false
     @Published private(set) var exitMessage: String?
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
@@ -238,9 +240,10 @@ final class LauncherModel: ObservableObject {
             let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
             log.note("Bloodborne for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
                      + "\(settingsSummary.joined(separator: ", ")); game folder \(game.path)")
-            _ = try GameRunner.start(plan, log: log) { [weak self] status in self?.finished(status) }
+            gameProcess = try GameRunner.start(plan, log: log) { [weak self] status in self?.finished(status) }
             sessionLog = log.text
             sessionStart = log.start
+            stopping = false
             running = true
             exitMessage = nil
             onStarted?()
@@ -318,12 +321,28 @@ final class LauncherModel: ObservableObject {
         }
     }
 
+    /// The Stop button is for a game started with Play (the benchmark runs its own launches).
+    var canStop: Bool { gameProcess != nil }
+
+    /// Stop only this launcher's child. The native renderer watches its parent and exits too.
+    @discardableResult
+    func stop() -> Bool {
+        guard running, !stopping, let process = gameProcess, process.isRunning else { return false }
+        stopping = true
+        process.terminate()
+        return true
+    }
+
     private func finished(_ status: Int32) {
+        let wasStopped = stopping
+        gameProcess = nil
         running = false
+        stopping = false
         load()
-        if status == 0 {
+        if status == 0 || wasStopped {
             exitMessage = nil
             crashReport = nil
+            showingCrashReport = false
         } else {
             let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
             let (logName, system, settings, ended) = (logURL.lastPathComponent, SystemInfo.current(appVersion: appVersion),
@@ -340,7 +359,7 @@ final class LauncherModel: ObservableObject {
             showingCrashReport = true
             prepareCrashBundle(report: report, status: status, makeReport: makeReport)
         }
-        onExit?(status)
+        onExit?(wasStopped ? 0 : status)
     }
 
     /// In the background: macOS's crash reports of the session (into the report), then the zip.

@@ -33,11 +33,13 @@ struct LauncherView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .disabled(model.running)
             Divider()
             HStack(spacing: 12) {
                 Button("Mods & Cheats…") { ModsWindow.show(launcher: model) }
                 Text(model.modsSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                    .disabled(model.running)
                 UpdateBadge(updater: model.updater)
                 Spacer()
                 if let progress = model.benchmark.progress {
@@ -50,16 +52,27 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
-                Button("Benchmark…") { model.startBenchmark() }
+                if model.running && model.canStop {
+                    Text(model.stopping ? "Stopping…" : "Game running")
+                        .foregroundStyle(.secondary)
+                    Button(action: { model.stop() }) {
+                        Label("Stop", systemImage: "stop.fill").frame(minWidth: 80)
+                    }
+                    .controlSize(.large)
+                    .disabled(model.stopping)
+                    .help("Close the running game. Use the game's Exit Game menu first to finish saving.")
+                } else {
+                    Button("Benchmark…") { model.startBenchmark() }
+                        .controlSize(.large)
+                        .disabled(!model.canPlay)
+                        .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
+                    Button(action: model.play) {
+                        Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                    }
+                    .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
                     .disabled(!model.canPlay)
-                    .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
-                Button(action: model.play) {
-                    Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
                 }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-                .disabled(!model.canPlay)
             }
             .padding()
         }
@@ -159,6 +172,18 @@ struct LauncherView: View {
                     Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
                         .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
                     Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
+                }
+                Section("Controls") {
+                    Toggle("Mouse camera", isOn: $model.settings.mouseLook)
+                    Text(model.settings.mouseLook
+                         ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
+                         : "The arrow keys turn the camera. Controllers always work.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    DisclosureGroup("Keyboard and mouse") {
+                        ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
+                            LabeledContent(row.0, value: row.1)
+                        }
+                    }
                 }
                 Section("Locations") {
                     FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",

@@ -76,6 +76,12 @@ struct Values {
     /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};
+    /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
+    /// Off by default: on, the first left click in the window captures the cursor, for gamepad
+    /// players too. Players turn it on in the menu (Display > Mouse camera).
+    std::atomic<bool> mouse_look{false};
+    std::atomic<float> mouse_sensitivity{1.0f};
+    std::atomic<bool> mouse_invert_y{false};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     // Fixed at launch: native scene/UI patch dimensions, requiring a restart.
     int ultrawide_width = 0, ultrawide_height = 0;

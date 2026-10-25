@@ -1910,3 +1910,95 @@ command return code corroborate the logs. No crash/fatal-stop lines were present
 26 original menu assets plus source save copy stayed unchanged. The initial missing-DLC
 check was closed normally and excluded from the menu-exit results. The packaged launcher
 app was not exercised. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
+## 2026-10-25: benchmark route repeatability (replay clock)
+
+The traversal replay stepped by the GPU host's presented frames, which lag the game by a varying
+frame or two. Draw counts per 10 s block (% from a reference run): the first ~50 s always matched,
+later blocks differed by 25-57% in most runs (two or three repeating paths). The game reads the pad
+once per frame (7815 reads = 7815 frames shown), so the replay now counts pad reads. Three runs
+with the new clock (M4 Max, test data): 0-5% in every block. The route file's wall-clock times
+still make the character bump walls/items near spots where the recording hitched (the same way
+every run); re-recording with frame numbers is planned (DESIGN_BENCHMARK "Next").
+
+## PR #20 on an M3 Pro, against 0.5.1 (2026-10-19)
+
+MacBook Pro M3 Pro (11 CPU / 14 GPU cores), 18 GB, macOS 15.7.5. A copy of a player's save at
+the lamp in Iosefka's Clinic: camera still, 1594-1595 draws per frame in every window of every
+configuration, no compiles while measuring; native 1080p, upscaler off, all effects, 60 cap (not
+reached). Each configuration with its own warmed shader cache, 60 s measured after a 20 s
+settle, process CPU from OS CPU-time deltas. Stock = the 0.5.1 release's GPU library; the game
+process carries the load lock (2cb8681) in every configuration. "All" = the PR on 0.5.1 with
+`BB_SPIRV_PRECISE=invariant` and the PR's arena sizing (dropped since; 0.5.2 sizes the arena).
+Stock and all ran twice (31.4/31.3 and 38.1/37.9 FPS), the others once (±0.6%).
+
+| | 0.5.1 | all | change |
+|---|---|---|---|
+| FPS | 31.3 | **38.0** | **+21.2%** |
+| GPU busy, ms per frame | 31.9 | 26.3 | -17.5% |
+| CPU per frame, both processes | 102.7 ms | 80.8 ms | -21.3% |
+| GPU command thread per draw | 17.7 us | 5.2 us | -71% |
+
+Each one switched off alone (all others on):
+
+| Change | FPS without | gain | also |
+|---|---|---|---|
+| Copy-shader copies deferred to the pass end (27a21db) | 33.7 | **+12.8%** | GPU 29.7 → 26.3 ms |
+| Invariant positions (`BB_SPIRV_PRECISE=invariant`; opt-in then, the default since 0.5.4) | 33.9 | **+12.0%** | GPU 29.5 → 26.3 ms |
+| Draw-pipe sleeping wait (44300ab) | 38.6 | -1.5% | CPU 95.7 → 80.8 ms per frame, GPU process 58.8 → 44.5 |
+| Arena sized from guest memory (dropped) | 37.7 | +0.6% (noise) | GPU memory -2.4 GiB |
+
+Invariant positions on this Mac: no flicker, z-fighting or missing geometry seen in the clinic
+or Hunter's Dream screenshots; the player, who has played with it on since 2026-10-17, reported
+no artifacts (one check, 2026-10-17). Deferred copies: 0 conflicts in both scenes, ~170 copies deferred per frame in the
+clinic; screenshots 0.7 s apart switching it on and off differ less (1.88 mean per channel)
+than same-setting screenshots 1.4 s apart (3.10).
+
+## 2026-10-25: FPS++ patches wrote RET into the game's condition wait
+
+30/60/90/Uncap FPS++ write `C3 90 90 90 90` at 0x02483EC1, the timed-wait `call` inside the
+game's condition wait (0x02483E80: push rbp/r15/r14/rbx/rax; untimed waits, edx = -1, take another
+call). A RET there returns to the saved rax: any timed wait would crash (one caller would jump to
+0). Never seen, so timed waits are evidently not reached in normal play. patches.py now drops that
+write from every patch file (UNSAFE_WRITES), leaving the game's own wait. M4 Max, test data: 60 FPS
+benchmark walk 59.9 FPS, 8 frames > 33 ms (as before), same route; 120 cap with Uncap FPS++ 60 s,
+119.4 FPS, no crash. Enemy Control is now refused alongside an FPS patch (overlapping bytes at
+0x1972a7d). Source: an assessment comparing the port with Paleblood, verified by disassembly.
+
+2026-10-20 — launcher Stop (split from PR #26): retain this launcher's Process;
+Play becomes Stop/Stopping and settings are disabled while playing. Intentional Stop/Quit
+does not produce a crash sheet. For sessions started through the launcher window, keep
+it available behind the game with both launcher and game Dock icons. Direct launch
+("Show launcher every time" off, without the Option override) keeps the window hidden
+and the launcher an accessory app, so only the game has a Dock icon. Reopen explicitly
+reveals the launcher and leaves direct mode. Quit waits for its child to finish. This
+touches the same gameEnded/showWindow lifecycle as update PR #23; rebase after #23 merges.
+
+PR #31 review follow-up: onStarted now preserves the direct path's orderOut/accessory
+behaviour instead of unconditionally showing a launcher window. Startup selection,
+Option override and the existing direct-path exit/error handling are unchanged.
+
+An additional stop test exposed SDL's SIGTERM handler in the windowless game: it only
+queues an SDL quit event, which the guest does not consume. run.sh now exports
+SDL_NO_SIGNAL_HANDLERS=1. The native host keeps its own termination handling. Without a
+mod view, run.sh execs bb-probe; with one, its existing trap forwards SIGTERM, waits for
+the child, then removes only its private merged view. tests/test_launcher_stop.py drives
+the production GameRunner.start and Process.terminate against run.sh with a real x86 SDL
+probe, both directly and with an actual mods.py merged view, using synthetic assets only.
+Preparation is stubbed; this is process-lifetime coverage, not a full gameplay test.
+The previous combined build also passed game Stop/restart/Quit with copied saves, and the
+SDL signal fix passed a restored-game stop with both guest and renderer confirmed gone.
+
+Split validation: both production-Process termination tests pass on macOS with x86 SDL,
+including removal of the merged view and unchanged synthetic source/mod files. Launcher
+build/model tests pass. No private save data is used by these regression tests.
+
+## 2026-10-25: native menu PR #76 refreshed against 0.5.7
+
+Merged `af0fae2` while preserving the native menus, upstream mouse input, launch settings,
+benchmark and launcher lifecycle. Shared protocol 8 distinguishes the native settings
+snapshot from upstream's mouse layout (6) and the independent achievements PR's layout
+(7). Both GPU architectures, the runtime, both GPU hosts and launcher compile. Native
+settings with mouse-preference persistence, menu/Exit Game hooks, asset/mod/patch fixtures,
+launcher model/Stop lifecycle, runtime/semaphore/pad, launch/restart settings, shared rings
+and the Metal overlay (plain and validation layer) pass. Gameplay and packaged-app checks
+were not repeated. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md#upstream-refresh-25-october-2026).
