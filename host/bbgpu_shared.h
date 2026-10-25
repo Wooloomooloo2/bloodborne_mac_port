@@ -34,7 +34,7 @@
 #define BBGPU_GUEST_MAX UINT64_C(0xfc00000000)
 
 #define BBGPU_SHARED_MAGIC 0x31424742u /* "BGB1" */
-#define BBGPU_SHARED_VERSION 4u /* 3: command buffer copy arena; 4: game fault counters */
+#define BBGPU_SHARED_VERSION 5u /* 3: command buffer copy arena; 4: game fault counters; 5: benchmark */
 #define BBGPU_CONTROL_SIZE (UINT64_C(4) << 20) /* control block and rings */
 /* Command buffer copies (game side, at submit; the host parses these): the game may rewrite its
  * command buffers once the submit returns, before the host has parsed them. */
@@ -210,6 +210,11 @@ typedef struct {
     /* ... and over the last game frame: all guest threads' CPU time, the busiest thread's. */
     uint64_t game_frame_cpu_ns, game_busiest_ns;
     char game_busiest_name[32];
+    /* Benchmark (BB_BENCHMARK, docs/DESIGN_BENCHMARK.md): the host's draws in its last presented
+     * frame (gameplay detection); the game's phase (0 waiting, 1 measuring, 2 done, 3 failed;
+     * bench_error says why). */
+    uint32_t bench_frame_draws, bench_phase;
+    char bench_error[96];
 } BbGpuShared;
 
 #define BBGPU_SUBMIT_RING_OFFSET (UINT64_C(64) << 10)

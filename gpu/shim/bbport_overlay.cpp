@@ -646,7 +646,7 @@ void DisplayTab(BbSettings::Values& s) {
     const char* wide = std::getenv("BB_ULTRAWIDE_RES");
     const bool native_wide = wide && wide[0];
     if (native_wide) {
-        BeginCard("Native ultrawide");
+        BeginCard("Native ultrawide / 16:10");
         ValueRow("Resolution", wide);
         Note("Change resolution in the launcher and restart. Upscaling is off.");
         EndCard();

@@ -17,10 +17,12 @@ final class LauncherModel: ObservableObject {
     let layout: Layout
     let secrets: SecretStore
     let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
+    let benchmark = BenchmarkRunner()
     private let env = ProcessInfo.processInfo.environment
     private var confFile = IniFile()
     private var settingsFile = IniFile()
     private var updaterChanges: AnyCancellable?
+    private var benchmarkChanges: AnyCancellable?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -43,6 +45,16 @@ final class LauncherModel: ObservableObject {
     /// The last session's crash report (the game stopped with an error), shown as a sheet.
     @Published private(set) var crashReport: CrashReport?
     @Published var showingCrashReport = false
+    /// The diagnostics zip of the last crash (CrashBundle), once written.
+    @Published private(set) var crashBundle: URL?
+    @Published private(set) var preparingCrashBundle = false
+    /// The running or last session's text log (SessionLog).
+    @Published private(set) var sessionLog: URL?
+    private var sessionStart: Date?
+    /// Why the Benchmark button can't run (no assets in this build), else nil.
+    @Published private(set) var benchmarkProblem: String?
+    /// The mod folders the next launch loads (mods.json), for the footer's summary.
+    @Published private(set) var enabledMods: [String] = []
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -53,12 +65,22 @@ final class LauncherModel: ObservableObject {
         dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
     }
 
     var confURL: URL { layout.launchConfURL(env: env) }
     var settingsURL: URL { URL(fileURLWithPath: env["BB_CONFIG"] ?? dataDir.appendingPathComponent("bbport.ini").path) }
-    var logURL: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())).appendingPathComponent("game.log") }
+    var logsFolder: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())) }
+    /// This launch's session log, else the newest one (game.log links to it).
+    var logURL: URL { sessionLog ?? logsFolder.appendingPathComponent(SessionLog.latestName).resolvingSymlinksInPath() }
+    private var appVersion: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return info["CFBundleVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "development build"
+    }
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
+    var modFiles: ModFiles { ModFiles(dataDir: dataDir, env: env) }
+    /// "2 mods · 1 cheat on" next to the Mods & Cheats… button.
+    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }
@@ -88,7 +110,22 @@ final class LauncherModel: ObservableObject {
         p2pPortText = String(online.p2pPort)
         newShadnetPassword = ""
         refreshSecretState()
+        benchmarkProblem = Benchmark.assetsProblem(layout.benchmarkAssets(env: env))
+        refreshEnabledMods()
         checkGame()
+    }
+
+    func refreshEnabledMods() {
+        let files = modFiles
+        enabledMods = ModsConfig.enabledMods(modsDir: files.mods, config: files.modsConfig)
+    }
+
+    /// The Cheats & Tweaks tab: bbport.ini at once (not while the game runs: its menu writes the
+    /// file too, and the launcher reads it again when the game ends).
+    func setCheat(_ name: String, on: Bool, cheats: [CheatInfo]) {
+        guard !running else { return }
+        settings.cheats = Cheats.toggle(name, on: on, in: settings.cheats, cheats: cheats)
+        save()
     }
 
     func save() {
@@ -190,6 +227,7 @@ final class LauncherModel: ObservableObject {
     func checkGame() {
         guard let folder = config.gameDir else {
             gameProblem = "Choose the game folder (CUSA03173 with update 1.09, the folder containing eboot.bin)."
+            NSApplication.shared.applicationIconImage = nil
             return
         }
         checkingGame = true
@@ -200,9 +238,21 @@ final class LauncherModel: ObservableObject {
                 if self.config.gameDir == folder {
                     self.gameProblem = problem
                     self.checkingGame = false
+                    if problem == nil {
+                        self.applyGameIcon(from: folder)
+                    } else {
+                        NSApplication.shared.applicationIconImage = nil
+                    }
                 }
             }
         }
+    }
+
+    private func applyGameIcon(from folder: URL) {
+        let iconURL = folder.appendingPathComponent("sce_sys/icon0.png")
+        guard FileManager.default.fileExists(atPath: iconURL.path),
+              let iconImage = NSImage(contentsOf: iconURL) else { return }
+        NSApplication.shared.applicationIconImage = iconImage
     }
 
     private func pickFolder(_ message: String, start: URL?) -> URL? {
@@ -290,15 +340,89 @@ final class LauncherModel: ObservableObject {
             config.saveDir = nil
             save()
         }
+        guard backUpSavesIfNeeded() else { onExit?(-1); return }
         let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
         do {
-            _ = try GameRunner.start(plan, log: logURL) { [weak self] status in self?.finished(status) }
+            let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
+            log.note("Bloodborne for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
+                     + "\(settingsSummary.joined(separator: ", ")); game folder \(game.path)")
+            _ = try GameRunner.start(plan, log: log) { [weak self] status in self?.finished(status) }
+            sessionLog = log.text
+            sessionStart = log.start
             running = true
             exitMessage = nil
             onStarted?()
         } catch {
             exitMessage = "The game could not start: \(error.localizedDescription)"
             onExit?(-1)
+        }
+    }
+
+    /// The Benchmark button: two game launches with the benchmark's own save and settings
+    /// (docs/DESIGN_BENCHMARK.md); the results sheet opens when they are done. `confirm` false:
+    /// started by `--benchmark` (scripted comparisons), no question first.
+    func startBenchmark(confirm: Bool = true) {
+        guard !running, let game = config.gameDir else { return }
+        if let benchmarkProblem {
+            let alert = NSAlert()
+            alert.messageText = "The benchmark is not available"
+            alert.informativeText = benchmarkProblem
+            alert.runModal()
+            return
+        }
+        save()
+        if GameRunner.isGameRunning {
+            exitMessage = "Bloodborne is already running. Quit the game before starting the benchmark."
+            return
+        }
+        if !GameRunner.hasRosetta {
+            exitMessage = "The game needs Rosetta 2: press Play once to install it."
+            return
+        }
+        if confirm {
+            let alert = NSAlert()
+            alert.messageText = "Run the benchmark?"
+            alert.informativeText = "The game starts twice, about 6 minutes in all: a recorded walk through Central Yharnam, then 30 seconds standing still without a frame cap. Don't touch the game window, the keyboard or a controller while it runs: the walk is replayed, and any input would change it.\n\nThe benchmark uses its own save and fixed settings (1920 × 1080, upscaler off, windowed). Your saves and settings are not changed. The results open here when it's done."
+            alert.addButton(withTitle: "Start Benchmark")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        let job = BenchmarkRunner.Job(layout: layout, gameDir: game, dataDir: dataDir, env: env,
+                                      assets: layout.benchmarkAssets(env: env))
+        do {
+            try benchmark.start(job, home: URL(fileURLWithPath: NSHomeDirectory()), started: { [weak self] in
+                self?.running = true
+                self?.exitMessage = nil
+                self?.onStarted?()
+            }, done: { [weak self] in
+                guard let self else { return }
+                self.running = false
+                self.load()
+                self.onExit?(0)
+            })
+        } catch {
+            exitMessage = "The benchmark could not start: \(error.localizedDescription)"
+        }
+    }
+
+    /// Mods and cheats can change what ends up in the save: the first launch with a set not seen
+    /// before copies the save folder to <data>/save-backups/<date>/savedata (the newest five
+    /// stay). False: the copy failed and the player cancelled.
+    private func backUpSavesIfNeeded() -> Bool {
+        refreshEnabledMods()
+        let backups = modFiles.backups
+        let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
+        guard SaveBackup.needed(signature, last: SaveBackup.lastSignature(backups: backups)) else { return true }
+        do {
+            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, signature: signature)
+            return true
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Your save could not be backed up"
+            alert.informativeText = "The launcher backs up your save before the first launch with a new set of mods or cheats, and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
+            alert.addButton(withTitle: "Play Anyway")
+            alert.addButton(withTitle: "Cancel")
+            return alert.runModal() == .alertFirstButtonReturn
         }
     }
 
@@ -310,15 +434,46 @@ final class LauncherModel: ObservableObject {
             crashReport = nil
         } else {
             let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
-            let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "development build"
-            let report = CrashReport(status: status, log: log, logName: logURL.lastPathComponent,
-                                     system: .current(appVersion: version), settings: settingsSummary,
-                                     home: NSHomeDirectory())
+            let (logName, system, settings, ended) = (logURL.lastPathComponent, SystemInfo.current(appVersion: appVersion),
+                                                      settingsSummary, Date())
+            let started = sessionStart
+            let makeReport: @Sendable ([NativeCrash]) -> CrashReport = { natives in
+                CrashReport(status: status, log: log, logName: logName, system: system, settings: settings,
+                            home: NSHomeDirectory(), started: started, ended: ended, natives: natives)
+            }
+            let report = makeReport([])
             crashReport = report
+            crashBundle = nil
             exitMessage = report.summary
             showingCrashReport = true
+            prepareCrashBundle(report: report, status: status, makeReport: makeReport)
         }
         onExit?(status)
+    }
+
+    /// In the background: macOS's crash reports of the session (into the report), then the zip.
+    private func prepareCrashBundle(report: CrashReport, status: Int32, makeReport: @escaping @Sendable ([NativeCrash]) -> CrashReport) {
+        preparingCrashBundle = true
+        let start = sessionStart ?? Date().addingTimeInterval(-3600)
+        let looksLikeCrash = (status > 128 && status < 160) || report.cause.map {
+            $0.localizedCaseInsensitiveContains("signal") || $0.localizedCaseInsensitiveContains("crash")
+        } == true
+        let name = "crash-" + (sessionLog?.deletingPathExtension().lastPathComponent ?? SessionLog.name(start: start))
+            .replacingOccurrences(of: "game-", with: "")
+        let (logs, sessionLog, settings, conf) = (logsFolder, sessionLog, settingsURL, confURL)
+        Task.detached {
+            let native = CrashBundle.nativeCrashes(since: start, expectOne: looksLikeCrash)
+            let full = native.crashes.isEmpty ? report : makeReport(native.crashes)
+            let zip = try? CrashBundle.write(report: full, name: name, logs: logs, sessionLog: sessionLog,
+                                             ipsFiles: native.files, settings: settings, launchConf: conf)
+            await MainActor.run {
+                // (Unless another session ended meanwhile.)
+                guard self.crashReport?.report == report.report else { return }
+                self.crashReport = full
+                self.crashBundle = zip
+                self.preparingCrashBundle = false
+            }
+        }
     }
 
     /// The settings most likely to matter in a crash report.
@@ -339,11 +494,18 @@ final class LauncherModel: ObservableObject {
         NSPasteboard.general.setString(crashReport.report, forType: .string)
     }
 
-    /// Copies the report (too long for a link) and opens a new GitHub issue to paste it into.
+    /// Opens a new GitHub issue with the report filled in (copied too, for when it is too long for
+    /// the link) and shows the diagnostics zip in Finder, to drag onto the issue.
     func reportOnGitHub() {
         guard let crashReport else { return }
         copyCrashReport()
-        NSWorkspace.shared.open(crashReport.issueURL)
+        let link = crashReport.issueLink(bundle: crashBundle?.lastPathComponent)
+        if let crashBundle { showCrashBundle(crashBundle) }
+        NSWorkspace.shared.open(link.url)
+    }
+
+    func showCrashBundle(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     /// One check a day, silent unless it finds an update: when the launcher window shows, or as
