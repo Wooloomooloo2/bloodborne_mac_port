@@ -1899,5 +1899,14 @@ all 26 source hashes unchanged. Warm cache lookup is about 7 ms.
 launch-settings fixtures pass. After merging upstream, both GPU libraries, the runtime
 and both native hosts rebuild with protocol 6 (benchmark fields plus settings snapshot).
 The cross-architecture rings fixture passes: two million records, 500,000 events and
-20,000 requests, with zero corruptions. The new Exit Game entry has no live-game or
-packaged-app validation yet. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
+20,000 requests, with zero corruptions.
+
+Live Exit Game checks now pass on the regular runtime with a fresh profile, and after
+loading Central Yharnam and saving/returning to title using the existing DLC-aware test
+helper and an isolated copied save. In both checks, controller input selected the new
+title command, runtime and native GPU host exited with status 0, the pipeline cache flush
+completed, and no test processes remained. macOS kqueue exit-status events and the launch
+command return code corroborate the logs. No crash/fatal-stop lines were present, and the
+26 original menu assets plus source save copy stayed unchanged. The initial missing-DLC
+check was closed normally and excluded from the menu-exit results. The packaged launcher
+app was not exercised. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
