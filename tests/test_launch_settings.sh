@@ -56,11 +56,17 @@ timing $'fps_cap=90\n' "90 1"
 timing $'fps_cap=40\n' "uncap 1"                         # no fixed-step patch for 40
 timing $'fps_cap=120\n' "uncap 1"
 timing $'fps_cap=60\ngame_timing=variable\n' "uncap 1"
+timing $'fps_cap=60\ngame_timing=adaptive\n' "adaptive 1"
+timing $'fps_cap=40\ngame_timing=adaptive\n' "adaptive 1"
+timing $'fps_cap=120\ngame_timing=adaptive\n' "adaptive 1"
+timing $'fps_cap=30\ngame_timing=adaptive\n' "adaptive 1"
+timing $'fps_cap=60\ngame_timing=adaptive\n' "uncap -" BB_FPS=uncap
 timing $'upscaler=off\n' "uncap 1"                        # no cap: the presenter's default, variable
 timing $'fps_cap=60\n' "uncap -" BB_FPS=uncap             # explicit BB_FPS wins
 timing $'fps_cap=60\n' "90 1" BB_FPS_LIMIT=90             # explicit limit picks the patch
 timing $'fps_cap=90\n' "60 1" BB_FPS=uncap BB_FPS_AUTO=1 BB_FPS_LIMIT=60
 timing $'fps_cap=60\ngame_timing=variable\n' "uncap 1" BB_FPS=60 BB_FPS_AUTO=1  # restart re-picks
+timing $'fps_cap=120\ngame_timing=adaptive\n' "adaptive 1" BB_FPS=60 BB_FPS_AUTO=1
 rm -f "$ini"
 /bin/bash -c 'source scripts/launch_settings.sh; bb_launch_settings /nonexistent/bbport.ini' ||
     { echo "FAIL: launch settings with a missing file"; exit 1; }

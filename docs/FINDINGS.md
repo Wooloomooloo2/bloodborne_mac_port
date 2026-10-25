@@ -1811,3 +1811,28 @@ value conversion instead of the bits. Second part: Metal's fast math (the defaul
 these ops) back into plain ones; NaN and Inf are now tested on the bit pattern, and the clamp
 output modifier turns NaN into 0 as GCN does. Shader cache meta version 11 (rebuilt once).
 City at 1080p still holds 60 FPS; all 214 pipelines of the test cache build in Metal.
+
+## Opt-in adaptive FPS timing: CPU validation (2026-10-25)
+
+Added `game_timing=adaptive` in the launcher, adapting the timing system from
+`evill33t/bloodborne_mac` (`bbacb95c`) and `droogie/bbhost` (`566184a`). It runs in
+the x86-64 runtime, with a private timing-data tail and a checked SysV limiter
+replacement. Fixed remains the default; 30 FPS remains unmodified. The loader
+refuses conflicting patch sets before applying any of their writes. Original game
+files and saves were not changed.
+
+CPU checks passed: 20 limiter/reference cases, 93 numerical checks, 21 executed
+wind-instruction cases and detection of all 20 deliberately altered results.
+Private supported-1.09-image checks passed at 30/40/60/90/120/144/165/240 and
+uncapped, including 1,001 variable frames per converted rate, post-protection
+writes, the installed entry jump, whole-patch-set conflicts, and seven admission
+corruptions that left the image unchanged.
+
+The full x86-64 runtime compiled and linked against existing GPU/SDL/ATRAC9
+libraries; the native ARM64 launcher compiled and its model tests passed. Launch
+settings, seven preparation/restart tests, 13 patch tests and renderer-settings
+persistence passed. The existing restart fixture's final 1080p expectation was
+updated to match the Mac startup-patch path already covered by `test_patches.py`.
+No renderer rebuild, game/app launch, FPS measurement or moving-lift test occurred.
+This is not proof that the reported variable-mode lift issue is fixed.
+See [setup and boundaries](ADAPTIVE_FPS.md) and [provenance](../src/fps/PROVENANCE.md).

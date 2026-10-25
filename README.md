@@ -47,6 +47,13 @@ rebuilds the shader cache once (a minute or so of stutter).
   60/90 FPS++ patches); 30 runs the game unpatched, and 40 and 120 stay variable. If a scene can't
   hold the cap, the game slows down a little instead. **Game timing** under the launcher's frame
   rate cap (`game_timing` in `bbport.ini`) switches back to variable steps.
+- **Optional adaptive FPS timing (experimental).** Choose **Adaptive** under
+  **Game timing** in the launcher to use the timing system adapted from
+  [evill33t/bloodborne_mac](https://github.com/evill33t/bloodborne_mac/tree/bbacb95c3338efcd627c0edaec05ff7534e555da)
+  and bbhost. It adjusts movement, physics/AI, cloth, wind and play-time accounting
+  to measured frame times. At 30 FPS it keeps the game unmodified. Fixed remains
+  the default; moving lifts, gameplay and presentation still need testing with
+  Adaptive. [Setup, provenance and validation](docs/ADAPTIVE_FPS.md).
 - **The rare "memmove" crash is fixed** (#34, #37, #38, #54, #57). The game's render thread builds
   each frame's commands in a fixed 256 KB pool. It normally uses about 3% of it, but on rare frames
   it needs more, and the game then copied into a null address and crashed. When the pool runs out,
@@ -588,11 +595,16 @@ This port stands entirely on the work of others:
   Vulkan-Headers, SPIRV-Cross, fmt, xxHash, miniz, FFmpeg, magic_enum, robin-map, Boost.
 - **Community patch authors** — Kyo, Lance McDonald, illusion, emoose, auser1337 and others
   for the 60 FPS, camera and engine patches in `patches/Bloodborne.xml`.
+- **evill33t/bloodborne_mac and droogie/bbhost** — the optional adaptive timing
+  adapter, with Kyo, Lance McDonald and yogesh1239's timing work. **Paleblood**
+  supplies the independent CPU-test reference. [Exact sources and licenses](src/fps/PROVENANCE.md).
 - **zackcage6** — testing and bug reports for the Windows port.
 
 Each third-party component keeps its own license file in its directory.
 
 ## License
 
-GNU General Public License v2.0 or later (GPL-2.0-or-later), because of the shadPS4
-components. See [LICENSE](LICENSE).
+The existing port and shadPS4 components are GNU General Public License v2.0 or later
+(GPL-2.0-or-later); see [LICENSE](LICENSE). The game runtime also includes
+GPL-3.0-or-later adaptive timing, so the combined runtime is distributed under
+GPL-3.0-or-later. See [timing license and provenance](src/fps/PROVENANCE.md).

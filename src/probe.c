@@ -7,6 +7,8 @@
 #include <string.h>
 #include <inttypes.h>
 #include "runtime.h"
+#include "fps/timing.h"
+#include "fps/patch_guard.h"
 #include "gpu/bbgpu.h"
 #include "gpu_process.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
@@ -560,6 +562,11 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
     char magic[8];
     if (!f || fread(magic,1,8,f)!=8 || memcmp(magic,"BBPATCH2",8)) fail("invalid patch file");
     uint64_t base=read64(f), count=read64(f), bytes=0, rebased=0;
+    /* Check the whole patch set before its first write. An external FPS patch
+     * must not overwrite the adaptive limiter or any of its timing sites. */
+    int patch_check=bb_fps_validate_patches(f,count);
+    if (patch_check==2) fail("patch set overlaps installed adaptive FPS timing");
+    if (patch_check) fail("bad patch entry or file extent");
     unsigned char data[4096];
     for (uint64_t i=0;i<count;++i) {
         uint64_t offset=read64(f), length=read64(f);
@@ -655,7 +662,7 @@ int main(int argc, char **argv) {
         g_bb_trace = 1;
     }
 
-    int cpu_only = 0, strict_imports = 0;
+    int cpu_only = 0, strict_imports = 0, adaptive_fps = -1;
     unsigned timeout_seconds = 10;
     const char *content_profile=NULL, *app0=NULL, *user_dir=NULL, *patch_file=NULL;
     for (int i = 2; i < argc; ++i) {
@@ -666,6 +673,12 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--app0") && i+1<argc) app0=argv[++i];
         else if (!strcmp(argv[i], "--user") && i+1<argc) user_dir=argv[++i];
         else if (!strcmp(argv[i], "--patches") && i+1<argc) patch_file=argv[++i];
+        else if (!strcmp(argv[i], "--adaptive-fps") && i+1<argc) {
+            char *end=NULL; const char *value=argv[++i];
+            long cap=strtol(value,&end,10);
+            if (!*value || *end || (cap!=0 && (cap<30 || cap>240))) fail("adaptive FPS cap must be 0 or 30..240");
+            adaptive_fps=(int)cap;
+        }
         else if (!strcmp(argv[i], "--timeout") && i+1<argc) timeout_seconds=(unsigned)strtoul(argv[++i],NULL,10);
         else { fprintf(stderr, "Unknown option: %s\n", argv[i]); return 1; }
     }
@@ -690,7 +703,7 @@ int main(int argc, char **argv) {
     mallopt(M_MMAP_THRESHOLD,32*1024*1024);
 #endif
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--timeout seconds]\n", argv[0]);
+        fprintf(stderr, "Usage: %s boot.bin [--cpu-only] [--strict-imports] [--content-profile file] [--app0 dir] [--user dir] [--patches file] [--adaptive-fps 0|30..240] [--timeout seconds]\n", argv[0]);
         return 1;
     }
     if (content_profile) {
@@ -823,7 +836,8 @@ int main(int argc, char **argv) {
             if (!executable) fail("native function is not executable");
         }
     }
-    image = allocate(round_page(size));
+    size_t timing_tail=adaptive_fps>=0 && adaptive_fps!=30 ? bb_fps_tail_size() : 0;
+    image = allocate(round_page(size)+timing_tail);
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
     runtime_sampler_init(image, size);
@@ -914,10 +928,11 @@ int main(int argc, char **argv) {
         }
         memcpy(image + relocs[i].target, &value, 8);
     }
+    if (adaptive_fps>=0 && bb_fps_install(image,size,adaptive_fps)<0) fail("adaptive FPS timing refused; no game code executed");
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     runtime_install_context_lock(image, size);
     protect(thunks, round_page((import_count + 1) * 32), 5);
-    protect(image, round_page(size), 0);
+    protect(image, round_page(size)+timing_tail, 0);
     int executable_entry = 0;
     for (uint64_t i = 0; i < ns; ++i) {
         protect(image + segments[i].address, round_page(segments[i].size), (unsigned)segments[i].flags);
@@ -925,6 +940,7 @@ int main(int argc, char **argv) {
             executable_entry = 1;
     }
     if (!executable_entry) fail("entry is not executable");
+    if (bb_fps_protect()) fail("cannot protect adaptive FPS data");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {

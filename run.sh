@@ -60,8 +60,16 @@ fi
 # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
 # Frame rate: BB_FPS=uncap (delta-time patch, vblank follows the display), 60/90 (fixed-timestep
 # patches) or 30 (unpatched). Unset, scripts/launch_settings.sh picks it from bbport.ini fps_cap
-# and game_timing (fixed steps for caps 30/60/90 unless game_timing=variable). BB_PATCHES adds patch names ("a;b").
+# and game_timing. adaptive uses the checked runtime timing adapter instead of
+# the XML FPS++ lists. BB_PATCHES adds patch names ("a;b").
 fps=${BB_FPS:-uncap}
+adaptive_cap=''
+if [[ $fps == adaptive && ${BB_FPS_PATCH:-1} != 0 && ${BB_FPS_PATCH:-1} != off && ${BB_FPS_PATCH:-1} != false ]]; then
+    adaptive_cap=${BB_FPS_LIMIT:-240}
+    if [[ ! $adaptive_cap =~ ^(0|[3-9][0-9]|1[0-9][0-9]|2[0-3][0-9]|240)$ ]]; then
+        echo 'Adaptive timing needs BB_FPS_LIMIT=0 (uncapped) or 30..240' >&2; exit 1
+    fi
+fi
 # bbport.ini output_res other than 1080p (720p for the Steam Deck, 1440p, 2160p): the whole game
 # renders at the preset's size of the output (a patch), the upscaler fills the output, the UI is
 # drawn at the output size. Preset and output changes need a restart.
@@ -108,7 +116,8 @@ fi
 "$PYTHON" scripts/patches.py --out "$out" --fps "$fps" --extra "$launch_patches" --settings "$BB_CONFIG" --game-dir "$game" --render-res "${BB_RENDER_RES:-}" --output-res "${BB_OUTPUT_RES:-}" \
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
-    case $fps in uncap) export BB_VBLANK_HZ=0 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
+    case $fps in uncap|adaptive) export BB_VBLANK_HZ=0 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
+    export BB_LAUNCH_AUTO_VBLANK=$BB_VBLANK_HZ
 fi
 if [[ -n ${BB_PREBUILT:-} ]]; then
     probe=${BB_PROBE:-bin/bb-probe}
@@ -116,7 +125,9 @@ else
     bash build_macos.sh
     probe=out/bb-probe
 fi
-probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}" "$@")
+probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${BB_USER_DIR:-$data/user}" --timeout "${BB_TIMEOUT:-0}")
+if [[ -n $adaptive_cap ]]; then probe_args+=(--adaptive-fps "$adaptive_cap"); fi
+probe_args+=("$@")
 if [[ -n ${mod_game:-} ]]; then
     "$probe" "${probe_args[@]}" &
     mod_pid=$!

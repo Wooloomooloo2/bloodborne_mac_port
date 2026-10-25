@@ -62,7 +62,10 @@ if [[ ! -f out/libatrac9.a || -n $(find third_party/LibAtrac9/C/src -newer out/l
     ar rcs out/libatrac9.a out/atrac9/*.o
 fi
 cflags=(-std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${ARCH[@]}")
-"$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/gpu_process.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -framework CoreFoundation -o out/bb-probe
+# The timing hook runs beside the x86-64 game, including in split GPU mode.
+"${CXX:-/usr/bin/clang++}" "${ARCH[@]}" -std=c++20 -O2 -g -Wall -Wextra -Werror \
+    -ffp-contract=off -fno-fast-math -c src/fps/timing.cpp -o out/fps-timing.o
+"$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/gpu_process.c out/fps-timing.o out/libatrac9.a -lc++ -lm "${gpu[@]}" "${libraries[@]}" -framework CoreFoundation -o out/bb-probe
 echo "Built $PWD/out/bb-probe"
 # Native arm64 GPU process (docs/DESIGN_NATIVE_GPU_PROCESS.md): the GPU
 # library built arm64 (scripts/macos/build_gpu_arm64.sh, needs deps/arm64 from
@@ -85,6 +88,7 @@ else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
 fi
 if [[ ${1:-} == --test ]]; then
+    bash scripts/test_fps_timing.sh
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
     out/pad-test
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test

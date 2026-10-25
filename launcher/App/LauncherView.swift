@@ -106,10 +106,7 @@ struct LauncherView: View {
                         ForEach(GameTiming.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    .disabled(!model.settings.frameCap.hasFixedSteps)
-                    Text(model.settings.frameCap.hasFixedSteps
-                         ? "Fixed steps: the game advances the same amount every frame, as on the PS4. If a scene can't hold the cap it slows down a little. Variable: keeps full speed when frames are late, but uneven frames can drop you through moving lifts and floors. Applies at the next start."
-                         : "\(model.settings.frameCap.label) FPS always uses variable timing: there is no fixed-step patch for it. Uneven frames can drop you through moving lifts.")
+                    Text(model.settings.gameTiming.help(for: model.settings.frameCap))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Upscaler") {
