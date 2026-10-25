@@ -80,7 +80,7 @@ final class LauncherModel: ObservableObject {
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
     var modFiles: ModFiles { ModFiles(dataDir: dataDir, env: env) }
     /// "2 mods · 1 cheat on" next to the Mods & Cheats… button.
-    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count) }
+    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count, online: online.online) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }

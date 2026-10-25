@@ -871,7 +871,7 @@ do {
     let list = try? PatchList.decode("""
     {"cheats": [{"name": "No Rally Decay", "group": "Gameplay", "label": "Rally doesn't decay", "exclusive": "rally", "note": "n"},
                 {"name": "Disable Rally (HP Regain)", "group": "Gameplay", "label": "No rally", "exclusive": "rally", "note": ""},
-                {"name": "Player No Dead (Read note)", "group": "Cheats", "label": "Player can't die", "exclusive": null, "note": "a\\nb"},
+                {"name": "Player No Dead (Read note)", "group": "Cheats", "label": "Player can't die", "exclusive": null, "note": "a\\nb", "online_off": true},
                 {"name": "Increased camera distance", "group": "Camera", "label": "Camera further away", "exclusive": null, "note": ""}],
      "external": [{"key": "x.xml/Fast", "file": "x.xml", "name": "Fast", "author": "me", "note": "", "enabled": true},
                   {"key": "x.xml/None", "file": "x.xml", "name": null, "author": "", "note": "", "enabled": false}]}
@@ -880,6 +880,9 @@ do {
     check(cheats.count == 4 && cheats[0].exclusive == "rally" && cheats[2].exclusive == nil && cheats[2].note == "a\nb", "cheats list")
     check(list?.external.count == 2 && list?.external[1].name == nil && list?.external[0].enabled == true, "external patches")
     check(Cheats.grouped(cheats).map(\.group) == ["Cheats", "Gameplay", "Camera"], "group order")
+    check(cheats[2].onlineOff && !cheats[3].onlineOff, "online_off (absent: false)")
+    check(Cheats.summary(mods: 1, cheats: 2, online: true) == "1 mod · 2 cheats on (cheats off online)"
+          && Cheats.summary(mods: 1, cheats: 0, online: true) == "1 mod on", "summary during online play")
 
     // Exclusive groups: one of rally at a time; others untouched.
     var on = Cheats.toggle("No Rally Decay", on: true, in: ["Increased camera distance"], cheats: cheats)
