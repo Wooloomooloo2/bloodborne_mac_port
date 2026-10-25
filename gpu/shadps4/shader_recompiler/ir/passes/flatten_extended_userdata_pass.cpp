@@ -218,20 +218,24 @@ void RunSrtWalker(SrtWalkerCode code, const u32* user_data, u32* flat) {
             const u32 off = op == SrtOp::PushPtrImm ? a : values[--nv];
             ptrs[np++] = cur;
             pc = i;
-            if (srt_read_hook && !zeroed) {
+            // A null table reads zero for this walk only: marking the load zeroed for good
+            // would keep it zero after the game fills the table in again (#74).
+            const bool null = cur < Info::MinTableAddress;
+            if (srt_read_hook && !zeroed && !null) {
                 srt_read_hook(cur + u32(off << 2), 8);
             }
-            cur = zeroed ? 0 : LoadGuest<u64>(cur + u32(off << 2)) & 0xFFFFFFFFFFFFULL;
+            cur = zeroed || null ? 0 : LoadGuest<u64>(cur + u32(off << 2)) & 0xFFFFFFFFFFFFULL;
             continue;
         }
         case SrtOp::CopyImm:
         case SrtOp::CopyExpr: {
             const u32 off = op == SrtOp::CopyImm ? a : values[--nv];
             pc = i;
-            if (srt_read_hook && !zeroed) {
+            const bool null = cur < Info::MinTableAddress;
+            if (srt_read_hook && !zeroed && !null) {
                 srt_read_hook(cur + u32(off << 2), 4);
             }
-            flat[b] = zeroed ? 0 : LoadGuest<u32>(cur + u32(off << 2));
+            flat[b] = zeroed || null ? 0 : LoadGuest<u32>(cur + u32(off << 2));
             continue;
         }
         case SrtOp::PopPtr:

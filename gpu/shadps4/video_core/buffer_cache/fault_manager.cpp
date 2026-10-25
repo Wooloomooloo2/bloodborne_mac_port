@@ -24,7 +24,7 @@ static constexpr size_t PageFaultAreaSize = MaxPageFaults * sizeof(u64);
 FaultManager::FaultManager(Metal::Device& device, Vulkan::Scheduler& scheduler_,
                            BufferCache& buffer_cache_, u32 sparse_pagebits, u64 sparse_num_pages_)
     : scheduler{scheduler_}, buffer_cache{buffer_cache_}, sparse_pagesize{1ULL << sparse_pagebits},
-      sparse_num_pages{sparse_num_pages_}, fault_buffer_size{sparse_num_pages_ / 8},
+      sparse_num_pages{sparse_num_pages_}, fault_buffer_size{BufferSize(sparse_num_pages_)},
       fault_buffer{device, MemoryType::DeviceLocal, 0, fault_buffer_size, "Fault Buffer"},
       download_buffer{device, MemoryType::HostCached, 0, MaxPendingFaults * PageFaultAreaSize,
                       "Fault Download Buffer"} {

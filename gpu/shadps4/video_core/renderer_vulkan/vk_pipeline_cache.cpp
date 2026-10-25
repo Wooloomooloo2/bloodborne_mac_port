@@ -39,6 +39,16 @@ using Shader::HwStage;
 using Shader::Output;
 using Shader::SwStage;
 
+static void WarnUnsupportedGeometry(bool features) {
+    // These capabilities cannot change during a run. Logging each skipped draw
+    // serialized the speculative workers on stderr and buried useful errors.
+    static std::atomic_flag warned[2]{};
+    if (!warned[features ? 1 : 0].test_and_set(std::memory_order_relaxed)) {
+        LOG_WARNING(Render_Vulkan, "Geometry shader {} unsupported, skipping (repeated warnings suppressed)",
+                    features ? "features" : "stage");
+    }
+}
+
 constexpr static auto SpirvVersion1_6 = 0x00010600U;
 
 static u32 MapOutputs(std::span<Shader::OutputMap, 3> outputs, const AmdGpu::VsOutputControl& ctl) {
@@ -729,7 +739,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
     case AmdGpu::ShaderStageEnable::VgtStages::EsGs:
         // Metal has no geometry stage: the pipeline emulates it with compute kernels.
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {
-            LOG_WARNING(Render_Vulkan, "Geometry shader features unsupported, skipping");
+            WarnUnsupportedGeometry(true);
             return false;
         }
         if (!bind_stage(HwStage::Export, SwStage::Vertex)) {
@@ -752,7 +762,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
         break;
     case AmdGpu::ShaderStageEnable::VgtStages::LsHsEsGs:
         if (regs.vgt_gs_mode.onchip || regs.vgt_strmout_config.raw) {
-            LOG_WARNING(Render_Vulkan, "Geometry shader features unsupported, skipping");
+            WarnUnsupportedGeometry(true);
             return false;
         }
         if (!bind_stage(HwStage::Hull, SwStage::TessellationControl)) {

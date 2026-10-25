@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdlib>
 #include <deque>
 #include <memory>
 #include <span>
@@ -185,8 +186,16 @@ private:
     void CopyBufferImage(VideoCore::Image& image, const VideoCore::Buffer& buffer,
                          std::span<const vk::BufferImageCopy> copies, bool upload);
 
+    /// bbport: calloc'd tag arrays: zero pages the OS commits only where a page is tagged (the
+    /// arena's CPU-only parts never are); make_unique<u16[]> wrote every byte.
+    struct FreeDeleter {
+        void operator()(void* p) const noexcept {
+            std::free(p);
+        }
+    };
+    using TagArray = std::unique_ptr<u16[], FreeDeleter>;
     struct HoistPages {
-        std::unique_ptr<u16[]> tick; ///< low 16 bits of the submission tick that used the page
+        TagArray tick; ///< low 16 bits of the submission tick that used the page
         u64 pages;
         mutable u16 whole_tick{}; ///< ... that used the whole buffer (direct memory access)
     };

@@ -142,6 +142,12 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
     if (info.hw_stage == Shader::HwStage::Vertex && spec.runtime_info.hw.vs.motion_vectors) {
         return false;
     }
+    // bbport: direct memory access shaders read the page table and the fault buffer, created
+    // only with BB_DIRECT_MEMORY_ACCESS=1 (BufferCache): an entry compiled with it on compiles
+    // again without it. (A cache version bump would clear every cache at each switch.)
+    if (info.uses_dma && !EmulatorSettings.IsDirectMemoryAccessEnabled()) {
+        return false;
+    }
 
     fetch_shader_data = spec.fetch_shader_data;
     return true;

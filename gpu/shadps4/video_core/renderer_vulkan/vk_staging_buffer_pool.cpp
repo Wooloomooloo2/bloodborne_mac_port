@@ -207,6 +207,22 @@ void StagingBufferPool::TrimLarge(std::vector<LargeBuffer>& cache) {
 
 void StagingBufferPool::PublishStats() const {
     using namespace Core::Devtools::Widget;
+    // bbport: BB_FRAME_STATS: bytes per memory type, now and peak (the GPU memory detail line).
+    if (BbStats::enabled) {
+        for (size_t i = 0; i < NUM_TYPES; ++i) {
+            u64 bytes = 0;
+            for (const Block& block : rings[i].blocks) {
+                bytes += block.buffer->SizeBytes();
+            }
+            for (const LargeBuffer& entry : large_caches[i]) {
+                bytes += entry.buffer->SizeBytes();
+            }
+            BbStats::staging_bytes[i].store(bytes, std::memory_order_relaxed);
+            if (bytes > BbStats::staging_peak[i].load(std::memory_order_relaxed)) {
+                BbStats::staging_peak[i].store(bytes, std::memory_order_relaxed);
+            }
+        }
+    }
     if (!GpuMemoryViewer::IsEnabled()) {
         return;
     }

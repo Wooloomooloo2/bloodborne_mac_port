@@ -3,8 +3,8 @@
 # Builds Bloodborne.app in the repository folder: double-click (or keep in the Dock) to play
 # without a Terminal window. The app is the launcher window (launcher/) for this checkout: it
 # shares launch.conf with Bloodborne.command, runs run.sh (which rebuilds what changed) and writes
-# the game's log to ~/Library/Logs/Bloodborne/game.log (the previous session's in
-# game.previous.log). If the game stops with an error, the launcher shows it with Show Log.
+# the game's logs to ~/Library/Logs/Bloodborne (one dated .log and .jsonl per session; game.log links
+# to the newest). If the game stops with an error, the launcher shows a crash report and the log.
 #
 # The game window runs from inside the bundle (a link to out/bbgpu-host), so the Dock shows
 # "Bloodborne". The icon is made from your game's sce_sys/icon0.png, so the app is built

@@ -53,13 +53,17 @@ void runtime_set_procparam(void *param);
 void **runtime_application_heap_api(void);
 uintptr_t runtime_thread_resolve(const char *name);
 void runtime_thread_report(void);
+/* Every live guest thread's wait and call chain (the hang watchdog). */
+void runtime_thread_dump_all(void);
+/* Byte displacement used by rewritten guest thread-pointer loads. */
+uint32_t runtime_thread_gs_displacement(void);
 void runtime_set_main_tls(const void *data, uint64_t filesz, uint64_t memsz, uint64_t align);
 void runtime_thread_attach_main(void);
 void *runtime_thread_get_tcb(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
-unsigned runtime_sema_waiters(uint32_t id);
+unsigned runtime_sema_waiters(uint64_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);
 uintptr_t runtime_content_resolve(const char *name);
@@ -105,7 +109,16 @@ void *runtime_low_map(size_t size, int prot);
 void *runtime_low_alloc(size_t size);
 /* runtime_hooks.c: one lock around the engine paths that share the immediate GX context. */
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size);
+/* Guard 1.09's deferred graphics bind/unbind/query against absent records (#99/#113). */
+int runtime_install_render_guard(unsigned char *image, uint64_t image_size);
+/* Reject patches that change active hook prologues or the retained timed wait. */
+const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, size_t size);
+int runtime_install_mac_settings(unsigned char *image, uint64_t image_size);
+int runtime_install_exit_menu(unsigned char *image, uint64_t image_size);
+void runtime_mac_settings_pad(uint32_t *buttons);
 void runtime_context_lock_stats(void);
+/* The hook name while another thread holds the context lock, else NULL (diagnostics). */
+const char *runtime_context_lock_other(void);
 /* runtime_thread.c (macOS): CPU time of the game's main thread (0) or the calling thread (1). */
 uint64_t runtime_thread_cpu_ns(int which);
 void runtime_game_cpu_since_last(uint64_t *total_ns, uint64_t *busiest_ns, char busiest_name[32]);
@@ -123,7 +136,10 @@ void runtime_ajm_report(void);
 uintptr_t runtime_audio_resolve(const char *name);
 void runtime_audio_report(void);
 uintptr_t runtime_pad_resolve(const char *name);
+extern volatile int runtime_bench_map_opened; /* runtime_file.c: a map file was opened */
 void runtime_pad_report(void);
+/* Mouse look reads the GPU process's shared block through this accessor (gpu_process_start). */
+void runtime_pad_set_shared(void *(*shared)(void));
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);

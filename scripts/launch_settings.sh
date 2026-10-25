@@ -37,7 +37,15 @@
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
     local line cap='' full='' hud='' compress='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
-    local pool='' thd_id='' thd_token='' timing=''
+    local pool='' thd_id='' thd_token='' timing='' display=''
+    # Clear values exported from the previous config, keeping explicit caller overrides.
+    if [[ ${BB_LAUNCH_AUTO_LIMIT:-} == "${BB_FPS_LIMIT:-unset}" ]]; then unset BB_FPS_LIMIT; fi
+    if [[ ${BB_LAUNCH_AUTO_FULLSCREEN:-} == "${BB_FULLSCREEN:-unset}" ]]; then unset BB_FULLSCREEN; fi
+    if [[ ${BB_LAUNCH_AUTO_HUD:-} == "${MTL_HUD_ENABLED:-unset}" ]]; then unset MTL_HUD_ENABLED; fi
+    if [[ ${BB_LAUNCH_AUTO_COMPRESSION:-} == "${BB_LAZY_TEXTURE_USAGE:-unset}" ]]; then unset BB_LAZY_TEXTURE_USAGE; fi
+    if [[ ${BB_LAUNCH_AUTO_VBLANK:-} == "${BB_VBLANK_HZ:-unset}" ]]; then unset BB_VBLANK_HZ; fi
+    if [[ ${BB_LAUNCH_AUTO_DISPLAY:-} == "${BB_DISPLAY:-unset}" ]]; then unset BB_DISPLAY; fi
+    unset BB_LAUNCH_AUTO_LIMIT BB_LAUNCH_AUTO_FULLSCREEN BB_LAUNCH_AUTO_HUD BB_LAUNCH_AUTO_COMPRESSION BB_LAUNCH_AUTO_VBLANK BB_LAUNCH_AUTO_DISPLAY
     # BB_FPS chosen here for the previous launch is chosen again after an in-game restart.
     if [[ ${BB_FPS_AUTO:-} == 1 ]]; then unset BB_FPS BB_FPS_AUTO; fi
     [[ -f $1 ]] || return 0
@@ -59,6 +67,8 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^game_timing=(fixed|variable)$ ]]; then timing=${BASH_REMATCH[1]}; fi
+        # The launcher's display choice: a CoreGraphics display UUID (absent = the main display).
+        if [[ $line =~ ^display=([0-9A-Fa-f-]{36})$ ]]; then display=${BASH_REMATCH[1]}; fi
     done < "$1"
     # The password and the token are looked up and exported only for online play (online=1, or
     # BB_ONLINE=1 from the environment, which wins): offline, no secret enters the environment.
@@ -87,9 +97,9 @@ bb_launch_settings() { # ini file
             case ${BB_FPS_LIMIT:-$cap} in 30|60|90) BB_FPS=${BB_FPS_LIMIT:-$cap} ;; esac
         fi
     fi
-    if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
-    if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
-    if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1; fi
+    if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap BB_LAUNCH_AUTO_LIMIT=$cap; fi
+    if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1 BB_LAUNCH_AUTO_FULLSCREEN=1; fi
+    if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1 BB_LAUNCH_AUTO_HUD=1; fi
     if [[ $online == 1 && -z ${BB_ONLINE:-} ]]; then export BB_ONLINE=1; fi
     if [[ -n $server && -z ${BB_SHADNET_SERVER:-} ]]; then export BB_SHADNET_SERVER=$server; fi
     if [[ -n $webapi && -z ${BB_SHADNET_WEBAPI:-} ]]; then export BB_SHADNET_WEBAPI=$webapi; fi
@@ -106,7 +116,8 @@ bb_launch_settings() { # ini file
     if [[ $pool == huntersdream && -z ${BB_NET_BACKEND:-} ]]; then export BB_NET_BACKEND=thd; fi
     if [[ -n $thd_id && -z ${BB_THD_ONLINE_ID:-} ]]; then export BB_THD_ONLINE_ID=$thd_id; fi
     if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi
-    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
+    if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0 BB_LAUNCH_AUTO_COMPRESSION=0; fi
+    if [[ -n $display && -z ${BB_DISPLAY:-} ]]; then export BB_DISPLAY=$display BB_LAUNCH_AUTO_DISPLAY=$display; fi
     return 0
 }
 
@@ -130,7 +141,10 @@ bb_native_ultrawide() { # a patch name validated by patches.py, or empty for 16:
         unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
         wide_w=${BB_ULTRAWIDE_RES%x*}
         wide_h=${BB_ULTRAWIDE_RES#*x}
-        if (( wide_w * wide_h > 1920 * 1080 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
+        if (( wide_w * wide_h > 3840 * 2160 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
+            # patches.py also enlarges the first graphics heap by 1665 MiB above 4K (#93).
+            export BB_DMEM_MB=8192 BB_ULTRAWIDE_AUTO_DMEM=1
+        elif (( wide_w * wide_h > 1920 * 1080 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
             export BB_DMEM_MB=6144 BB_ULTRAWIDE_AUTO_DMEM=1
         fi
         # Complete resolution patch, retail first heap, bounded second texture pool.

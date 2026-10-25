@@ -119,10 +119,27 @@ struct GameSettings: Equatable {
     var sharpness = 0.3
     var showFPS = false
     var metalHUD = false
+    /// bbport.ini mouse_look (PR #20): the mouse turns the camera after a click in the window,
+    /// and the arrow keys are the d-pad.
+    var mouseLook = false
+    /// bbport.ini mouse_sensitivity (0.1-10), mouse_vertical (0.25-4, vertical speed relative to
+    /// horizontal), mouse_invert_y: the in-game menu's Mouse card too.
+    var mouseSensitivity = 1.0
+    var mouseVertical = 1.0
+    var mouseInvertY = false
+    /// bbport.ini camera_keys_dpad (src/runtime_bindings.c): with the mouse camera, the camera keys
+    /// press the d-pad.
+    var cameraKeysDpad = true
+    /// bbport.ini pad_menu_combo (gpu/shim/bbport_settings.h): L3+R3 on a controller opens the
+    /// in-game menu (#104).
+    var padMenuCombo = true
+    var bindings = Bindings()
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
     var gameTiming = GameTiming.fixed
     var fullscreen = false
+    /// bbport.ini display (GameDisplay): the display's UUID, nil = the main display.
+    var display: String?
     var shaderCompile = ShaderCompile.balanced
     // The in-game menu's Graphics and Advanced options (gpu/shim/bbport_settings.h, same defaults).
     var jitter = false
@@ -133,9 +150,13 @@ struct GameSettings: Equatable {
     var reactiveMax = 0.9
     var objectMotion = false
     var liveResolution = LiveResolution.off
+    var metalfxWhiteSceneFix = false
     /// bbport.ini texture_compression, read by run.sh at start (scripts/launch_settings.sh:
     /// 0 = BB_LAZY_TEXTURE_USAGE=0).
     var textureCompression = true
+    /// bbport.ini cheats= (the Mods & Cheats window; scripts/patches.py applies them at launch).
+    /// Names the launcher does not list stay as read.
+    var cheats: [String] = []
 
     init() {}
 
@@ -154,12 +175,20 @@ struct GameSettings: Equatable {
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
         if let v = flag("show_fps") { showFPS = v }
         if let v = flag("metal_hud") { metalHUD = v }
+        if let v = flag("mouse_look") { mouseLook = v }
+        if let v = ini["mouse_sensitivity"].flatMap(Double.init) { mouseSensitivity = min(max(v, 0.1), 10) }
+        if let v = ini["mouse_vertical"].flatMap(Double.init) { mouseVertical = min(max(v, 0.25), 4) }
+        if let v = flag("mouse_invert_y") { mouseInvertY = v }
+        if let v = flag("camera_keys_dpad") { cameraKeysDpad = v }
+        if let v = flag("pad_menu_combo") { padMenuCombo = v }
+        bindings = Bindings(ini: ini)
         for effect in Self.effects {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
         if let v = ini["fps_cap"], let n = Int(v), let cap = FrameCap(rawValue: n) { frameCap = cap }
         if let v = ini["game_timing"], let t = GameTiming(rawValue: v) { gameTiming = t }
         if let v = flag("fullscreen") { fullscreen = v }
+        if let v = ini["display"], GameDisplay.isUUID(v) { display = v.uppercased() }
         if let v = ini["shader_compile"], let s = ShaderCompile(rawValue: v) { shaderCompile = s }
         // Ranges as the game clamps them.
         func number(_ key: String, _ range: ClosedRange<Double>) -> Double? {
@@ -173,7 +202,9 @@ struct GameSettings: Equatable {
         if let v = number("reactive_max", 0...1) { reactiveMax = v }
         if let v = flag("object_motion") { objectMotion = v }
         if let v = ini["live_resolution"], let l = LiveResolution(rawValue: v) { liveResolution = l }
+        metalfxWhiteSceneFix = ini["metalfx_white_scene_fix"] == "1"
         if let v = flag("texture_compression") { textureCompression = v }
+        cheats = Cheats.parse(ini["cheats"])
     }
 
     /// Writes the launcher's settings into `ini`; every other line stays (a `renderer` key from
@@ -188,12 +219,20 @@ struct GameSettings: Equatable {
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
         ini["metal_hud"] = metalHUD ? "1" : "0"
+        ini["mouse_look"] = mouseLook ? "1" : "0"
+        ini["mouse_sensitivity"] = String(format: "%.2f", mouseSensitivity)
+        ini["mouse_vertical"] = String(format: "%.2f", mouseVertical)
+        ini["mouse_invert_y"] = mouseInvertY ? "1" : "0"
+        ini["camera_keys_dpad"] = cameraKeysDpad ? nil : "0"
+        ini["pad_menu_combo"] = padMenuCombo ? "1" : "0"
+        bindings.apply(to: &ini)
         for effect in Self.effects {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }
         ini["fps_cap"] = String(frameCap.rawValue)
         ini["game_timing"] = gameTiming.rawValue
         ini["fullscreen"] = fullscreen ? "1" : "0"
+        ini["display"] = display
         ini["shader_compile"] = shaderCompile.rawValue
         ini["jitter"] = jitter ? "1" : "0"
         ini["model_lod"] = String(modelDetail.rawValue)
@@ -203,7 +242,9 @@ struct GameSettings: Equatable {
         ini["reactive_max"] = String(format: "%.2f", reactiveMax)
         ini["object_motion"] = objectMotion ? "1" : "0"
         ini["live_resolution"] = ultrawide ? "0" : liveResolution.rawValue
+        ini["metalfx_white_scene_fix"] = metalfxWhiteSceneFix ? "1" : "0"
         ini["texture_compression"] = textureCompression ? "1" : "0"
+        ini["cheats"] = Cheats.format(cheats)
     }
 
     /// The scene size the game renders.

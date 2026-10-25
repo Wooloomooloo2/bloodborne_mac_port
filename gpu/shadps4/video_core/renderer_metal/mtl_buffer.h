@@ -17,9 +17,13 @@ class Device;
 /// Device::HazardTracking(): Encoders order it, mtl_order.h), HostUncached is shared
 /// and write-combined, HostCached and Stream are shared. Returns an empty Object on failure.
 /// `gpu_address` receives the buffer's GPU address, `contents` the CPU pointer (null for
-/// DeviceLocal).
+/// DeviceLocal). bbport: `guest_memory` makes a DeviceLocal buffer of any size lazy (the buffer
+/// cache's chunks), and `host_view`, if given, receives its CPU pointer (shared storage), for
+/// reads of GPU-written data once its command completed; code that treats `contents` as an
+/// upload path does not see it.
 Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::string_view label,
-                    u64* gpu_address, u8** contents);
+                    u64* gpu_address, u8** contents, u8** host_view = nullptr,
+                    bool guest_memory = false);
 
 /// Metal's indexed and indirect draws and indirect dispatches use only the low 32 bits of their
 /// buffer offset: an index or argument offset of 4 GiB + x reads at x (measured 2026-10-21 on an

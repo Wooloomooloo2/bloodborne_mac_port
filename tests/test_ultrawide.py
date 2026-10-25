@@ -23,10 +23,14 @@ class UltrawideTests(unittest.TestCase):
                 expected = [w for w in full if w[0] not in heaps]
                 if width * height > 1920 * 1080:
                     expected.append((0x04B36DE0 - EBOOT_BASE, struct.pack('<I', 1536 * 1024 * 1024)))
+                # Above 4K the first heap is the community patch's 3952 MiB (#93); below
+                # it stays retail.
+                if width * height > 3840 * 2160:
+                    expected.append((0x04B36DD8 - EBOOT_BASE, struct.pack('<I', 3952 * 1024 * 1024)))
                 self.assertEqual(writes, expected)
-                # Do not restore the community patch's 3952 MiB first heap.
                 addr = 0x04B36DDA - EBOOT_BASE
-                self.assertFalse(any(a < addr + 2 and a + len(d) > addr for a, d in writes))
+                self.assertEqual(any(a < addr + 2 and a + len(d) > addr for a, d in writes),
+                                 width * height > 3840 * 2160)
                 # Regression: removing these MOV/NOPs while keeping the fallback
                 # globals silently allocated 640x360 and broke the entire UI.
                 for address, expected in ((SCENE_WIDTH, width), (SCENE_HEIGHT, height),

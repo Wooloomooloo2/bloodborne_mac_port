@@ -160,6 +160,7 @@ extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_
 extern "C" uint64_t runtime_thread_cpu_ns(int which);
 extern "C" void runtime_game_cpu_since_last(uint64_t* total_ns, uint64_t* busiest_ns, char busiest_name[32]);
 extern "C" void runtime_sampler_flip(uint64_t main_cpu_ns);
+extern "C" const char* runtime_context_lock_other(void);
 
 u64 TraceThreadId() {
     thread_local const u64 id = [] {
@@ -190,13 +191,28 @@ void NoteContextUser(u64 context, u64 thread, u64 tsc, u64 owner, u64 cmdbuf,
                      const u64* frames) {
     struct User {
         std::atomic<u64> context, thread, tsc;
+        u64 frames[GuestFrames]; ///< the last user's guest call chain (racy: diagnostics)
     };
     static User users[64];
-    static std::atomic<u32> reports{0};
+    static std::atomic<u32> reports{0}, overlaps{0};
+    if (owner && owner != ~u64(0)) {
+        // An owned (immediate) context written while another thread holds the context lock:
+        // the two may record into it at the same time (the opening-cutscene crash, #46/#84).
+        if (const char* holder = runtime_context_lock_other();
+            holder && overlaps.fetch_add(1, std::memory_order_relaxed) < 32) {
+            std::fprintf(stderr, "Gnm: context %#llx used by thread %llu outside the context "
+                                 "lock while another thread is in %s, from %s\n",
+                         (unsigned long long)context, (unsigned long long)thread, holder,
+                         FramesList(frames).c_str());
+        }
+    }
     User& user = users[(context >> 4) % 64];
     const u64 last_context = user.context.exchange(context, std::memory_order_relaxed);
     const u64 last_thread = user.thread.exchange(thread, std::memory_order_relaxed);
     const u64 last_tsc = user.tsc.exchange(tsc, std::memory_order_relaxed);
+    u64 last_frames[GuestFrames];
+    std::memcpy(last_frames, user.frames, sizeof(last_frames));
+    std::memcpy(user.frames, frames, sizeof(user.frames));
     if (last_context != context || last_thread == thread || !last_thread || !owner ||
         owner == ~u64(0)) {
         return;
@@ -204,11 +220,11 @@ void NoteContextUser(u64 context, u64 thread, u64 tsc, u64 owner, u64 cmdbuf,
     const u64 gap_ns = bbport::CyclesToNs(tsc - last_tsc);
     if (gap_ns < 5'000'000 && reports.fetch_add(1, std::memory_order_relaxed) < 16) {
         std::fprintf(stderr, "Gnm: context %#llx used by thread %llu, then %llu after %.1f us "
-                             "(owner %#llx, buffer %#llx) from %s\n",
+                             "(owner %#llx, buffer %#llx) from %s; previously from %s\n",
                      (unsigned long long)context, (unsigned long long)last_thread,
                      (unsigned long long)thread, double(gap_ns) / 1e3,
                      (unsigned long long)owner, (unsigned long long)cmdbuf,
-                     FramesList(frames).c_str());
+                     FramesList(frames).c_str(), FramesList(last_frames).c_str());
     }
 }
 

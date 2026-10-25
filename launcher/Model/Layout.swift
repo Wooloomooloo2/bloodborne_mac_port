@@ -81,16 +81,31 @@ enum Layout: Equatable {
         return FileManager.default.fileExists(atPath: game.appendingPathComponent("eboot.bin").path) ? game : nil
     }
 
-    /// Check without creating bytecode inside the signed app bundle.
-    var gameCheckCommand: [String] {
+    /// The benchmark's save and recorded route (docs/DESIGN_BENCHMARK.md; benchmark/ in git):
+    /// BB_BENCH_ASSETS, else Contents/Resources/benchmark in the release app, benchmark/ in a
+    /// checkout. Benchmark.assetsProblem says whether they are there.
+    func benchmarkAssets(env: [String: String]) -> URL {
+        if let path = env["BB_BENCH_ASSETS"], !path.isEmpty { return URL(fileURLWithPath: path) }
+        switch self {
+        case let .packaged(contents): return contents.appendingPathComponent("Resources/benchmark")
+        case let .checkout(repo, _): return repo.appendingPathComponent("benchmark")
+        }
+    }
+
+    /// A command running one of the port's Python scripts (`scripts/<script>`): the bundled
+    /// Python in the release app, the system's in a checkout. -B: no bytecode inside the signed
+    /// app bundle.
+    func pythonCommand(script: String) -> [String] {
         switch self {
         case let .packaged(contents):
             [contents.appendingPathComponent("Resources/python/bin/python3").path, "-B",
-             contents.appendingPathComponent("Resources/port/scripts/game_check.py").path]
+             contents.appendingPathComponent("Resources/port/scripts/\(script)").path]
         case let .checkout(repo, _):
-            ["/usr/bin/env", "python3", "-B", repo.appendingPathComponent("scripts/game_check.py").path]
+            ["/usr/bin/env", "python3", "-B", repo.appendingPathComponent("scripts/\(script)").path]
         }
     }
+
+    var gameCheckCommand: [String] { pythonCommand(script: "game_check.py") }
 
     /// The environment the earlier bash launchers set (release app, checkout app), plus the save
     /// folder. Display settings reach the game through

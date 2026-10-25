@@ -4,11 +4,11 @@ import SwiftUI
 
 struct LauncherView: View {
     /// The window's content size (main.swift).
-    static let size = CGSize(width: 920, height: 680)
+    static let size = CGSize(width: 920, height: 730)
 
     @ObservedObject var model: LauncherModel
 
-    private enum Page: Hashable { case general, advanced, online }
+    private enum Page: Hashable { case general, advanced, controls, online }
     @State private var page = Page.general
 
     var body: some View {
@@ -21,6 +21,7 @@ struct LauncherView: View {
             Picker("", selection: $page) {
                 Text("General").tag(Page.general)
                 Text("Advanced").tag(Page.advanced)
+                Text("Controls").tag(Page.controls)
                 Text("Online").tag(Page.online)
             }
             .pickerStyle(.segmented)
@@ -31,16 +32,23 @@ struct LauncherView: View {
                 switch page {
                 case .general: general
                 case .advanced: advanced
+                case .controls: ControlsView(model: model)
                 case .online: onlineTab
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .disabled(model.running)
             Divider()
             HStack(spacing: 12) {
+                Button("Mods & Cheats…") { ModsWindow.show(launcher: model) }
+                Text(model.modsSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
+                    .disabled(model.running)
                 UpdateBadge(updater: model.updater)
                 Spacer()
-                if let message = model.exitMessage {
+                if let progress = model.benchmark.progress {
+                    Text(progress).foregroundStyle(.secondary).lineLimit(1)
+                } else if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
                     if model.crashReport != nil {
                         Button("Crash Report…") { model.showingCrashReport = true }
@@ -48,12 +56,27 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
-                Button(action: model.play) {
-                    Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                if model.running && model.canStop {
+                    Text(model.stopping ? "Stopping…" : "Game running")
+                        .foregroundStyle(.secondary)
+                    Button(action: { model.stop() }) {
+                        Label("Stop", systemImage: "stop.fill").frame(minWidth: 80)
+                    }
+                    .controlSize(.large)
+                    .disabled(model.stopping)
+                    .help("Close the running game. Use the game's Exit Game menu first to finish saving.")
+                } else {
+                    Button("Benchmark…") { model.startBenchmark() }
+                        .controlSize(.large)
+                        .disabled(!model.canPlay)
+                        .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
+                    Button(action: model.play) {
+                        Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
+                    .disabled(!model.canPlay)
                 }
-                .keyboardShortcut(.defaultAction)
-                .controlSize(.large)
-                .disabled(!model.canPlay)
             }
             .padding()
         }
@@ -69,13 +92,20 @@ struct LauncherView: View {
                 UpdateView(model: model, updater: model.updater)
             }
         }
+        .background {
+            Color.clear.sheet(isPresented: Binding(get: { model.benchmark.showingResult }, set: { model.benchmark.showingResult = $0 })) {
+                if let result = model.benchmark.result {
+                    BenchmarkResultView(result: result, runner: model.benchmark)
+                }
+            }
+        }
     }
 
     private var general: some View {
         HStack(alignment: .top, spacing: 0) {
             Form {
                 Section("Display") {
-                    Toggle("Ultrawide", isOn: $model.settings.ultrawide)
+                    Toggle("Ultrawide or 16:10", isOn: $model.settings.ultrawide)
                     if model.settings.ultrawide {
                         Picker("Resolution", selection: $model.settings.wideOutput) {
                             ForEach(Resolution.ultrawideOutputs, id: \.self) { Text(Resolution.wideLabel($0)).tag($0) }
@@ -96,6 +126,14 @@ struct LauncherView: View {
                         Text("Full screen").tag(true)
                     }
                     .pickerStyle(.segmented)
+                    if model.showsDisplayChoice {
+                        Picker("Display", selection: $model.settings.display) {
+                            Text("Main display").tag(String?.none)
+                            ForEach(model.displayChoices) { Text($0.name).tag(Optional($0.uuid)) }
+                        }
+                        Text("The game opens on this display, in a window or full screen. If it isn't connected, the main display is used.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Frame rate cap", selection: $model.settings.frameCap) {
                         ForEach(FrameCap.allCases) { Text($0.label).tag($0) }
                     }
@@ -143,9 +181,6 @@ struct LauncherView: View {
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
                     Toggle("Show FPS", isOn: $model.settings.showFPS)
-                    Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
-                        .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
-                    Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
                 }
                 Section("Locations") {
                     FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
@@ -175,7 +210,10 @@ struct LauncherView: View {
                         ForEach(LiveResolution.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Above 1080p it is always on.")
+                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Scene resolutions above 1080p always use it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Avoid white scenes (MetalFX)", isOn: $model.settings.metalfxWhiteSceneFix)
+                    Text("For MetalFX output above 1080p. Keeps post-processing at 1080p to avoid white scenes, but can reduce performance. Requires a restart.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Shader compilation") {
@@ -191,6 +229,9 @@ struct LauncherView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Startup and debugging") {
+                    Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
+                    Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
+                        .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
                     ForEach(GameSettings.debugEffects) { effect in
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
@@ -379,7 +420,7 @@ private struct CrashReportView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Bloodborne stopped").font(.title2.bold())
             Text(report.summary)
-            Text("Please report it so it can be fixed: Report on GitHub copies this report and opens a new issue to paste it into. The report has no personal files; your home folder is shown as ~.")
+            Text("Please report it so it can be fixed: Report on GitHub opens a new issue with this report filled in, and shows a diagnostics zip (the full log and macOS's crash reports) to drag onto it. Nothing is sent until you submit the issue. Your home folder is shown as ~; other paths (a drive under /Volumes) appear as they are.")
                 .font(.callout).foregroundStyle(.secondary)
             ScrollView {
                 Text(report.report)
@@ -390,6 +431,17 @@ private struct CrashReportView: View {
             }
             .background(Color(nsColor: .textBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack(spacing: 8) {
+                if model.preparingCrashBundle {
+                    ProgressView().controlSize(.small)
+                    Text("Collecting macOS's crash reports and the log…").font(.caption).foregroundStyle(.secondary)
+                } else if let bundle = model.crashBundle {
+                    Image(systemName: "doc.zipper").foregroundStyle(.secondary)
+                    Text("Diagnostics: \(bundle.lastPathComponent)").font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    Button("Show in Finder") { model.showCrashBundle(bundle) }.controlSize(.small)
+                }
+            }
             HStack {
                 Button("Show Log in Finder", action: model.showLog)
                 Spacer()
@@ -404,6 +456,7 @@ private struct CrashReportView: View {
                     model.reportOnGitHub()
                     copied = true
                 }
+                .disabled(model.preparingCrashBundle) // (a few seconds: the zip goes with the issue)
                 Button("Close") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }

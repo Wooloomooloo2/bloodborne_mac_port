@@ -1,8 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 #include "bbport_write_log.h"
+#include "bbport_arena_runs.h"
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
+#include "bbport_mac_settings.h"
 #include <sys/resource.h>
 #include "bbport_toggles.h"
 #include <algorithm>
@@ -11,6 +13,7 @@
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
+#include <cstdio>
 #include <cstring>
 #include <unistd.h>
 #include <memory>
@@ -51,6 +54,7 @@ uint64_t runtime_process_time_us(void);
 uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 int32_t* runtime_errno(void);
+void runtime_restart(void);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
 }
 
@@ -102,14 +106,21 @@ public:
 void MemoryManager::SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
     rasterizer = rasterizer_;
     // Existing guest mappings are replayed by the runtime when hooks are installed.
+    // bbport: the invalidate hook is the view table's protection change (host_view_apply); the
+    // GPU runs follow all three (bbport_arena_runs.h, telemetry).
     runtime_memory_set_gpu_hooks(
         [](uintptr_t address, uint64_t size) {
+            BbArenaRuns::OnMap(address, size);
             auto* r = Memory::Instance()->GetRasterizer();
             r->RegisterMemory(address, size);
             r->MapMemory(address, size);
         },
-        [](uintptr_t address, uint64_t size) { Memory::Instance()->GetRasterizer()->UnmapMemory(address, size); },
         [](uintptr_t address, uint64_t size) {
+            BbArenaRuns::OnUnmap(address, size);
+            Memory::Instance()->GetRasterizer()->UnmapMemory(address, size);
+        },
+        [](uintptr_t address, uint64_t size) {
+            BbArenaRuns::OnProtect(address, size);
             Memory::Instance()->GetRasterizer()->InvalidateMemory(address, size);
         });
 }
@@ -201,7 +212,7 @@ bool g_window_ready;
 
 u32 BbDisplayRefreshHz() {
     static const u32 hz = [] {
-        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetPrimaryDisplay());
+        const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(Frontend::ChosenDisplay());
         const u32 rate = mode && mode->refresh_rate > 0 ? u32(mode->refresh_rate + 0.5f) : 60;
         std::printf("GPU: vblank follows the display refresh rate, %u Hz\n", rate);
         return std::max<u32>(rate, 60);
@@ -230,6 +241,38 @@ static void StartProfileWriter() {
 
 static void OpenWindow(const BbGpuConfig* config);
 
+static void PublishMacSettings(BbGpuShared* shared) {
+    // Only KeyBridge publishes after the initial pre-readiness snapshot. A dispatch-side
+    // publisher could overwrite a newer snapshot with a value it read before an edit.
+    for (uint32_t field = 0; field < BBMAC_COUNT; ++field) {
+        __atomic_store_n(&shared->mac_settings[field], BbMacSettings::Get(field), __ATOMIC_RELEASE);
+    }
+}
+
+extern "C" int32_t bbgpu_mac_setting_get(uint32_t field) {
+    if (field >= BBMAC_COUNT) return -1;
+    if (BbSplit::Remote()) {
+        return __atomic_load_n(&BbSplit::Shared()->mac_settings[field], __ATOMIC_ACQUIRE);
+    }
+    return BbMacSettings::Get(field);
+}
+
+extern "C" void bbgpu_mac_setting_set(uint32_t field, int32_t value) {
+    if (field >= BBMAC_COUNT) return;
+    if (BbSplit::Remote()) {
+        const BbGpuMacSetting record{{BBGPU_REC_MAC_SETTING, sizeof(BbGpuMacSetting)}, field, value};
+        BbSplit::Push(&record);
+        return;
+    }
+    if (field == BBMAC_RESTART) {
+        if (value != 1) return;
+        BbSettings::Save();
+        runtime_restart(); // the normal single-process / host restart path, outside file locks
+    } else {
+        BbMacSettings::Set(field, value);
+    }
+}
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
 #ifdef BB_PGO_GENERATE
@@ -253,6 +296,7 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
         auto* s = static_cast<BbGpuShared*>(shared);
         s->label_address = Libraries::VideoOut::BbSplitLabelAddress();
         s->hdr_supported = presenter && presenter->IsHDRSupported() ? 1 : 0;
+        PublishMacSettings(s);
         BbSplit::ForwardInterrupts();
         // Keyboard for the game's pad emulation (input proper moves here in M5).
         std::thread([s] {
@@ -266,6 +310,7 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
                 }
                 __atomic_store_n(&s->overlay_captures, BbOverlay::CapturesInput() ? 1u : 0u,
                                  __ATOMIC_RELAXED);
+                PublishMacSettings(s);
                 // Text entry (IME dialog): publish the text and its state while it is open.
                 if (__atomic_load_n(&s->text_active, __ATOMIC_ACQUIRE) && g_window) {
                     std::string text;
@@ -307,6 +352,13 @@ extern "C" int bbgpu_host_fault(uint64_t address, int write) {
 
 extern "C" int bbgpu_host_dispatch(const void* record) {
     const auto* r = static_cast<const BbGpuRecord*>(record);
+    BbArenaRuns::Refresh(); // the view events before this record (ring order)
+    if (r->type == BBGPU_REC_MAC_SETTING) {
+        if (r->bytes != sizeof(BbGpuMacSetting)) return 0;
+        const auto* setting = static_cast<const BbGpuMacSetting*>(record);
+        bbgpu_mac_setting_set(setting->field, setting->value);
+        return 1;
+    }
     if (r->type == BBGPU_REC_TEXT_BEGIN) {
         auto* t = static_cast<const BbGpuTextBegin*>(record);
         BbGpuShared* s = BbSplit::Shared();
@@ -343,6 +395,26 @@ extern "C" const bool* bbgpu_split_keyboard(void) {
     }
     static_assert(sizeof(bool) == 1);
     return reinterpret_cast<const bool*>(BbSplit::Shared()->keys);
+}
+
+extern "C" uint32_t bbgpu_bench_frame_draws(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->bench_frame_draws, __ATOMIC_RELAXED)
+                             : 0;
+}
+
+extern "C" uint64_t bbgpu_bench_host_flips(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->host_flips, __ATOMIC_RELAXED) : 0;
+}
+
+extern "C" void bbgpu_bench_set_phase(uint32_t phase, const char* error) {
+    if (!BbSplit::Remote()) {
+        return;
+    }
+    BbGpuShared* s = BbSplit::Shared();
+    if (error) {
+        std::snprintf(s->bench_error, sizeof(s->bench_error), "%s", error);
+    }
+    __atomic_store_n(&s->bench_phase, phase, __ATOMIC_RELEASE);
 }
 
 extern "C" void bbgpu_split_push(const void* record) {
@@ -658,6 +730,10 @@ extern "C" int bbgpu_overlay_captures_input(void) {
         return __atomic_load_n(&BbSplit::Shared()->overlay_captures, __ATOMIC_RELAXED) ? 1 : 0;
     }
     return BbOverlay::CapturesInput() ? 1 : 0;
+}
+
+extern "C" int bbgpu_mouse_look_enabled(void) {
+    return BbSettings::Get().mouse_look ? 1 : 0;
 }
 
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt, int password) {

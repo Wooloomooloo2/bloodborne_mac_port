@@ -32,7 +32,8 @@ namespace VideoCore {
 class UniqueBuffer {
 public:
     /// Creates the MTLBuffer (asserts on failure). Replaces any previous one.
-    void Create(Metal::Device& device, u64 size, MemoryType type, std::string_view label = "");
+    void Create(Metal::Device& device, u64 size, MemoryType type, std::string_view label = "",
+                bool guest_memory = false);
     void Destroy();
 
     /// id<MTLBuffer>, unretained.
@@ -46,16 +47,24 @@ public:
     [[nodiscard]] u8* Contents() const noexcept {
         return contents;
     }
+    /// bbport: the CPU pointer of a guest memory buffer (Metal::CreateBuffer's host_view), else
+    /// null. Only for reading GPU-written data whose command buffer has completed.
+    [[nodiscard]] u8* HostView() const noexcept {
+        return host_view;
+    }
 
 private:
     Metal::Object buffer;
     u64 gpu_address{};
     u8* contents{};
+    u8* host_view{};
 };
 
 struct Buffer {
+    /// bbport: `guest_memory`: a buffer holding guest memory (BufferCache chunks): lazily committed
+    /// and readable by the CPU at any size (mtl_buffer.mm).
     explicit Buffer(Metal::Device& device, MemoryType mem_type, VAddr cpu_addr_, u64 size_bytes_,
-                    std::string_view debug_name = "");
+                    std::string_view debug_name = "", bool guest_memory = false);
 
     Buffer& operator=(const Buffer&) = delete;
     Buffer(const Buffer&) = delete;

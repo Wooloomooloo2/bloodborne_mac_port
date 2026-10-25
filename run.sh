@@ -27,6 +27,10 @@ out=$data/out
 mkdir -p "$out"
 export BB_CONFIG=${BB_CONFIG:-$data/bbport.ini}
 # The launcher's fps_cap / fullscreen (bbport.ini) as BB_FPS_LIMIT / BB_FULLSCREEN.
+# The windowless guest does not pump SDL quit events. Leave SIGTERM at its normal
+# disposition so Stop works after SDL audio/gamepad init, including the mod-view child.
+# The native GPU host installs its own termination handling and watches parent exit.
+export SDL_NO_SIGNAL_HANDLERS=1
 source scripts/launch_settings.sh
 bb_launch_settings "$BB_CONFIG"
 # GPU caches (pipelines, shaders) next to the saves. Exported before anything starts: the GPU
@@ -41,13 +45,31 @@ if [[ ! -f $game/eboot.bin ]]; then echo "No eboot.bin in $game (set BB_GAME_DIR
 # Hooks and patches use the addresses of the 1.09 executable (BB_SKIP_GAME_CHECK=1 skips this).
 if ! "$PYTHON" scripts/game_check.py "$game" >&2; then exit 1; fi
 original_game=$game
+mod_views=()
+cleanup_mod_views() {
+    for view in "${mod_views[@]}"; do
+        "$PYTHON" -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$view"
+    done
+}
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
     --mods-dir "${BB_MODS_DIR:-$data/mods}" --config "${BB_MODS_CONFIG:-$data/mods.json}" \
     --enabled "${BB_MODS_ENABLED:-1}")
 # A private merged view lasts for this launch, including restarts. Cleanup only our own view.
 if [[ $game != "$(realpath "$original_game")" ]]; then
     mod_game=$game
-    trap '"$PYTHON" -c '\''import shutil,sys; shutil.rmtree(sys.argv[1])'\'' "$mod_game"' EXIT
+    mod_views+=("$mod_game")
+    trap cleanup_mod_views EXIT
+fi
+unset BB_MAC_SETTINGS_READY BB_EXIT_GAME_READY
+if [[ ${BB_MAC_SETTINGS:-1} != 0 || ${BB_EXIT_GAME:-1} != 0 ]]; then
+    if mac_game=$("$PYTHON" scripts/mac_menu.py "$game" "$out") && [[ -n $mac_game && -d $mac_game ]]; then
+        game=$mac_game
+        mod_game=$mac_game
+        mod_views+=("$mac_game")
+        export BB_MAC_SETTINGS_READY=1
+        export BB_EXIT_GAME_READY=1
+        trap cleanup_mod_views EXIT
+    fi
 fi
 "$PYTHON" scripts/prepare.py "$game" --out "$out"
 "$PYTHON" scripts/link_libc.py "$game" --out "$out"
@@ -69,20 +91,34 @@ fps=${BB_FPS:-uncap}
 # (output and presets change in the menu without a restart, but post-processing stays at 1080p
 # and scene targets are copied back: much slower on the Steam Deck and older GPUs). Chosen by
 # BB_LIVE_RES=0/1, else bbport.ini live_resolution=0/1/auto (auto: the GPU check, strong
-# discrete GPUs get them); off when unset. 1080p output and TAA always use the live path.
+# discrete GPUs get them); off when unset. metalfx_white_scene_fix=1 opts into the native-guest
+# workaround for white scenes above 1080p (#116), at a GPU cost. BB_RENDER_RES is an explicit override.
 wide_patch=$("$PYTHON" scripts/patches.py --print-ultrawide --settings "$BB_CONFIG")
 bb_native_ultrawide "$wide_patch"
 scaled_render='' scaled_output=''
 if [[ -z $wide_patch && -z ${BB_RENDER_RES:-} ]]; then
     read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --settings "$BB_CONFIG") || true
 fi
-live=0 above_1080=0
+live=0 above_1080=0 metalfx_live=0 metalfx_white_scene_fix=0
 if [[ -n ${scaled_output:-} ]]; then
     live=${BB_LIVE_RES:-}
+    provider=${BB_UPSCALER:-}
     # Bash builtins only (no sed/grep): a bare PATH must not end run.sh silently.
-    if [[ -z $live && -f $BB_CONFIG ]]; then
+    if [[ -f $BB_CONFIG ]]; then
         while IFS= read -r line || [[ -n $line ]]; do
-            [[ $line =~ ^live_resolution=([01]|auto)$ ]] && live=${BASH_REMATCH[1]}
+            if [[ -z ${BB_LIVE_RES:-} && $line =~ ^live_resolution=([01]|auto)$ ]]; then
+                live=${BASH_REMATCH[1]}
+            fi
+            if [[ -z ${BB_UPSCALER:-} && $line =~ ^[[:space:]]*upscaler[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
+                provider=${BASH_REMATCH[1]}
+            fi
+            if [[ $line =~ ^[[:space:]]*metalfx_white_scene_fix[[:space:]]*=(.*)$ ]]; then
+                if [[ ${BASH_REMATCH[1]} =~ ^[[:space:]]*1[[:space:]]*$ ]]; then
+                    metalfx_white_scene_fix=1
+                else
+                    metalfx_white_scene_fix=0
+                fi
+            fi
         done < "$BB_CONFIG"
     fi
     # auto is off: the old Vulkan check wanted a discrete GPU with 8 GB, which a Mac never has.
@@ -92,8 +128,17 @@ if [[ -n ${scaled_output:-} ]]; then
     # game's buffers at 1080p and renders host targets at the size instead.
     IFS=x read -r render_w render_h <<< "$scaled_render"
     if (( render_w > 1920 || render_h > 1080 )); then live=1 above_1080=1; fi
+    # Keep the same native guest allocations as starting with upscaling off and enabling
+    # MetalFX in game. The startup-patched path can feed a flat white image into MetalFX
+    # after a room transition; resetting the scaler cannot repair its input.
+    IFS=x read -r output_w output_h <<< "$scaled_output"
+    if [[ $metalfx_white_scene_fix == 1 && $provider == metalfx ]] && (( output_w > 1920 || output_h > 1080 )); then
+        live=1 metalfx_live=1
+    fi
 fi
-if [[ $live == 1 && $above_1080 == 1 ]]; then
+if [[ $metalfx_live == 1 ]]; then
+    echo "Output ${scaled_output}: MetalFX white-scene workaround enabled (native guest targets; extra post-processing and resolve cost)"
+elif [[ $live == 1 && $above_1080 == 1 ]]; then
     echo "Output ${scaled_output}: scene ${scaled_render} through live resolution changes (the startup patch breaks scenes above 1080p)"
 elif [[ $live == 1 ]]; then
     echo "Output ${scaled_output}: live resolution changes (live_resolution=0: startup patch)"
@@ -109,6 +154,7 @@ fi
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
     case $fps in uncap) export BB_VBLANK_HZ=0 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
+    export BB_LAUNCH_AUTO_VBLANK=$BB_VBLANK_HZ
 fi
 if [[ -n ${BB_PREBUILT:-} ]]; then
     probe=${BB_PROBE:-bin/bb-probe}

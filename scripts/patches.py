@@ -73,9 +73,17 @@ def intel_tonemap_fix(env=os.environ, cpuinfo='/proc/cpuinfo'):
 MODEL_LOD={'-2':'Model LOD -2 (Highest)','1':'Model LOD 1 (Lower)','2':'Model LOD 2 (Lowest)'}
 
 
+# Enemy Control rewrites bytes the frame rate patches also change (0x1972a7d-0x1972a83: 4 bytes
+# with 60/90 FPS++, 7 with Uncap FPS++), so the two cannot be combined.
+FPS_PATCH_NAMES=('30 FPS++','60 FPS++','90 FPS++','Uncap FPS++')
+
+
 def validate_patch_requirements(names, game):
     if 'Restore Debug Camera' in names and 'Enemy Control' in names:
         raise ValueError('Restore Debug Camera conflicts with Enemy Control; enable only one')
+    if 'Enemy Control' in names and any(n in names for n in FPS_PATCH_NAMES):
+        raise ValueError('Enemy Control changes the same code as the frame rate patch; it only '
+                         'works with the 30 FPS cap and fixed game timing')
     if 'Restore Debug Menu (READ NOTES)' in names:
         font = game / 'dvdroot_ps4/font'
         missing = [name for name in ('DbgFont14h.ccm', 'DbgFont14h.tpf')
@@ -96,6 +104,53 @@ def effect_patches(settings):
     lod=MODEL_LOD.get(settings.get('model_lod','0'))
     if lod: names.append(lod)
     return names
+# Cheats and gameplay tweaks the launcher's Mods & Cheats window offers (bbport.ini
+# cheats=name;name): patch name -> (group, label, exclusive group or None). Graphics, frame rate,
+# resolution and debug patches stay with their own settings. Not offered: Enemy Control (it
+# rewrites code the frame rate patches also change).
+CHEATS={
+    'Player No Dead (Read note)':('Cheats','Player can\'t die',None),
+    'Player Stealth (Read note)':('Cheats','Enemies don\'t see you',None),
+    'Player Silent (Read note)':('Cheats','Enemies don\'t hear you',None),
+    'No Rally Decay':('Gameplay','Rally doesn\'t decay','rally'),
+    'Disable Rally (HP Regain)':('Gameplay','No rally (HP regain)','rally'),
+    'DS1-like physics':('Gameplay','Light corpses and objects (DS1 physics)','physics'),
+    'Lower object/corpse physics':('Gameplay','Heavy corpses and objects','physics'),
+    'Sensitive Analog Input (easier to run)':('Gameplay','Run with less stick travel',None),
+    'Disable Camera Auto Rotation via Movement':('Camera','No camera auto-rotation',None),
+    'Increased camera distance':('Camera','Camera further away',None),
+    '50% Text scale':('Interface','Smaller text (50%)',None),
+    'Unlock Game Region':('Interface','All game languages',None),
+}
+
+
+def cheat_patches(settings):
+    """The cheats= patches (unknown names are ignored, two of one exclusive group refused)."""
+    names=[n.strip() for n in settings.get('cheats','').split(';') if n.strip() in CHEATS]
+    groups={}
+    for name in names:
+        group=CHEATS[name][2]
+        if group and groups.setdefault(group,name)!=name:
+            raise ValueError(f'cheats: {groups[group]!r} and {name!r} cannot be on together')
+    return list(dict.fromkeys(names))
+
+
+def list_json(xml,app_version,patches_dir,patches_config):
+    """--list: the cheats and the external patch files for the launcher, as JSON."""
+    notes={m.get('Name'):(m.get('Note') or '').replace('\\n','\n')
+           for m in ET.parse(xml).getroot().iter('Metadata') if m.get('AppVer')==app_version}
+    cheats=[{'name':name,'group':group,'label':label,'exclusive':exclusive,'note':notes.get(name,'')}
+            for name,(group,label,exclusive) in CHEATS.items() if name in notes]
+    external=[]
+    if patches_dir:
+        found=external_patches(patches_dir,app_version,xml)
+        on={key for key,_,_ in external_selection(found,patches_config)}
+        external=[{'key':key,'file':path.name,'name':meta.get('Name'),'author':meta.get('Author',''),
+                   'note':(meta.get('Note') or '').replace('\\n','\n'),'enabled':key in on}
+                  for key,path,meta in found]
+    return json.dumps({'cheats':cheats,'external':external},indent=1)
+
+
 SCENE_WIDTH=0x02196A6B-EBOOT_BASE
 SCENE_HEIGHT=0x02196A7A-EBOOT_BASE
 UI_WIDTH=0x02358554-EBOOT_BASE
@@ -146,6 +201,10 @@ ULTRAWIDE_PATCHES = {
     '5120x1440': 'Resolution Patch 5120x1440 (32:9)',
     '2560x1080': 'Resolution Patch 2560x1080 (21:9)',
     '3440x1440': 'Resolution Patch 3440x1440 (21:9)',
+    '5120x2160': 'Resolution Patch 5120x2160 (21:9)',
+    '1280x800': 'Resolution Patch 1280x800 (16:10)',
+    '1920x1200': 'Resolution Patch 1920x1200 (16:10)',
+    '2560x1600': 'Resolution Patch 2560x1600 (16:10)',
 }
 
 
@@ -163,7 +222,9 @@ def ultrawide_writes(xml, name, app_version, segments):
     Keep the fallback globals and scene MOV/NOP overrides together. Preserve the
     first graphics heap; increase only the smaller pool from 886 to 1536 MiB above
     1080p pixel count. Retail capacity failed combat texture allocations (error 9).
-    launch_settings.sh supplies 6144 MiB DMEM for the extra 650 MiB.
+    launch_settings.sh supplies 6144 MiB DMEM for the extra 650 MiB. Above 4K (5120x2160)
+    the render targets outgrow the retail first heap too (no level geometry, then a null
+    texture crash, #93): it gets the community patch's 3952 MiB and 8192 MiB DMEM.
     """
     heaps = [(0x04B36DDA - EBOOT_BASE, 0x04B36DDC - EBOOT_BASE),
              (0x04B36DE2 - EBOOT_BASE, 0x04B36DE4 - EBOOT_BASE)]
@@ -179,6 +240,8 @@ def ultrawide_writes(xml, name, app_version, segments):
     if width * height > 1920 * 1080:
         # Full 32-bit pool size; the community's two-byte write starts two bytes later.
         writes.append((0x04B36DE0 - EBOOT_BASE, struct.pack('<I', 1536 * 1024 * 1024)))
+    if width * height > 3840 * 2160:
+        writes.append((0x04B36DD8 - EBOOT_BASE, struct.pack('<I', 3952 * 1024 * 1024)))
     return writes
 
 
@@ -249,7 +312,53 @@ def encode(line):
     raise ValueError(f'unsupported patch type {kind!r}')
 
 
-def compile_patches(xml, names, app_version, segments):
+# Writes that are never applied, from any patch file. The FPS++ patches (30/60/90/Uncap) put
+# RET + 4 NOPs over the timed-wait call at 0x02483EC1 inside the game's condition wait
+# (0x02483E80). Its prologue pushed rbp, r15, r14, rbx and rax, so a RET there returns to the
+# saved rax value: any timed wait would crash. Untimed waits take another branch, which is why
+# it never showed. Without the write the game's own wait runs (found by an assessment against
+# Paleblood, verified by disassembly, 2026-10-25).
+UNSAFE_WRITES=((0x02483EC1-EBOOT_BASE, 5, 'RET over the timed condition wait call'),)
+
+
+def unsafe_write(offset, data):
+    """The UNSAFE_WRITES reason when this write touches one of them, else None."""
+    for start,length,reason in UNSAFE_WRITES:
+        if offset<start+length and offset+len(data)>start: return reason
+    return None
+
+
+class PatchAudit:
+    """Compare effective bytes between selected patches, preserving each patch's order.
+
+    A metadata Overrides="name;file.xml/name" declaration permits an intentional
+    cross-patch replacement. Same-byte overlaps and later writes within a patch
+    need no declaration. Native runtime hook protection cannot be overridden.
+    """
+    def __init__(self):
+        self.bytes = {}
+
+    def add(self, source, writes, overrides=()):
+        effective = {offset+i: byte for offset, data in writes for i, byte in enumerate(data)}
+        overrides = set(overrides)
+        for address, byte in effective.items():
+            previous = self.bytes.get(address)
+            if previous and previous[0] != byte and not previous[1] <= overrides:
+                owners = ', '.join(sorted(previous[1]))
+                raise ValueError(f'{source} conflicts with {owners} at {address+EBOOT_BASE:#010x}; '
+                                 'select only one patch, or declare an intentional Overrides entry')
+        for address, byte in effective.items():
+            previous = self.bytes.get(address)
+            owners = previous[1] | {source} if previous and previous[0] == byte else {source}
+            self.bytes[address] = byte, owners
+        return writes
+
+
+def patch_overrides(meta):
+    return [name.strip() for name in meta.get('Overrides', '').split(';') if name.strip()]
+
+
+def compile_patches(xml, names, app_version, segments, audit=None):
     found={}
     for meta in ET.parse(xml).getroot().iter('Metadata'):
         if meta.get('Name') in names and meta.get('AppVer')==app_version and meta.get('AppElf','eboot.bin')=='eboot.bin':
@@ -257,14 +366,18 @@ def compile_patches(xml, names, app_version, segments):
     missing=[n for n in names if n not in found]
     if missing: raise ValueError(f'patches not found for app version {app_version}: {missing}')
     writes=[]
+    audit = audit if audit is not None else PatchAudit()
     for name in names:
+        ours=[]
         for line in found[name].iter('Line'):
             offset=int(line.get('Address'),0)-EBOOT_BASE
             data=encode(line)
             if not any(start<=offset and offset+len(data)<=end for start,end in segments):
                 print(f'Warning: {name}: address {line.get("Address")} is outside the eboot; skipping', file=sys.stderr)
                 continue
-            writes.append((offset,data))
+            if unsafe_write(offset,data): continue  # see UNSAFE_WRITES
+            ours.append((offset,data))
+        writes += audit.add(name, ours, patch_overrides(found[name]))
     return writes
 
 
@@ -303,9 +416,10 @@ def external_selection(found, config):
             if key in enabled or (key not in disabled and meta.get('isEnabled','false').lower()=='true')]
 
 
-def compile_external(selected, segments):
-    """Writes of the selected external patches; a patch with unsupported lines is skipped whole."""
+def compile_external(selected, segments, audit=None):
+    """Writes of external patches; unsupported or conflicting patches are skipped whole."""
     writes=[]
+    audit = audit if audit is not None else PatchAudit()
     for key,_,meta in selected:
         try:
             ours=[]
@@ -314,11 +428,14 @@ def compile_external(selected, segments):
                 data=encode(line)
                 if not any(start<=offset and offset+len(data)<=end for start,end in segments):
                     raise ValueError(f'address {line.get("Address")} is outside the eboot')
+                if reason:=unsafe_write(offset,data):
+                    print(f'Patches: {key}: skipped the write at {line.get("Address")} ({reason})',file=sys.stderr)
+                    continue
                 ours.append((offset,data))
+            writes += audit.add(key, ours, patch_overrides(meta))
         except ValueError as error:
             print(f'Patches: skipped {key}: {error}',file=sys.stderr)
             continue
-        writes+=ours
         print(f'Patches: external {key} ({len(ours)} writes)')
     return writes
 
@@ -338,9 +455,13 @@ def main():
     p.add_argument('--print-preset-size',action='store_true',help='print the selected preset size, if reduced')
     p.add_argument('--output-res',default='',help='output resolution WxH (the upscaler\'s; the UI stays 1920x1080)')
     p.add_argument('--print-ultrawide',action='store_true', help='print the selected native wide patch')
+    p.add_argument('--list',action='store_true',help='print the cheats and external patches as JSON (launcher)')
     p.add_argument('--print-scaled',action='store_true',
                    help='print "RENDER OUTPUT" (WxH) when bbport.ini selects an output other than 1080p')
     a=p.parse_args()
+    if a.list:
+        print(list_json(a.xml,a.app_version,a.patches_dir,a.patches_config))
+        return
     if a.print_ultrawide:
         print(ultrawide_patch(read_settings(a.settings)))
         return
@@ -362,6 +483,7 @@ def main():
         fps_patches = []
     raw_names = fps_patches + [n.strip() for n in a.extra.split(';') if n.strip()]
     raw_names += [n for n in effect_patches(read_settings(a.settings)) if n not in raw_names]
+    raw_names += [n for n in cheat_patches(read_settings(a.settings)) if n not in raw_names]
     if intel_tonemap_fix() and INTEL_TONEMAP not in raw_names:
         raw_names.append(INTEL_TONEMAP)
     names = []
@@ -374,9 +496,10 @@ def main():
     if wide and (a.render_res or any(n.startswith('Resolution Patch ') or
                                     n == 'Increased Graphics Heap Sizes' for n in names)):
         raise ValueError('Ultrawide already selects the native resolution; remove conflicting resolution/heap overrides')
-    writes=compile_patches(a.xml,names,a.app_version,segments)
+    audit=PatchAudit()
+    writes=compile_patches(a.xml,names,a.app_version,segments,audit)
     if wide:
-        writes += ultrawide_writes(a.xml, wide, a.app_version, segments)
+        writes += audit.add(wide, ultrawide_writes(a.xml, wide, a.app_version, segments))
         names.append(f'Native scene/UI with bounded texture pool: {wide}')
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
@@ -384,16 +507,17 @@ def main():
     # (UiComposition::NativeViewport), so it is rasterized at the output resolution.
     ui=OUTPUT_SIZE
     if size:
-        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
+        writes+=audit.add('Render resolution',resolution_writes(a.xml,size,a.app_version,segments,ui))
         if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
             heap='Increased Graphics Heap Sizes'
-            writes+=compile_patches(a.xml,[heap],a.app_version,segments)
+            writes+=compile_patches(a.xml,[heap],a.app_version,segments,audit)
             names.append(heap)
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
-        # After the built-in ones: an external patch of the same bytes wins.
+        # After built-ins. Different bytes require an explicit Overrides entry;
+        # equal writes and a patch's own ordered rewrites remain valid.
         writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
-                                                    a.patches_config),segments)
+                                                    a.patches_config),segments,audit)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).
     blob=struct.pack('<8sQQ',b'BBPATCH2',EBOOT_BASE,len(writes))

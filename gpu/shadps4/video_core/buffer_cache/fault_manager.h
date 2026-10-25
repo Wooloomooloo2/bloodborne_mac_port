@@ -25,6 +25,11 @@ public:
         return &fault_buffer;
     }
 
+    /// The fault buffer's size: one bit per page of the page table.
+    static constexpr u64 BufferSize(u64 sparse_num_pages) noexcept {
+        return sparse_num_pages / 8;
+    }
+
     void ProcessFaultBuffer();
 
 private:

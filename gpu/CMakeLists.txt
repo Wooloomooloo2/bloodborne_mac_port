@@ -14,6 +14,25 @@ endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
 
+# std::jthread / std::stop_token: Xcode 16's libc++ (macOS 15 SDK) keeps them behind
+# -fexperimental-library; Xcode 26 has them by default. Add the flag only when it is needed.
+if (APPLE)
+    include(CheckCXXSourceCompiles)
+    set(bb_jthread_test "#include <thread>\nint main() { std::jthread t([](std::stop_token) {}); }")
+    check_cxx_source_compiles("${bb_jthread_test}" BB_HAS_JTHREAD)
+    if (NOT BB_HAS_JTHREAD)
+        set(CMAKE_REQUIRED_FLAGS -fexperimental-library)
+        check_cxx_source_compiles("${bb_jthread_test}" BB_HAS_JTHREAD_EXPERIMENTAL)
+        unset(CMAKE_REQUIRED_FLAGS)
+        if (NOT BB_HAS_JTHREAD_EXPERIMENTAL)
+            message(FATAL_ERROR "std::jthread is unavailable: use Xcode 16 or newer")
+        endif()
+        message(STATUS "std::jthread needs -fexperimental-library (Xcode 16 libc++)")
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-fexperimental-library>)
+        add_link_options(-fexperimental-library)
+    endif()
+endif()
+
 # bbport: link-time optimization (BB_LTO, default on) and profile-guided optimization
 # (BB_PGO: off, generate = instrumented build writing into BB_PGO_DIR, use = build with that
 # profile). Covers bbgpu and the static libraries linked into it. No -march: the same build
@@ -176,10 +195,11 @@ if (APPLE)
         runtime_disabled_optimizations runtime_errno runtime_fault_recover
         runtime_file_translate runtime_game_cpu_since_last runtime_memory_clamp
         runtime_memory_gpu_protect runtime_memory_read_backing runtime_memory_region
-        runtime_memory_set_gpu_hooks runtime_memory_write_backing
+        runtime_memory_set_gpu_hooks runtime_memory_vma_info runtime_memory_write_backing
         runtime_process_time_counter runtime_process_time_us runtime_restart
         runtime_thread_attach_host runtime_thread_clear_blocked runtime_thread_cpu_ns
-        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip)
+        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip
+        runtime_context_lock_other)
     foreach(symbol IN LISTS BB_HOST_RUNTIME_SYMBOLS)
         target_link_options(bbgpu PRIVATE -Wl,-U,_${symbol})
     endforeach()
@@ -238,7 +258,7 @@ if (APPLE)
     list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_object.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer_barriers.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_compiled_shader.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_counters.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_device.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_draw_core.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_encoder.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_order.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_depth_stencil.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_present.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_render_pipeline.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_scale.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_specialize.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_texture.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_timeline.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/vk_to_mtl.mm)
     target_sources(bbgpu PRIVATE ${METAL_SOURCES})
     target_link_libraries(bbgpu PRIVATE bbmetal_core "-framework Metal" "-framework QuartzCore"
-        "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation")
+        "-framework CoreGraphics" "-framework ColorSync" "-framework ImageIO" "-framework Foundation")
     foreach(source IN LISTS METAL_SOURCES)
         if (source MATCHES "\\.mm$")
             set_source_files_properties(${source} PROPERTIES COMPILE_OPTIONS
@@ -290,6 +310,14 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(shader-userdata-test EXCLUDE_FROM_ALL ../tests/test_shader_userdata.cpp
+    shadps4/shader_recompiler/frontend/fetch_shader.cpp
+    shadps4/shader_recompiler/frontend/decode.cpp
+    shadps4/shader_recompiler/frontend/format.cpp
+    shim/common/assert.cpp shim/common/logging/log.cpp)
+target_include_directories(shader-userdata-test PRIVATE shim shadps4)
+target_compile_options(shader-userdata-test PRIVATE -UNDEBUG)
+target_link_libraries(shader-userdata-test PRIVATE fmt::fmt Boost::headers magic_enum::magic_enum)
 add_executable(draw-pipe-wait-test EXCLUDE_FROM_ALL ../tests/test_draw_pipe_wait.cpp
     shim/common/logging/log.cpp)
 target_include_directories(draw-pipe-wait-test PRIVATE shim shadps4)
@@ -394,8 +422,23 @@ add_executable(upscaler-support-test EXCLUDE_FROM_ALL ../tests/test_upscaler_sup
 target_include_directories(upscaler-support-test PRIVATE shim)
 target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
+add_executable(mac-settings-test EXCLUDE_FROM_ALL ../tests/test_mac_settings.cpp
+    shim/bbport_settings.cpp shim/bbport_mac_settings.cpp)
+target_include_directories(mac-settings-test PRIVATE shim)
+target_compile_options(mac-settings-test PRIVATE -UNDEBUG)
+
 
 # Opt-in synthetic regression: no game files or runtime diagnostics required.
+# bbport: the guest memory buffers' lookup (header-only; also run with -fsanitize=thread).
+add_executable(chunk-table-test EXCLUDE_FROM_ALL ../tests/test_chunk_table.cpp)
+target_include_directories(chunk-table-test PRIVATE shadps4)
+target_compile_options(chunk-table-test PRIVATE -UNDEBUG)
+# bbport: BB_ARENA_LAYOUT=runs with real Metal (guest memory buffers per GPU run).
+add_executable(arena-layout-test EXCLUDE_FROM_ALL ../tests/test_arena_layout.cpp)
+target_include_directories(arena-layout-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_options(arena-layout-test PRIVATE -UNDEBUG)
+target_link_libraries(arena-layout-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+target_link_options(arena-layout-test PRIVATE -Wl,-export_dynamic)
 add_executable(index-offset-test EXCLUDE_FROM_ALL
     ../tests/test_index_offset.cpp ../tests/test_index_triangle.mm)
 set_source_files_properties(../tests/test_index_triangle.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

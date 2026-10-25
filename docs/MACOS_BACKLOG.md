@@ -21,6 +21,65 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Long sessions hang (#127, #139): fixed in 0.5.14 (2026-11-06).**
+  Occlusion query dumps were written before the game's DMA_DATA clear of the same block (it runs
+  in order with the draws), so no query ever completed and the pending list filled the frame
+  heap. Verified: 2.5 h scripted session (heap flat at 8 KiB), glare/flares checked by the owner.
+  The occlusion counts are a stand-in (always visible): real per-draw sample counts would need
+  Metal visibility results (follow-up, only if an effect looks wrong). FINDINGS 2026-11-06.
+- **Motion blur smears a still picture until restart (#109, 2026-11-05).** M2 16 GB, 1280x720,
+  upscaler off: after a while the whole scene streaks as if moving; restarting clears it, and
+  with motion blur off it never comes back (reporter). The blur pass reads wrong velocity or a
+  stale previous-frame matrix. Two "Failed to find exact image match for copy addr=0x70f1ee0000,
+  size=0x10000" warnings came shortly before the screenshot. Not reproduced here.
+- **Forbidden Woods turns white with MetalFX above 1080p (#116, 2026-11-02).** With the startup
+  patch (guest targets 1708x960 at 1440p Quality) the scene goes flat white after the passage
+  beside the lift; PR #117 (evill33t) read the frame back: MetalFX's input is already one colour,
+  depth still varies, so a game post-process breaks at that size. #117 (merged 2026-11-05 as an
+  opt-in, `metalfx_white_scene_fix`, off by default) puts MetalFX above 1080p on the live path,
+  which costs ~5-20% GPU in the Hunter's Dream (post at 1080p plus proxy resolves; two noisy
+  battery-power A/B pairs, FINDINGS 2026-11-02). *Fix:* find the pass that first writes the white image (frame capture at the gate with
+  the reporter's save, 1-2 passes through the passage reproduce it) and fix it on the startup
+  path; then #117 is not needed. Workaround for players: start with the upscaler off, then enable
+  MetalFX in game.
+- **The game's AA is lost above 1080p (#115, 2026-10-31).** Above 1920x1080 run.sh uses live
+  resolution changes: the guest's buffers stay at 1080p and host targets are scaled, so the game's
+  own temporal AA (a 1080p post-process) never reaches the picture. Measured at the benchmark stand
+  (window snapshots): at 1080p `effect_game_aa=0` raises edge energy 1.53 -> 1.86; at 4K on and
+  off are identical (1.554). Players see more jagged edges at 4K than at 1080p (BD-Jacek, M3 Max).
+  Workaround: MetalFX at Native AA. *Fix:* above 1080p with the upscaler off, run the port's TAA
+  (or MetalFX Native AA) by default, or scale the game's AA targets with the scene. Check
+  full-screen 4K snapshots (window snapshots are downscaled, which hides jaggies).
+- **8 GB Macs (2026-10-26, owner question).** The owner saw under 6 GB in Activity Monitor at
+  540p → 1080p (FSR 3.1). Today an 8 GB Mac stops at start: `buffer_cache.cpp` asserts a 5 GiB
+  Metal buffer, and maxBufferLength is ~60% of memory (~4.5 GiB). The `runs` layout (default on
+  ≤ 24 GB since 0.5.9) never needs one buffer that large (largest run ~3.3 GiB), so the assert
+  should apply to `legacy` only. The real risk is the ~3.5 GB of pinned GPU memory on top of macOS
+  and the game (the #69 swap slide). Simulate on the M4 Max as for #69: `iogpu.wired_limit_mb`
+  ~5300, a helper locking ~40 GB, `BB_MAX_BUFFER_GIB=4`, 540p → 1080p; ship only if it holds
+  30+ FPS without swapping.
+- **`tests/test_run_settings.py` fails on master, and no build script runs it (2026-10-26, found
+  by evill33t on #90).** `test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it`: the third restart
+  (back to 1080p) expects `BB_RENDER_RES` 640x360 and gets none. Run it with
+  `cd tests && python3 -m unittest test_run_settings` (it imports `paths` from `tests/`). Decide
+  whether run.sh or the expectation is wrong, then add the suite to `build_macos.sh --test` so
+  restart-settings regressions show up.
+- **Opening-movie freeze and crash on new games (#46, #50, #51, #24, #84): fixed 2026-10-26 on
+  branch `cutscene-race`, for the 0.5.x hotfix.** Two causes (FINDINGS 2026-10-26): the AvPlayer
+  stop request missed a decoder whose `jthread` the demuxer had taken to join (freeze in
+  `sceAvPlayerClose`), and the main thread recorded into GXRenderThread's immediate context from
+  `0x28fe7c0` outside the context lock (crash at `0x26c01c3`, GPU process crash in `SignalEop`).
+  *Watch:* new-game reports on 16-18 GB Macs after the update; the hang report and the "outside
+  the context lock" line name any remaining path.
+- **Life after Rosetta: evaluate bloodborne-recomp (2026-10-24, after 0.6.0).** The game side
+  (bb-probe and the HLE runtime in `src/`) runs under Rosetta 2, which Apple supports fully only
+  through macOS 27. github.com/bloodborne-native/bloodborne-recomp (GPL-2.0-or-later) recompiles
+  all 241,031 eligible game functions to C and runs the whole game natively on arm64 (with bbcpu,
+  an interpreter and translator, as the fallback), but uses 20-30% more CPU than their translator
+  and has not been compared with Rosetta. Our `static-recompilation` branch stopped at 47,125
+  lifted functions. *Next:* a spike, not adoption: can our loader call their `librecomp.dylib`;
+  what building `src/` for arm64 takes; recompiled vs Rosetta CPU time on the M4 Max.
+  Collaborating beats duplicating.
 - **Signals into guest threads break the game (2026-10-21).** SIGPROF sent to the main thread
   every 1 ms (a sampler's first version) made texture streaming fail every time within minutes
   (`CSGXTextureCreateFragment.cpp(137)` panic, then the game's deliberate null write), even with
@@ -41,6 +100,26 @@ Each item: what was done for now, what the refinement is, and where it lives.
   visibility culling reading stale results (`BB_READBACKS` Relaxed). Unknown whether 0.4.0 does it.
   Repro: long scripted walk from `save-backups/dense-20261017` with before/after snapshots.
 
+- **Metal-native: "Submit inside a render pass" assertion ended a co-op session (2026-10-17,
+  online-shadnet; made survivable).** The first phantom to load in on The Hunter's Dream pool
+  hit `Encoder::Finish`'s `ASSERT_MSG(!in_pass)` (bbgpu-host exited with status 23). The
+  scheduler ends its pass before every submission (`SubmitExecution` → `EndRendering`), so the
+  encoder's `in_pass` and the scheduler's `is_rendering` had come apart; the two direct
+  `BeginRenderPass` users in vk_runtime.cpp (layer resolves, clears) are balanced, so the path is
+  not found yet (no backtrace from the host process). Now `Finish` closes the render encoder,
+  commits, and keeps the pass: the next draw reopens it with load actions, as after compute or
+  blit work inside a pass; a `Submit inside a render pass` warning (first 8) marks it in the log.
+  *2026-10-18 (PR #11 review):* most likely a symptom of the recording-chunk race below:
+  `Finish` is reached only from `SubmitExecution`, after `EndRendering` and `SyncRecording`,
+  so `in_pass` can be true there only if another thread recorded a `BeginRenderPass` at the
+  same time, and the relayed fault's download calls `scheduler.Finish()` from stage A, the
+  thread that raced. The warning now carries the reporting thread's stack (which thread
+  submitted); since the pass stays open until the scheduler's next pass end, a still-open pass
+  at `Encoder::BeginRenderPass` (the stop would have moved there: `blit_helper.cpp`'s fullscreen
+  draw, the layer resolves and clears in vk_runtime.cpp) ends first with the same warning, and
+  an `EndRenderPass` without a pass warns and returns. The workaround stays as a safety net; a
+  raced chunk may also carry reordered records, so a log with any of these warnings is a bug
+  report, not a clean run. *Open:* only if the warning shows up again with the race fixed.
 - **Metal-native (M4 → M5): render pipelines declare a depth/stencil format the pass does not
   bind.** Fixed 2026-10-16 (M5 Task 3): `BoundDepthAttachment` (vk_depth_attachment.h) is the one
   rule for the pass's depth attachment and the pipeline key's formats; `MTL_DEBUG_LAYER=1` title +
@@ -206,6 +285,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   in `0xebb960` (hooked) while the render thread's frame job (hooked) had used the context 44.6
   us earlier, so either a third direct user of the immediate context exists or the frame job's
   recording outlives the hooked call.
+  **Closed 2026-10-19 (2cb8681, PR #20): a third direct user,** the render thread's draw-list
+  task `0x219d220` (black loading screen entry below).
 - **Fixed 2026-10-14: `MapNumberConversion` UNREACHABLE (data_fmt 0, SnormNz) killed the GPU
   host during a level load** (1 in ~60 loads). A descriptor with that format reads as zeros on
   the GPU; it now logs once ("SnormNz descriptor with data format …") and converts nothing.
@@ -350,6 +431,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   the Option B suspect above. *Next:* the overlay's Capture Frame at a broken spot, then again
   after reloading the area (asked on #18): diff the two pass lists (draw missing vs present with
   bad data). Then a long-walk repro from a save (Hemwick lamp), and Option B.
+  *2026-10-19:* the `…263b246` chain in both logs is the render thread's draw-list task
+  `0x219d220`, now under the context lock (2cb8681): re-check whether geometry still disappears.
 - **Black loading screen that never finishes (#18, 2026-10-18).** About 1 launch in 10 on an M3
   Pro stops at a black screen with the loading icon; a relaunch works. No log of a stuck run
   yet (asked for one). *Candidate fixed 2026-10-19:* `sceGnmDingDong` waited for the previous
@@ -395,6 +478,45 @@ Each item: what was done for now, what the refinement is, and where it lives.
   chunk users ("two threads use the recording chunk at once", with both callers and a
   backtrace). Not reproduced in 6 reloads. *Next:* read that report from the next crash, add
   the missing drain there.
+  *2026-10-17 (co-op on The Hunter's Dream, two phantoms in the world, ~40 min in):* the report
+  fired once and the game froze (no frame presented after it; the user closed the window):
+  `bb:DrawRec` from `BufferCache::ObtainBuffer+0xcbc` (SmallGuestCopy → Record) while another
+  thread had entered from `Vulkan::Runtime::CopyBuffer` (its Record). Paths checked and found
+  draining first: the DMA copies (`Rasterizer::CopyBuffer`), queued commands
+  (`Liverpool::ProcessCommands`), the fault relay (`bbgpu_host_fault` → `ReadMemory(assume_locks
+  = false)` → `SendCommand<true>`), `OnWriteFault` / `InvalidateMemory`; stage B advances
+  `consumed` only after a packet's handler returns, so `Drain` does not return early. The
+  remaining `Runtime::CopyBuffer` users are `BufferCache::ReadMemory`'s download (runs on A after
+  a drain, or inline on B/A with `assume_locks`) and `ObtainBuffer`'s upload (line ~489). Still
+  open which thread it was; the log has no thread name for the other side (worth adding to
+  `ReportChunkRace`: the other thread's name, captured with its caller). Workaround for long
+  co-op sessions: `BB_DRAW_PIPE=0` (no stage B, so no chunk race; ~18% slower draw recording).
+  *2026-10-17, later (code review of every thread that can record):* **found and fixed.** The
+  other thread was the GPU command thread itself, through `Liverpool::ProcessCommands`: it
+  drained stage B only `if (num_commands)` *before* the `while (num_commands)` loop, so a
+  command queued between those two reads ran without a drain. The queue is fed by the fault
+  relay thread (`bbgpu_host_fault` → `ReadMemory(assume_locks=false)` → `SendCommand<true>`)
+  and by non-EOP flips; `ProcessCommands` runs before every PM4 packet, the game faults ~1000
+  times a second, so the two-instruction window is hit in a long session. The relayed read
+  fault's download (`ReadMemory` → `DownloadMemory` → `Runtime::CopyBuffer` → `Record`,
+  the reported caller) then raced stage B's draw. The same hole explains the 2026-10-14
+  crash: that download's `scheduler.Finish()` kicks the recorder (`SyncRecording` →
+  `KickRecording`, `record_chunk` momentarily null) while stage B kicked from `RunWriteData`.
+  Fix: `ProcessCommands` drains after a command was taken, before it runs (the fast path, no
+  command, is unchanged: one atomic load); `Rasterizer::WaitDeferredSignals` drains too (its
+  kick touches the chunk; every caller drained already). Every other recording thread was
+  checked: stage B's own faults run inline (it owns the chunk), the fault relay, the host ring
+  thread (`UnmapMemory`, `InvalidateMemory`), the copy threads, the recorder, the priority-ops
+  thread, the present/swap threads, the draw-preparation workers and the pipeline builders
+  never record or go through `SendCommand`; the EOP flip's `PrepareFrame` runs on the
+  signalling thread (B via `RunInOrder`, else A drained); the opt-in texture bind helper binds
+  without refreshing images. `ReportChunkRace` now names both threads and, on macOS, prints
+  the other thread's stack at report time (the thread is suspended, its frame chain walked),
+  so a future report needs no guessing (a same-thread re-entry reports the caller it is inside,
+  not its own). Tests pass; an offline run with `BB_GPU_LOG=debug` showed no report. The drain
+  fix is in `metal-native` for 0.5.0 (32e7f2f); the report and the render-pass workaround above
+  follow in 0.5.1 (PR #11). The co-op reproduction (long session, phantoms) is the user's to
+  confirm; `BB_DRAW_PIPE=0` stays a fallback until then.
   *Same day, test runs:* the load-time corrupted command buffer (cloth-thread entry above) also
   killed the host twice in ~14 test loads: `SignalFence: Unreachable code!` (pm4_cmds.h:492)
   after "Gnm check: bad packet", and a SIGSEGV in `Shader::StageSpecialization` building a
@@ -430,7 +552,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Metal-native (M5): `BB_GPU_CAPTURE` crashes with the default 16 GiB arena.** Apple's
   GPUToolsCapture segfaults in `stopCapture` (`GTTraceDump_writeUnsortedCapture`) while writing
   the `.gputrace` (bbgpu-host dies). Workaround: `BB_ARENA_GIB=4` (884 MB capture in the city,
-  FINDINGS 2026-10-17 Task 10). Proper fix: capture with a smaller arena automatically, or a
+  FINDINGS 2026-10-17 Task 10); since the arena is sized to the game (0.5.2) it must hold the
+  game's 4.8 GiB, so 4 stops at startup: `BB_ARENA_GIB=5` (6 with the native ultrawide pool).
+  Proper fix: capture with a smaller arena automatically, or a
   `MTLCaptureScope` that leaves the arena out if Apple's tool allows it.
 
 - ~~**The game process grows ~80 MB/min during play (both renderers, 2026-10-18).**~~ Fixed
@@ -443,8 +567,61 @@ Each item: what was done for now, what the refinement is, and where it lives.
   index buffers are copied to staging instead, #36). Arena windows fixed both but stalled the GPU
   queue through the driver's wired-memory accounting (#42; `BB_ARENA_WINDOWS=1`). Options: split
   the arena into non-overlapping buffers of at most 4 GiB, or copy indirect records like indices.
+- **16:10 (and ultrawide) glitches while a level first loads (#75, 2026-10-25).** Seen by the
+  owner at 16:10 on 0.5.6 with their own save; settles once the level is in. Suspect: screen-size
+  targets created at the 16:9 size for the first frames before the native-size patch's sizes are
+  seen (`vk_rasterizer.cpp` "observed scene depth"). Capture a frame (`BB_FRAME_CAPTURE`) while it
+  happens.
+- **Small ABI and safety items from the Paleblood assessment (2026-10-25, low).** Verified against
+  master; none affects the shipped game: semaphore handles are written as 4 bytes
+  (`src/runtime_sema.c`, libkernel stores 8); sysmodule IDs are `uint16_t`
+  (`src/runtime_content.c`); `BBPORT_GS_SLOT` overrides in `scripts/link_libc.py` are not checked
+  against the runtime's fixed slot 384 (record the slot in link.json, refuse a mismatch);
+  `address + size` checks in `src/runtime_memory.c` can wrap on garbage sizes (check before
+  adding); `tools/bbrecomp/proto/check4.c` (static-recompilation branch) exits 0 on mismatches.
+  Fix independently; do not copy Paleblood's GPL-3 sources.
+- **Cloth (dresses, coats) corrupts at 120 FPS (2026-10-25, owner, every release back to 0.5.0).**
+  The skirt of a dress turns into flat, posterised dark patches; taking the dress off and on fixes
+  it until the character walks. Seen at the 120 cap (Uncap FPS++, variable timing); looks like
+  cloth simulation that assumes 30/60 FPS steps. PR #77 (adaptive timing) scales cloth constraint
+  stiffness by frame time (about min(1, 60*dt)^2), which may be the missing piece; a smaller fix
+  could cap the cloth step or run cloth at fixed 60. Test at 60 vs 120 on the same save first.
+- **Red/purple face at 16:10 (2026-10-25, owner).** Seen with the 1920x1200 native patch, in a test
+  build without 0.5.5's GCN legacy/clamped float translations (that build looked worse overall);
+  the face is normal with the 16:10 patch off. Not yet checked on 0.5.7 itself. Suspects: a
+  screen-size target or skin (subsurface) pass still sized for 16:9 with the native-size patch, or
+  NaN/Inf values (the red-flash class) on the skin shader.
 
 ## 2. Performance
+
+- **Watch after 0.5.11: performance reports against #98 (2026-10-29, owner).** #98 guards
+  GPU-thread descriptor reads with a local fault recovery (`gpu/shim/bbport_guest_memory.h`):
+  about 2.4 ns more per read on an M4 Max, estimated ~0.1% of a 60 FPS frame on slower Macs, and
+  the A/B (native 1080p uncapped) showed no cost. If players report lower FPS after 0.5.11, A/B
+  0.5.10 against 0.5.11 on the benchmark route first; the guard can be skipped for reads whose
+  table pointer is already known valid.
+
+- **16–18 GB Macs on macOS 27 run at 5–17 FPS (2026-10-25, top priority, the 0.5.x hotfix).**
+  Not GPU-bound: the GPU idles ~60% of each frame (FINDINGS "the slow Macs are 16–18 GB Macs on
+  macOS 27"). Needs a slow Mac to test: the kernel log for `required > max`, raising
+  `iogpu.wired_limit_mb`, then BB_GC_BUDGET_MB / BB_ARENA_GIB / BB_ARENA_LAZY / BB_FRAMES_AHEAD with
+  the benchmark. Likely fix if wiring: size the arena and its residency by RAM, or a growing arena.
+  *2026-10-26:* cause found (pinned GPU memory, FINDINGS #69); fix = #85 + #86 runs layout on Macs
+  with 24 GB or less, branch `memory-16gb`, test build mac-v0.5.9-test1. First tester result: an
+  M4 Air 16 GB went from 11-16 to 57-60 FPS (#83); #69 and #84 confirmed. Released in 0.5.9.
+
+- **The overlook above the carriage in Central Yharnam doesn't hold the cap on an M4 Max
+  (2026-10-26).** Owner's save, full screen, 2560x1440 output (drawable 3840x2160), upscaler off:
+  0.5.6 at a 120 cap 70.9 FPS / GPU 9.4 ms (Game Mode on), 0.5.9-test1 62.6 / 10.1 ms (Game Mode
+  off, local app, camera not identical). At a 60 cap it drops frames and stutters. GPU time is
+  well under 16.7 ms, so look at the CPU side (draw recording, faults, pacing) with
+  `BB_FRAME_STATS=1` / `BB_SAMPLE_MS=1` there. Owner doesn't remember this spot being so
+  demanding: compare older releases (0.5.0-0.5.5) at the same spot and settings, Game Mode on in
+  both, before calling it a regression.
+- **Benchmark scenes at the most demanding spots.** The traversal route and the throughput stand
+  don't include the heaviest areas (e.g. the overlook above). Add scripted scenes there
+  (owner will record routes / lantern 360 spins), some uncapped, so regressions in demanding
+  areas show up in the report.
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
   pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
@@ -521,6 +698,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   writes its memory through a buffer, which marks the image GPU-dirty, and each use detiles it
   from the arena again (`BB_LOG_UPLOAD_MB=5`). Keep the image in sync with the buffer write
   instead (a buffer-to-image copy at the write, or tile the writer's output). FINDINGS 2026-10-18.
+  *2026-10-19 (b0d4557):* the writer is compute shader `0x3d5ebf4e` (a 12 MB storage buffer at
+  the image's base; `BB_LOG_UPLOAD_MB` names writers); the image is never rendered to. The
+  refresh's 9 MB CPU hash is skipped for such images (command thread 0.6–0.8 → 0.2 ms on slow
+  frames on an M3 Pro); the GPU side (~0.12 ms per frame, detile + copy) remains.
 - ~~**Metal-native: GPU ~12% slower than 0.4.0 in the city (11.2 vs 9.9 ms/frame; 2026-10-17).**~~
   Level in the Task 11 matrix (97.7 vs 97.5 FPS at 1080p; ahead in all 16 scene/config pairs,
   +12-18% at 1440p native/TAA; FINDINGS 2026-10-18).
@@ -611,6 +792,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   Hunter's Dream 82 → ~93–103; Upper Cathedral Ward 65 → ~72–80), plus fewer tile store/load
   round trips (grows with resolution); at a 60 cap the same FPS for less GPU energy. Plain Metal,
   any macOS we support (15+); not Metal 4 (that needs macOS 26: a separate decision after this).
+  *2026-10-19 (M3 Pro, native Metal, `BB_PASS_STATS=1`, 1080p, Iosefka's Clinic, ~1600 draws):*
+  ~170 passes per frame: ~92 attachment changes, ~31 splits by copy-shader copies (same
+  attachments reopened; deferred to the pass end since 27a21db, "Versioned copy-shader table"
+  below), ~25 ended by dispatches (rarely reopening the same attachments).
 - **Shader compilation (done 2026-10-13: background pipeline creation, `shader_compile=wait|skip`;
   `balanced`, the default since 2026-10-13 evening, waits up to `BB_COMPILE_BUDGET_MS` (6) per
   frame and then skips).** A true ahead-of-time precompile is not possible: a pipeline's
@@ -673,6 +858,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Versioned copy-shader table.** ~24 copies per frame rewrite one table between draws inside a
   pass, ending it. *Refinement:* give each draw group its own version of the table (copies built
   ahead of the submission) so the pass stays open; bound ~1 ms GPU at 1440p.
+  **Done differently (27a21db, PR #20):** nothing reads the rewritten entries between such a copy
+  and the end of its pass (frame event trace, 030bd20), so in-pass copies are queued and run in
+  order right after the pass (Scheduler pass-end hook; a command whose bindings or
+  vertex/index/indirect/direct-memory reads touch their ranges runs them first).
+  `BB_DEFER_COPIES=0` or toggle bit 63: off. M3 Pro 1080p +12.8% (clinic), +13% (Hunter's
+  Dream); M4 Max FINDINGS 2026-10-20.
 
 - **MetalFX with asynchronous submits.** *Now:* MetalFX encodes on MoltenVK's queue right after
   a synchronous `vkQueueSubmit` (commit order). *Refinement:* order it with an MTLSharedEvent
@@ -701,6 +892,36 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Fixed in 0.5.10: the old launcher stayed open after an update (#96, 2026-10-27).** AppKit
+  refuses to quit while a sheet is attached: `NSApp.terminate` returns without asking the
+  delegate, so 0.5.9-test1 stayed on "Installing…" (⌘Q dead too) beside the new copy. Reproduced
+  with the real 0.5.9-test1 → 0.5.9 update in a scratch folder. #87 (after 0.5.9) hides the
+  windows first, which takes the sheet down; `Updater.install` now also `exit(0)`s if terminate
+  still returns. Verified: the old copy exits ~7 s after Install, the new one opens alone.
+  *Still open:* the fix runs in the *old* copy, so updating **from** 0.5.9 to 0.5.10 shows the
+  bug once more (say so in the 0.5.10 notes: quit the old window with Force Quit). Also, ⌘Q is
+  ignored whenever a launcher sheet is open (any sheet, not only updates): standard AppKit, but
+  players read it as a hang; consider ending the sheet in `applicationShouldTerminate`'s path.
+
+- **Local apps from `make_app.sh` never get Game Mode (2026-10-26).** Its `bbgpu-host*` are
+  symlinks into `out/`, so macOS sees anonymous processes outside the bundle and gamepolicyd only
+  recognises the launcher (packaged apps: all three processes, "Plist category type"). Copy or
+  hard-link the executables into the bundle so local tests match what players get.
+- **Launcher: the Controls section pushes Locations off the bottom of the window** (0.5.7, the
+  window is sized for a 13" Air). Move the bindings list to Advanced or make Controls one row.
+
+- **16:10 menus keep 16:9 artwork (#75, 2026-10-25).** Kyo's 16:10 patches fix HUD, lock-on and HP
+  bar positions, but full-screen menus stay 16:9 with grey bars at the sides. The "16x10 and 4x3
+  UI Fixes" mod (Nexus 207) replaces them; consider pointing to it from the launcher when 16:10
+  is chosen (the mod manager can load it).
+
+- **Resolution per display (#60, 2026-10-24).** The display choice is done (2026-10-26: launcher
+  `display=` UUID → `BB_DISPLAY`, window centred on it, vblank from it). Still open: keep
+  resolution/ultrawide per display so docking does not reset them.
+- **Leftover game processes (#71, 2026-10-24).** After a force-quit of a hung game, `bb-probe`
+  and a GPU host stuck in exit stay alive and the launcher refuses to start ("only one copy").
+  `stop_host` no longer waits forever after SIGKILL (fixes-0.5.6); the launcher should also offer
+  "End the previous copy" (SIGKILL the pgrep'd PIDs, check again, else say a restart is needed).
 - **Show the release version in the launcher (user, 2026-10-23).** Nothing in the window says
   which build is installed, so players (and bug reports) can't tell 0.5.4.2 from 0.5.4.4 without
   opening About. The bundle already carries it: `package_app.sh` writes `CFBundleShortVersionString`
@@ -709,6 +930,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
   every time", with the full `CFBundleVersion` as its tooltip, and "development build" when the
   key is missing (`make_app.sh` copies). Later: compare it with the latest GitHub release (PR #23,
   auto-update).
+
+- **Session log times of GPU library lines (2026-10-22, session logs).** The launcher stamps each
+  line when it arrives (`launcher/App/SessionLogWriter.swift`). bb-probe's stdout is unbuffered
+  and bbgpu-host's own lines are single `write`s, but the GPU library inside bbgpu-host prints
+  through stdio, which is block-buffered on a pipe: its `GPU [...]` lines can arrive in batches,
+  later than written, with one time. *Proper fix:* `setvbuf(stdout, NULL, _IOLBF, 0)` at the
+  start of `host/main.c` (one syscall per line; a few thousand lines a session), or the game's
+  processes stamp lines themselves. Also possible later: the severity as a field the game writes
+  instead of the launcher's heuristics (`SessionLog.classify`).
 
 - **The Network Settings password shows its letters (user's 0.5.3-dev test, 2026-10-20).** The
   text box opens in full screen, takes typing and Escape cancels, but the letters are not
@@ -727,6 +957,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   today. `gpu/shim/window.cpp` (host owns the window): `SDL_HideCursor` while the game window has
   focus and the overlay is closed; show it for the `⌘,` overlay, on focus loss and at quit. First
   step of mouse look below (relative mode captures it anyway).
+  *2026-10-19 (PR #20):* mouse look hides it while captured (after a click in the window); the
+  uncaptured cursor still shows.
 - **Mouse and keyboard support (user, 2026-10-18: "a couple of requests").** Today there is only
   a keyboard fallback in `src/runtime_pad.c`, used when no gamepad is connected: fixed keys
   mapped onto the DualShock 4 (WASD left stick, arrow keys the right stick *and* the d-pad, Space
@@ -736,6 +968,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
     invert Y and smoothing; the stick is a rate, so motion per frame → deflection needs a curve
     (and a dead-zone offset) to feel like a direct camera. Upstream bbport 0.5/0.6 has "mouse
     look" (Strategy item 5) — check it before designing our own.
+    *Done in PR #20* (`gpu/shim/bbport_mouse.cpp`, `runtime_pad.c` `add_mouse`): a click
+    captures, Cmd / focus loss / the ⌘, menu release; speed over the last 33 ms → right stick
+    with a dead-zone offset and a radial curve; `mouse_look` (off by default: a click would
+    capture the cursor for gamepad players too), `mouse_sensitivity`, `mouse_invert_y` in the
+    Display tab. Buttons as wired: left R1, right L2, middle R3, X1 R2,
+    X2 L1 (the wheel is not mapped). Cmd+W, easy to hit while running with W, no longer quits
+    (`window.cpp`).
   - **Mouse buttons:** left R1 (attack), right L1 (or R2), middle/wheel click R3 (lock on),
     wheel up/down for the item/weapon d-pad slots.
   - **Keyboard:** fix the arrow-key overlap (arrows are both camera and d-pad), analog-ish walk
@@ -746,6 +985,18 @@ Each item: what was done for now, what the refinement is, and where it lives.
     the default layout in the README.
   - Split mode: mouse events live in the GPU host's window; extend the shared block's keyboard
     bridge (`bbgpu_split_keyboard`) with mouse deltas and buttons.
+  *2026-10-27 (branch `input-bindings`, docs/DESIGN_INPUT.md):* rebindable keys and mouse buttons
+  (`bind_*` in bbport.ini, `src/runtime_bindings.c`), the wheel, a walk key, a launcher Controls
+  page, vertical mouse speed. Still open, in order:
+  - **Mouse too slow (player feedback):** the mouse is a right stick, so it can never turn faster
+    than the stick at full deflection (reached at 650 points/s). Calibrate turn rate per stick
+    value with the pad file (`rx=`), linearise the curve with that table, shorten the 33 ms speed
+    window, then a test build for players.
+  - **Direct camera (spike, about a day):** find the camera's yaw/pitch in game memory and add the
+    mouse motion to them while the camera is free (not locked on, not in cutscenes or menus);
+    stick fallback otherwise. No speed ceiling, 1:1 feel.
+  - Rebinding in the in-game menu (today: the launcher, applied at the next start); controller
+    button remapping on the same model.
 
 - **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
   (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the

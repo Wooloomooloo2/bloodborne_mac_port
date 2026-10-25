@@ -14,6 +14,19 @@
 #include <execinfo.h>
 #include <pthread.h>
 #endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/thread_act.h>
+#ifdef __has_feature
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define BB_STRIP_RETURN(p) ptrauth_strip(p, ptrauth_key_return_address)
+#endif
+#endif
+#endif
+#ifndef BB_STRIP_RETURN
+#define BB_STRIP_RETURN(p) (p)
+#endif
 #include <functional>
 #include <fmt/format.h>
 
@@ -382,31 +395,119 @@ void Scheduler::WaitHostCopies() {
     BbCopy::WaitAsync();
 }
 
-void Scheduler::ReportChunkRace(void* other, void* caller) {
+namespace {
+#ifdef __APPLE__
+/// The stack of another thread, read while it is suspended: its pc and (arm64) lr, then the
+/// return addresses along its frame-pointer chain within its stack. No allocation while the
+/// thread is suspended (it may hold the allocator's lock). Returns the number of frames.
+int OtherThreadFrames(pthread_t thread, void** frames, int capacity) {
+    const mach_port_t port = pthread_mach_thread_np(thread);
+    if (thread_suspend(port) != KERN_SUCCESS) {
+        return 0;
+    }
+    int count = 0;
+    uintptr_t fp = 0;
+#if defined(__aarch64__)
+    arm_thread_state64_t state{};
+    mach_msg_type_number_t state_count = ARM_THREAD_STATE64_COUNT;
+    if (thread_get_state(port, ARM_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
+                         &state_count) == KERN_SUCCESS) {
+        frames[count++] = (void*)arm_thread_state64_get_pc(state);
+        frames[count++] = BB_STRIP_RETURN((void*)arm_thread_state64_get_lr(state));
+        fp = (uintptr_t)arm_thread_state64_get_fp(state);
+    }
+#elif defined(__x86_64__)
+    x86_thread_state64_t state{};
+    mach_msg_type_number_t state_count = x86_THREAD_STATE64_COUNT;
+    if (thread_get_state(port, x86_THREAD_STATE64, reinterpret_cast<thread_state_t>(&state),
+                         &state_count) == KERN_SUCCESS) {
+        frames[count++] = reinterpret_cast<void*>(state.__rip);
+        fp = static_cast<uintptr_t>(state.__rbp);
+    }
+#endif
+    // The frame chain: [fp] = caller's fp, [fp + 8] = return address; fp grows upwards
+    // within the thread's stack.
+    const auto stack_top = reinterpret_cast<uintptr_t>(pthread_get_stackaddr_np(thread));
+    const uintptr_t stack_bottom = stack_top - pthread_get_stacksize_np(thread);
+    while (count < capacity && fp >= stack_bottom && fp + 2 * sizeof(void*) <= stack_top &&
+           (fp & (sizeof(void*) - 1)) == 0) {
+        const auto* frame = reinterpret_cast<void* const*>(fp);
+        void* const ret = BB_STRIP_RETURN(frame[1]);
+        if (!ret) {
+            break;
+        }
+        frames[count++] = ret;
+        const auto next = reinterpret_cast<uintptr_t>(frame[0]);
+        if (next <= fp) {
+            break;
+        }
+        fp = next;
+    }
+    thread_resume(port);
+    return count;
+}
+#endif
+
+std::string SymbolName(void* address) {
+    Dl_info info{};
+    if (dladdr(address, &info) && info.dli_sname) {
+        return fmt::format("{}+{:#x}", info.dli_sname,
+                           reinterpret_cast<uintptr_t>(address) -
+                               reinterpret_cast<uintptr_t>(info.dli_saddr));
+    }
+    if (info.dli_fbase) {
+        return fmt::format("{:#x} in {}", reinterpret_cast<uintptr_t>(address) -
+                                              reinterpret_cast<uintptr_t>(info.dli_fbase),
+                           info.dli_fname ? info.dli_fname : "lib");
+    }
+    return fmt::format("{}", address);
+}
+
+std::string ThreadName(void* handle) {
+    char name[64] = "?";
+    pthread_getname_np((pthread_t)(uintptr_t)handle, name, sizeof(name));
+    return name[0] ? name : "?";
+}
+} // namespace
+
+void Scheduler::ReportChunkRace(const ChunkUser* other, const ChunkUser* self,
+                                void* previous_caller) {
     static std::atomic<u32> reports{0};
     const u32 n = reports.fetch_add(1, std::memory_order_relaxed);
     if (n >= 8) {
         return;
     }
-    const auto name = [](void* address) -> std::string {
-        Dl_info info{};
-        if (dladdr(address, &info) && info.dli_sname) {
-            return fmt::format("{}+{:#x}", info.dli_sname,
-                               reinterpret_cast<uintptr_t>(address) -
-                                   reinterpret_cast<uintptr_t>(info.dli_saddr));
+    if (other == self) {
+        // This thread's own record: its caller was already overwritten by the guard, the
+        // previous one is the use it is inside.
+        std::fprintf(stderr,
+                     "Scheduler: the recording chunk is used again by its own thread (#%u): %s "
+                     "from %s, inside a use from %s\n",
+                     n + 1, ThreadName(self->thread).c_str(), SymbolName(self->caller).c_str(),
+                     SymbolName(previous_caller).c_str());
+    } else {
+        // The other side's record is its thread's: read once, it may leave its guard meanwhile.
+        void* const other_caller = other->caller;
+        void* const other_thread = other->thread;
+        std::fprintf(stderr,
+                     "Scheduler: two threads use the recording chunk at once (#%u): %s from %s, "
+                     "while %s entered from %s\n",
+                     n + 1, ThreadName(self->thread).c_str(), SymbolName(self->caller).c_str(),
+                     ThreadName(other_thread).c_str(), SymbolName(other_caller).c_str());
+#ifdef __APPLE__
+        // Symbolised after OtherThreadFrames resumed the thread (dladdr may take a lock).
+        void* other_frames[32];
+        const int other_count =
+            OtherThreadFrames((pthread_t)(uintptr_t)other_thread, other_frames, 32);
+        std::fprintf(stderr, "  %s now (%d frames):\n", ThreadName(other_thread).c_str(),
+                     other_count);
+        for (int i = 0; i < other_count; ++i) {
+            std::fprintf(stderr, "    %-2d %p %s\n", i, other_frames[i],
+                         SymbolName(other_frames[i]).c_str());
         }
-        if (info.dli_fbase) {
-            return fmt::format("{:#x} in lib", reinterpret_cast<uintptr_t>(address) -
-                                                   reinterpret_cast<uintptr_t>(info.dli_fbase));
-        }
-        return fmt::format("{}", address);
-    };
-    char thread[64] = "?";
-    pthread_getname_np(pthread_self(), thread, sizeof(thread));
-    std::fprintf(stderr,
-                 "Scheduler: two threads use the recording chunk at once (#%u): %s from %s, "
-                 "while another thread entered from %s\n",
-                 n + 1, thread, name(caller).c_str(), name(other).c_str());
+#endif
+    }
+    std::fprintf(stderr, "  %s (reporting):\n", ThreadName(self->thread).c_str());
     void* frames[32];
     const int count = backtrace(frames, 32);
     backtrace_symbols_fd(frames, count, 2);

@@ -48,6 +48,12 @@ struct LaunchConfig: Equatable {
     var skippedVersion: String?
     var lastUpdateCheck: Date?
     private(set) var dataDir: URL?
+    /// Other BB_* / MTL_* / MVK_* assignments (diagnostics such as BB_FRAME_STATS=1): passed on to
+    /// the game; a variable already set in the environment wins (#69).
+    private(set) var extraEnvironment: [String: String] = [:]
+    static let ownKeys: Set<String> = ["BB_GAME_DIR", "BB_SAVE_DIR", "BB_SHOW_LAUNCHER", "BB_CHECK_UPDATES",
+                                       "BB_UPDATE_TEST_BUILDS", "BB_UPDATE_SKIP", "BB_UPDATE_CHECKED",
+                                       "BB_LAUNCH_CONF"]
 
     init() {}
 
@@ -65,6 +71,16 @@ struct LaunchConfig: Equatable {
         skippedVersion = ini["BB_UPDATE_SKIP"].map(Shell.unquote).flatMap { $0.isEmpty ? nil : $0 }
         lastUpdateCheck = ini["BB_UPDATE_CHECKED"].flatMap { TimeInterval(Shell.unquote($0)) }
             .map(Date.init(timeIntervalSince1970:))
+        for case let .entry(key, value) in ini.lines
+        where ["BB_", "MTL_", "MVK_"].contains(where: key.hasPrefix) && !Self.ownKeys.contains(key)
+            && key.allSatisfy({ $0.isUppercase || $0.isNumber || $0 == "_" }) {
+            extraEnvironment[key] = Shell.unquote(value)
+        }
+    }
+
+    /// `env` plus the extra assignments it does not already set.
+    func environment(adding env: [String: String]) -> [String: String] {
+        env.merging(extraEnvironment) { current, _ in current }
     }
 
     func apply(to ini: inout IniFile) {

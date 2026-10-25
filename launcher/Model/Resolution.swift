@@ -30,17 +30,31 @@ enum Resolution {
     static let outputs = [PixelSize(1280, 720), PixelSize(1920, 1080), PixelSize(2560, 1440),
                           PixelSize(3456, 1944), PixelSize(3840, 2160)]
     static let defaultOutput = PixelSize(1920, 1080)
+    /// Native aspect-ratio patches (scripts/patches.py ULTRAWIDE_PATCHES): ultrawide and 16:10
+    /// (the MacBook displays' shape, #75).
     static let ultrawideOutputs = [PixelSize(2560, 720), PixelSize(3840, 1080),
-                                  PixelSize(5120, 1440), PixelSize(2560, 1080), PixelSize(3440, 1440)]
+                                  PixelSize(5120, 1440), PixelSize(2560, 1080), PixelSize(3440, 1440), PixelSize(5120, 2160),
+                                  PixelSize(1280, 800), PixelSize(1920, 1200), PixelSize(2560, 1600)]
     static func wideLabel(_ size: PixelSize) -> String {
-        let aspect = [PixelSize(2560, 1080), PixelSize(3440, 1440)].contains(size) ? "21:9" : "32:9"
+        let aspect = switch size.width * 10 / size.height {
+        case 16: "16:10"
+        case 23, 24: "21:9"
+        default: "32:9"
+        }
         return "\(size) · \(aspect)"
     }
-    /// Native 1440p ultrawide adds large targets/textures to the 7 GiB GPU arena.
+    /// Native 1440p/2160p ultrawide and 2560x1600 add large targets/textures to the 7 GiB GPU arena
+    /// (9 GiB at 5120x2160, whose first graphics heap is enlarged too: scripts/patches.py; warned
+    /// below 32 GB).
     static func ultrawideMemoryWarning(_ size: PixelSize, memoryBytes: UInt64) -> String? {
-        guard memoryBytes < 24 * 1024 * 1024 * 1024,
-              [PixelSize(3440, 1440), PixelSize(5120, 1440)].contains(size) else { return nil }
-        return "This resolution may exceed available graphics memory on Macs with less than 24 GB of memory, causing slowdowns or crashes. Try a 1080p ultrawide resolution if this happens."
+        let gib: UInt64 = 1024 * 1024 * 1024
+        if size == PixelSize(5120, 2160) {
+            guard memoryBytes < 32 * gib else { return nil }
+            return "5120 × 2160 needs about 9 GB of graphics memory. On Macs with less than 32 GB of memory expect slowdowns, missing textures or crashes. 3440 × 1440 is the same shape and much lighter."
+        }
+        guard memoryBytes < 24 * gib,
+              [PixelSize(3440, 1440), PixelSize(5120, 1440), PixelSize(2560, 1600)].contains(size) else { return nil }
+        return "This resolution may exceed available graphics memory on Macs with less than 24 GB of memory, causing slowdowns or crashes. Try a smaller resolution of the same shape if this happens."
     }
     /// Upscaler quality levels (bbport_settings.cpp PresetName / PresetScale).
     static let presetNames = ["Native AA", "Quality", "Balanced", "Performance", "Ultra Performance"]

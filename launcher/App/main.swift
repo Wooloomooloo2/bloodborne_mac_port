@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var model: LauncherModel!
     private var window: NSWindow?
     private var direct = false
+    private var quitAfterStop = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let layout = Layout.detect(bundleURL: Bundle.main.bundleURL,
@@ -22,13 +23,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
         model = LauncherModel(layout: layout)
         model.onStarted = { [weak self] in
-            self?.window?.orderOut(nil)
-            NSApp.setActivationPolicy(.accessory) // the game's window has the Dock icon
+            ModsWindow.hide()
+            guard let self else { return }
+            if self.direct {
+                // Respect direct launch: only the game's window has a Dock icon.
+                self.window?.orderOut(nil)
+                NSApp.setActivationPolicy(.accessory)
+            } else {
+                // Keep the launcher available behind the game, including its Stop button.
+                self.showWindow(activate: false)
+            }
         }
         model.onExit = { [weak self] status in self?.gameEnded(status) }
         model.load()
         // --updated: the copy an update just installed (Updater.install) shows its window.
         // (⌥ is read before the update question, which may be answered after letting go of it.)
+        // --benchmark: show the window and run the benchmark at once (scripted comparisons).
+        if CommandLine.arguments.contains("--benchmark") {
+            showWindow()
+            model.startBenchmark(confirm: false)
+            return
+        }
         let wantsWindow = CommandLine.arguments.contains("--updated") || NSEvent.modifierFlags.contains(.option)
         // Asked before the game too: players who turned the window off would never see it.
         model.askAboutUpdatesIfNeeded()
@@ -44,6 +59,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func gameEnded(_ status: Int32) {
+        if quitAfterStop {
+            NSApp.reply(toApplicationShouldTerminate: true)
+            return
+        }
         if direct && status == 0 {
             // With the window turned off, an update the check found shows once, after the session.
             guard model.updater.available != nil else {
@@ -58,7 +77,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         showWindow()
     }
 
-    private func showWindow() {
+    private func showWindow(activate: Bool = true) {
         NSApp.setActivationPolicy(.regular)
         if window == nil {
             let window = NSWindow(contentRect: NSRect(origin: .zero, size: LauncherView.size),
@@ -69,9 +88,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             window.center()
             self.window = window
         }
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        model.checkForUpdatesIfDue()
+        if activate {
+            window?.makeKeyAndOrderFront(nil)
+            NSApp.activate()
+            model.checkForUpdatesIfDue()
+        } else {
+            window?.orderBack(nil)
+        }
     }
 
     @objc func showAbout(_ sender: Any?) { About.show() }
@@ -83,6 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         item.action != #selector(checkForUpdates(_:)) || (model != nil && !model.running && !model.updater.busy)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        direct = false
+        showWindow()
+        return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Quitting the launcher stops a game it started; the benchmark's launches end with the launcher.
+        guard model != nil && model.running && model.stop() else { return .terminateNow }
+        quitAfterStop = true
+        return .terminateLater
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

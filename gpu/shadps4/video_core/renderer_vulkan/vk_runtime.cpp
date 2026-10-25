@@ -130,7 +130,12 @@ static constexpr u64 HoistPageBits = 10;
 
 void Runtime::RegisterHoistTarget(const VideoCore::Buffer* buffer, u64 size) {
     const u64 pages = (size + (1ull << HoistPageBits) - 1) >> HoistPageBits;
-    hoist_targets[buffer] = {std::make_unique<u16[]>(pages), pages};
+    TagArray tick{static_cast<u16*>(std::calloc(pages, sizeof(u16)))};
+    if (tick) {
+        hoist_targets[buffer] = {std::move(tick), pages};
+    } else {
+        LOG_ERROR(Render, "No memory for the upload hoisting tags of {} bytes: no hoisting", size);
+    }
     RegisterOrdered(buffer, size);
 }
 

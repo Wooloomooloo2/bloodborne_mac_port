@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_metal/mtl_buffer.h"
+#include "bbport_toggles.h"
 
 namespace Core {
 class Emulator {
@@ -62,6 +63,13 @@ int runtime_file_translate(const char*, char*, size_t) { std::abort(); }
 int32_t* runtime_errno() { std::abort(); }
 void runtime_restart() { std::abort(); }
 uint64_t runtime_memory_clamp(uintptr_t p, uint64_t n) { return Covered(p, n) ? n : 0; }
+int runtime_memory_vma_info(uintptr_t p, int* prot, int* type, uintptr_t* end) {
+    if (!Covered(p, 1)) return 0;
+    if (prot) *prot = 0x33; // CPU and GPU read/write
+    if (type) *type = -1;
+    if (end) *end = (p >= HighBase ? HighBase : Base) + MappedSize;
+    return 1;
+}
 int runtime_memory_region(uintptr_t p, uintptr_t* a, uintptr_t* b, int* mapped) {
     if (!Covered(p, 1)) return 0;
     *a = p >= HighBase ? HighBase : Base; *b = *a + MappedSize; *mapped = 1; return 1;
@@ -83,6 +91,8 @@ int runtime_memory_read_backing(uintptr_t p, void* data, uint64_t n) {
 }
 #pragma GCC visibility pop
 bool RenderIndexTriangle(Metal::Device& device, Metal::BufferRef indices);
+bool RenderIndirectTriangle(Metal::Device& device, Metal::BufferRef args);
+unsigned RunIndirectDispatch(Metal::Device& device, Metal::BufferRef args);
 
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
@@ -90,6 +100,8 @@ int main() {
     setenv("BB_DRAW_PIPE", "0", 1);
     setenv("BB_PIPELINE_CACHE", "0", 1);
     setenv("BB_READBACKS", "2", 1);
+    // The single arena (the default on Macs with more than 24 GB): its 4 GiB windows are tested.
+    setenv("BB_ARENA_LAYOUT", "legacy", 1);
     void* mapped = mmap(reinterpret_cast<void*>(Base), MappedSize, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, -1, 0);
     assert(mapped == reinterpret_cast<void*>(Base));
@@ -139,6 +151,81 @@ int main() {
     const auto [low, low_offset] = cache.ObtainBuffer(Base + 14 * Size, Size, false);
     const auto [low_index, low_index_offset] = cache.ObtainIndexBuffer(Base + 14 * Size, Size);
     Check(low == low_index && low_offset == low_index_offset, "low index bindings retain the existing path");
+    scheduler.Finish();
+
+    // bbport: indirect arguments. drawPrimitives:indirectBuffer and
+    // dispatchThreadgroupsWithIndirectBuffer take 32-bit offsets too; past 4 GiB of the arena the
+    // arguments are copied (ObtainDrawArgumentBuffer), CPU-owned ones from guest memory and
+    // GPU-produced ones in command order. Ranges above 16 KiB: smaller read-only ones take the
+    // stream buffer. The arena's own high range is drawn once as a diagnostic only (whether this
+    // Mac wraps it).
+    constexpr u64 Limit = u64{1} << 32;
+    const uintptr_t high_args = HighBase + 16 * Size;
+    auto* draw_args = reinterpret_cast<u32*>(high_args);
+    std::fill_n(draw_args, Size / sizeof(u32), 0u);
+    draw_args[0] = 3; // vertexCount
+    draw_args[1] = 1; // instanceCount
+    const auto [raw_args, raw_args_offset] = cache.ObtainBuffer(high_args, Size, false);
+    scheduler.Finish();
+    std::printf("Diagnostic: indirect draw straight from the arena past 4 GiB %s\n",
+                RenderIndirectTriangle(device, raw_args->Ref(raw_args_offset)) ? "drawn" : "MISSING");
+    const u64 cpu_copies = BbStats::indirect_copies_cpu.load();
+    const auto [cpu_args, cpu_args_offset] = cache.ObtainDrawArgumentBuffer(high_args, Size);
+    scheduler.Finish();
+    Check(cpu_args_offset + Size <= Limit, "CPU-owned indirect arguments are bound below 4 GiB");
+    Check(BbStats::indirect_copies_cpu.load() == cpu_copies + 1, "and counted as a CPU copy");
+    Check(RenderIndirectTriangle(device, cpu_args->Ref(cpu_args_offset)),
+          "high CPU-owned indirect draw arguments draw");
+
+    const uintptr_t high_gpu_args = HighBase + 17 * Size;
+    std::memset(reinterpret_cast<void*>(high_gpu_args), 0, Size);
+    const auto [gpu_args_dst, gpu_args_dst_offset] = cache.ObtainBuffer(high_gpu_args, Size, true);
+    const VideoCore::BufferCopy args_copy{raw_args_offset, gpu_args_dst_offset, Size};
+    runtime.CopyBuffer(*raw_args, *gpu_args_dst, std::span{&args_copy, 1});
+    const u64 gpu_copies = BbStats::indirect_copies_gpu.load();
+    const auto [gpu_args, gpu_args_offset] = cache.ObtainDrawArgumentBuffer(high_gpu_args, Size);
+    scheduler.Finish();
+    Check(reinterpret_cast<u32*>(high_gpu_args)[0] == 0,
+          "GPU argument test keeps the CPU mirror stale");
+    Check(gpu_args_offset + Size <= Limit, "GPU-produced indirect arguments are bound below 4 GiB");
+    Check(BbStats::indirect_copies_gpu.load() == gpu_copies + 1, "and counted as a GPU copy");
+    Check(RenderIndirectTriangle(device, gpu_args->Ref(gpu_args_offset)),
+          "high GPU-produced indirect draw arguments draw");
+
+    const uintptr_t high_groups = HighBase + 18 * Size;
+    auto* groups = reinterpret_cast<u32*>(high_groups);
+    std::fill_n(groups, Size / sizeof(u32), 0u);
+    groups[0] = 5; // thread groups x, y, z
+    groups[1] = 1;
+    groups[2] = 1;
+    const auto [raw_groups, raw_groups_offset] = cache.ObtainBuffer(high_groups, Size, false);
+    scheduler.Finish();
+    std::printf("Diagnostic: indirect dispatch straight from the arena past 4 GiB ran %u groups\n",
+                RunIndirectDispatch(device, raw_groups->Ref(raw_groups_offset)));
+    const auto [dispatch_args, dispatch_offset] = cache.ObtainDrawArgumentBuffer(high_groups, Size);
+    scheduler.Finish();
+    Check(dispatch_offset + Size <= Limit, "indirect dispatch arguments are bound below 4 GiB");
+    Check(RunIndirectDispatch(device, dispatch_args->Ref(dispatch_offset)) == 5,
+          "high indirect dispatch arguments run 5 thread groups");
+    const auto [low_args, low_args_offset] = cache.ObtainBuffer(Base + 19 * Size, Size, false);
+    const auto [low_draw, low_draw_offset] = cache.ObtainDrawArgumentBuffer(Base + 19 * Size, Size);
+    Check(low_args == low_draw && low_args_offset == low_draw_offset,
+          "low indirect arguments keep the arena range");
+
+    // Requests that stopped the game in GetArena: a size-0 range at the arena's 4 GiB page
+    // boundary (it ended before it started there) and past the arena; a read-back past the arena.
+    const auto [boundary, boundary_offset] = cache.ObtainBuffer(HighBase, 0, true);
+    Check(boundary == low_args && boundary_offset == (u64{1} << 32) &&
+              BbStats::size0_sinks.load() == 0,
+          "a size-0 write at the arena's 4 GiB boundary keeps the arena");
+    const auto [past, past_offset] = cache.ObtainBuffer(Base + (u64{7} << 30), 0, true);
+    Check(past != nullptr && past != low_args && BbStats::size0_sinks.load() == 1,
+          "a size-0 write past the arena goes to the sink");
+    const auto [inside, inside_offset] = cache.ObtainBuffer(Base + 20 * Size, 0, true);
+    Check(inside == low_args && BbStats::size0_sinks.load() == 1,
+          "a size-0 write inside the arena keeps the arena");
+    cache.ReadMemory(Base + (u64{7} << 30), 8, false, true);
+    Check(BbStats::uncovered_readbacks.load() == 1, "a read-back past the arena is declined");
     scheduler.Finish();
     std::printf("%d failures\n", failures);
     return failures ? 1 : 0;

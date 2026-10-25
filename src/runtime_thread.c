@@ -4,7 +4,7 @@
  * `mov rax, fs:[0]` into `mov rax, gs:[0]`, so GS base = guest TCB while glibc
  * keeps FS. On macOS GS base is the pthread TSD
  * array and cannot be moved: the loader emits `mov rax, gs:[TCB_KEY*8]` instead
- * (link_*.py --gs-slot, default on darwin) and each thread stores its TCB in that
+ * (link_*.py validates the fixed slot) and each thread stores its TCB in that
  * pthread key, reserved at startup below.
  * Priorities/affinity are recorded, not enforced by a PS4 scheduler. */
 #define _GNU_SOURCE
@@ -70,6 +70,14 @@ __attribute__((constructor)) static void reserve_tcb_key(void) {
     while (n) pthread_key_delete(spare[--n]);
 }
 #endif
+
+uint32_t runtime_thread_gs_displacement(void) {
+#ifdef __APPLE__
+    return TCB_KEY*8;
+#else
+    return 0;
+#endif
+}
 
 static void set_tls_base(void *base) {
 #ifdef __APPLE__

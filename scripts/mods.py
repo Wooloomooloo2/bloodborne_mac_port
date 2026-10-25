@@ -121,6 +121,33 @@ def expand(directory):
         directory.mkdir(exist_ok=True)
 
 
+def report(root, config):
+    """--report (the launcher's Mods & Cheats window): every folder of `root` in load order
+    (mods.json order, then new ones alphabetically), whether it is on, its file count or why it
+    cannot load, and the game files more than one enabled mod replaces (the last one wins)."""
+    root = Path(root)
+    settings = json.loads(Path(config).read_text()) if config and Path(config).is_file() else {}
+    disabled = set(settings.get('disabled', []))
+    folders = sorted((p.name for p in root.iterdir() if p.is_dir() and not p.name.startswith('.'))
+                     if root.is_dir() else [], key=lambda name: (name.casefold(), name))
+    order = [n for n in dict.fromkeys([*settings.get('order', []), *folders]) if n in folders]
+    mods, owners = [], {}
+    for name in order:
+        entry = {'name': name, 'enabled': name not in disabled, 'files': 0, 'error': None}
+        try:
+            files = [relative.as_posix() for relative, _ in mod_files(root / name)]
+            entry['files'] = len(files)
+            if entry['enabled']:
+                for path in files:
+                    owners.setdefault(path.casefold(), (path, []))[1].append(name)
+        except (OSError, ValueError) as error:
+            entry['error'] = str(error).replace(str(root / name), name)
+        mods.append(entry)
+    conflicts = [{'path': path, 'mods': names, 'winner': names[-1]}
+                 for path, names in owners.values() if len(names) > 1]
+    return json.dumps({'mods': mods, 'conflicts': sorted(conflicts, key=lambda c: c['path'])}, indent=1)
+
+
 def build_overlay(game, out, mods):
     game = Path(game).resolve(strict=True)
     replacements = []
@@ -168,12 +195,18 @@ def build_overlay(game, out, mods):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('game', type=Path)
-    parser.add_argument('--out', required=True, type=Path)
+    parser.add_argument('game', type=Path, nargs='?')
+    parser.add_argument('--out', type=Path)
     parser.add_argument('--mods-dir', required=True, type=Path)
     parser.add_argument('--config', type=Path)
     parser.add_argument('--enabled', choices=('0', '1'), default='1')
+    parser.add_argument('--report', action='store_true', help='print the mods and conflicts as JSON')
     args = parser.parse_args()
+    if args.report:
+        print(report(args.mods_dir, args.config))
+        return
+    if not args.game or not args.out:
+        parser.error('the game folder and --out are required')
     layers = []
     if args.enabled == '1':
         # shadPS4's loose overlay convention, beside the original game.

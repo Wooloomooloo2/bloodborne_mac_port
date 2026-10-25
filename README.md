@@ -15,9 +15,13 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-24)
+**Video guide:** Andrew Tsai has made a video guide to this port:
+[watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
+taking the time to make it!
 
-**Current version: [mac-v0.5.5](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.5)** (download the app, or build it as below).
+## Status (2026-11-07)
+
+**Current version: [mac-v0.5.14](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.14)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -27,6 +31,196 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
+
+**Releases:** **0.6** will be **MetalFX frame generation** (#64, from @evill33t): it comes out as
+pre-releases first and only once it plays at least as well as with frame generation off. Other
+fixes and features keep coming as 0.5.x releases until then.
+The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
+in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
+sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
+menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play. Online play (#9) is still in progress.
+
+### New in 0.5.14: long sessions no longer freeze
+
+- **Fixed: the freeze after about 1.5 to 2 hours of play** (#127, #139). The game's occlusion
+  queries never finished on the port: the result was written and then wiped by the game's own
+  clear of the same memory, which ran later. The list of waiting queries grew every frame until a
+  small per-frame memory area filled, and the game froze or crashed (the #99/#113 crashes were the
+  same thing). The results now arrive in order; a 2.5-hour test session stayed at 60 FPS with
+  that memory area at 3% full. No need to restart every 90 minutes any more.
+- **M5 Macs on macOS 27.2: a fix for the GPU process crash about 40 seconds after start** (#129,
+  waiting for the reporter's confirmation). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
+  `=render` forces render-only elsewhere). Other Macs are unchanged.
+
+### New in 0.5.13: Mac Settings in the game's menu
+
+- **Mac Settings in the game's own System menu** (#76, from [@evill33t](https://github.com/evill33t)):
+  the renderer, quality, effects and launch settings in the game's native menu, in nine groups
+  (Left/Right on **Page**, or L1/R1). It shares `bbport.ini` with the launcher and the ⌘,
+  overlay; `*` marks changes that need a restart. The title menu also gets an **Exit Game**
+  entry. Its menu assets are generated from your own game files; `BB_MAC_SETTINGS=0` and
+  `BB_EXIT_GAME=0` turn them off.
+- **Avoid white scenes (MetalFX)** (#116, #117, from @evill33t): an opt-in switch for the
+  Forbidden Woods scene that turns white with MetalFX above 1080p. Off by default because it
+  costs some GPU time; starting with the upscaler off and turning MetalFX on in game also avoids it.
+- **A conflicting patch file no longer stops the game from starting** (#79, from @evill33t):
+  a third-party patch that overlaps a built-in one is skipped with a log line, and patches can
+  no longer overwrite the port's own runtime hooks.
+- **A game stuck before its first frame now ends with a report** (#121): after 3 minutes on a
+  black screen it stops and writes the thread list, so the launcher can show why.
+- Long sessions could freeze after 1.5 to 2 hours (#127) and M5 Macs on macOS 27.2 could crash at
+  start (#129): both addressed in 0.5.14.
+
+### New in 0.5.12
+
+- **Fixed: the crash after long sessions, again** (#113; "signal 11 at guest offset 0x216a08c",
+  after about 90 minutes). 0.5.11 skipped the game's render bind for a resource that was gone,
+  but the game then also released it and asked for its value. Both are now skipped as well
+  (#114, from [@evill33t](https://github.com/evill33t)).
+- **Fewer false "the GPU stopped making progress" exits** (#106): the GPU watchdog now also
+  watches the GPU's own completion signal, so CPU-side delays no longer count as a GPU stall. A
+  real GPU stall still ends the game, so it cannot freeze the Mac's display (#107, from
+  @evill33t).
+- **L3 + R3 can be switched off** (#104): the launcher's **Controls** page and the in-game menu
+  (**Controller**) have a switch for it, for players who press both sticks by accident. ⌘, still
+  opens the menu.
+- **Known:** above 1920×1080 with the upscaler off, the game's own anti-aliasing doesn't reach
+  the picture (#115), so edges can look sharper and more jagged than at 1080p. Until that's
+  fixed, try **MetalFX** with the **Native AA** preset at those resolutions.
+
+### New in 0.5.11: 5120×2160 fixed, a long-session crash fixed
+
+- **5120×2160 now draws the level** (#93). In 0.5.10 the game ran out of its own graphics memory
+  at this size: the city had no buildings or ground, or the game crashed while loading. It now
+  gets a bigger graphics heap and about 2 GB more memory, at this resolution only (about 50 FPS
+  uncapped on an M4 Max in Central Yharnam). The launcher warns on Macs with less than 32 GB.
+- **Fixed: the crash in the Hunter's Dream after long sessions** (#99, #101, #102; "signal 11 at
+  guest offset 0x2169edc", after about 90 minutes). The game queued a render bind for a resource
+  that was gone; it now skips that one bind instead of crashing (#100, from
+  [@evill33t](https://github.com/evill33t)).
+- **Fewer GPU-process crashes from stale graphics data** (#98, from @evill33t): if a draw reads
+  graphics data the game has already freed, the renderer reads zeros instead of crashing. If
+  0.5.11 runs slower than 0.5.10 on your Mac, please open an issue with your Mac and settings.
+- **Video guide:** Andrew Tsai's [guide to this port](https://www.youtube.com/watch?v=_QgmfFyZbYo).
+
+### New in 0.5.10: rebindable controls, a crash fix, choose the display
+
+- **Rebindable keys and mouse buttons.** The launcher has a new **Controls** page: every action
+  (movement, camera, buttons, d-pad, Options, touch pad) can take keys or mouse buttons, two per
+  action, and the mouse wheel can be bound too. There is a **walk** key (Left Alt by default:
+  movement keys push the stick half way), a vertical mouse speed, and mouse sensitivity now goes
+  up to 10. The defaults are the 0.5.9 layout, so nothing changes until you rebind something.
+- **Fixed: the GPU process crash in fights** (#74; "signal 11 in StageSpecialization", seen
+  fighting Ebrietas and in the Forbidden Woods). The game sometimes leaves a resource table
+  empty; the port read through it and crashed. It now reads zeros there, as the PS4's GPU does.
+- **Choose the display the game opens on** (#60): with a second display connected, the launcher
+  shows a **Display** picker. Full screen opens there too. If that display isn't connected, the
+  game opens on the main one.
+- **5120×2160 (21:9)** native resolution (#93), under **Ultrawide or 16:10** in the launcher
+  (it did not draw the level until 0.5.11).
+- **The mouse cursor hides** after 3 seconds without moving over the game window (#93), and
+  comes back as soon as you move or click.
+- **Updates no longer leave the old launcher open** (#96): after **Install Update**, the old
+  copy stayed on "Installing…" beside the new one. This is fixed in 0.5.10's updater, so it
+  takes effect from the *next* update: when updating from 0.5.9, the old window can still stay
+  open once. Quit it with ⌥⌘Esc (Force Quit); the update itself is installed.
+
+### New in 0.5.9: 16-18 GB Macs run at full speed
+
+- **16-18 GB Macs no longer slow down to 10-20 FPS** (#69, #83). The cause was memory, not the
+  GPU: the port kept 6.5 GB of GPU memory pinned (it can never be swapped out), and on a 16 or 18
+  GB Mac that left too little for the game and macOS, so the Mac swapped and the frame rate
+  collapsed. On Macs with 24 GB or less, the game's memory is now mapped to the GPU only where the
+  game actually uses it (3.5 GB pinned instead of 6.5 GB). This is
+  [@MojahedAbushawish](https://github.com/MojahedAbushawish)'s work in #85 and #86.
+  - On a Mac limited to behave like an 18 GB Mac: 15-17 FPS before, 58-60 after (1080p, 60 cap).
+  - Players: an M4 MacBook Air 16 GB went from 11-16 FPS to 57-60 (#83), and the M3 Pro 18 GB
+    from #69 plays smoothly.
+  - Macs with more memory keep the previous layout, unchanged. `BB_ARENA_LAYOUT=legacy` in
+    `launch.conf` brings it back on a smaller Mac, if ever needed.
+- If you added `BB_ARENA_GIB` or `BB_GC_BUDGET_MB` to `launch.conf` while testing, remove them.
+- Thank you to @lifeos-creator, @danielsirbubusiness and @khhan0703 for testing the test build on
+  their Macs.
+
+### New in 0.5.8: the opening-movie freeze and crash fixed
+
+- **New games no longer freeze or crash in the opening movie** (#46, #50, #51, #24, #84). Both
+  showed up on slower or busier Macs, which is why they were hard to reproduce on a fast one.
+  - **The freeze** ("no new frame for 30 seconds"): when a movie ended and the game closed the movie
+    player at the same moment, the stop request could miss a decoder thread that was waiting for a
+    free frame buffer, and the game waited for it forever.
+  - **The crash** (signal 11 at guest offset 0x26c01c3): during the movie, the game's main thread
+    drew into the render thread's GPU context from a path the port didn't lock. It now runs under
+    the same lock as the others.
+  - On a Mac slowed down on purpose, 5 of 5 new games froze or crashed before the fix; 4 of 4
+    reached character creation after it. Normal play and the benchmark are unchanged (60 FPS).
+- **A hang report:** if the game ever stops responding, the log now lists where every game thread
+  is waiting, so freeze reports can be read from `game.log` alone.
+- **Co-op stability** (from [@noelmiller](https://github.com/noelmiller), #11): two renderer stops
+  seen in co-op (a render-pass submit and a recording-chunk race) are now survivable.
+- **Safety fixes in the PS4 runtime** (from [@evill33t](https://github.com/evill33t), #80, #81,
+  #82): semaphore handles kept at full width, system-module IDs checked in full before lookup, and
+  guest thread-local storage checked before the runtime is entered.
+
+### New in 0.5.7: mouse look, a Stop button, keyboard fixes
+
+- **Mouse look** (from [@MojahedAbushawish](https://github.com/MojahedAbushawish), #20). Turn on
+  **Mouse camera** in the launcher (General → **Controls**) or in the in-game menu (⌘,).
+  - Click once in the game window to turn the camera with the mouse; ⌘ gives the cursor back.
+  - Left click R1, right click L2, middle click R3 (lock on), side buttons R2 and L1.
+  - While Mouse camera is on, the **arrow keys are the d-pad**: they scroll menus, and in game they
+    switch weapons, tools and quick items.
+  - The launcher's **Controls** section lists every keyboard and mouse binding.
+- **A Stop button** (from [@DiAvisoo](https://github.com/DiAvisoo), #31). While a game started with
+  **Play** runs, the launcher stays behind it with a **Stop** button; quitting the launcher stops
+  the game too. Exit Game in the game's own menu is still the safe way out, because it finishes
+  saving.
+- **The keyboard works with a controller connected.** Before, a connected controller switched the
+  keyboard off, so Enter or Space could not press Play Offline.
+- **⌘ shortcuts no longer reach the game:** ⌘Q drank a Blood Vial. ⌘W no longer quits the game
+  (from #20).
+- **A safety fix in the frame rate patches.** The community 30/60/90/Uncap FPS++ patches wrote a
+  return instruction into the middle of the game's condition wait. Any timed wait reaching it
+  would have crashed; it never showed in play, but now the game's own code runs there. Found by an
+  assessment comparing the port with [Paleblood](https://github.com/Yharnam-Hunters/Paleblood),
+  verified and fixed independently.
+- **Enemy Control** (patch files only) is refused together with a frame rate patch, because the two
+  change the same code.
+
+### New in 0.5.6: mod manager and cheats, benchmark, 16:10, better crash reports
+
+- **Mods & Cheats** (asked for in #16 by @noelmiller): a **Mods & Cheats…** button in the
+  launcher opens its own window. See [Mods and cheats](#mods-and-cheats).
+  - **Mods:** your loose-file mods in load order, with on/off switches. You can reorder them, add
+    one from a folder or a .zip, or remove one (it goes to the Trash). A mod that can't load says
+    why, and a conflicts list shows which mod wins each file. Game files are never changed.
+  - **Cheats & Tweaks:** 12 switches for patches the game already had: can't die, enemies don't
+    see or hear you, rally, physics, analog sensitivity, camera distance and auto-rotation, text
+    size, all game languages.
+  - **Patch Files:** on/off switches for your own shadPS4/GoldHEN `.xml` patch files.
+  - Before the first launch with a new set of mods or cheats, the launcher **backs up your save**.
+- **Benchmark** (in the launcher): a recorded walk through Central Yharnam at 60 FPS, then 30
+  seconds uncapped, with a results window. It measures average and best FPS, 1% and 0.1% lows,
+  hitches during traversal and their likely cause (shader compiles, streaming, GPU, game CPU),
+  plus CPU, GPU, memory, swap and thermal state. It's meant for comparing Macs and for reports
+  about slowdowns. See [Benchmark](#benchmark).
+- **Dated session logs and fuller crash reports** (from [@satperm](https://github.com/satperm), #40):
+  one timestamped log per session, plus a JSON version for log tools. Warnings go to the macOS
+  system log. Crash reports include macOS's own crash files and a diagnostics zip. See [Logs](#logs).
+- **About panel and update check** (from @satperm, #23), and the **game's own icon in the Dock**
+  (from [@soulripper13](https://github.com/soulripper13), #66; made in memory from your game
+  folder, never saved).
+- **16:10 resolutions** (#75, asked for by @Frosty2804): 1280×800, 1920×1200 and 2560×1600 under
+  **Ultrawide or 16:10** in the launcher, using Kyo's patches (correct HUD and lock-on positions).
+  That is closer to the shape of MacBook displays, so full screen has thinner black bars.
+- **Audio dropout diagnostics** (from [@DiAvisoo](https://github.com/DiAvisoo), #32): opt-in
+  logging of the audio signal, queue and decoder, for reports of crackling or gaps.
+- **Fixes:**
+  - The arrow keys no longer also press the d-pad. Turning left swapped the left-hand item and
+    broke a sprint (#61, reported by @IlyaDylko). IJKL are still the d-pad.
+  - A GPU process stuck on hung GPU work no longer leaves the game hanging after it's killed, so
+    the launcher can start the game again (#71, reported by @wgorecodes).
+  - F9 pad recording (`BB_PAD_RECORD`) works again.
 
 ### New in 0.5.5: lifts, crash and upscaling fixes, no more red flashes
 
@@ -288,6 +482,9 @@ the log.
   (60/90/120) is not affected.
 - **Above 1080p, the selected item's icon in the HUD is missing** (an empty frame; #14). It is
   there at 1080p.
+- **At 16:10, full-screen menus keep their 16:9 artwork** (grey bars at the sides), and the first
+  moments of loading a level can glitch. The HUD itself is placed correctly. A UI mod such as
+  "16x10 and 4x3 UI Fixes" (Nexus Mods) fixes the menus and loads through **Mods & Cheats…**.
 
 ### What's next
 
@@ -295,7 +492,8 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- Keyboard and mouse controls (mouse look, from #20).
+- **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
+- A faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
@@ -324,7 +522,7 @@ Details:
   `gpu/shim/ffx_metal/`) and TAA. Planned: zero-copy guest memory on unified memory.
 - Inherited from upstream: high-frame-rate community patches, synthetic motion vectors and
   temporal upscaling (FSR 3.1), a two-stage multi-threaded draw pipeline, and an in-game
-  settings overlay (`⌘,` or `L3 + R3`).
+  settings overlay (`⌘,` or `L3 + R3`; L3 + R3 can be turned off on the Controls page).
 
 ## Download (no building needed)
 
@@ -350,7 +548,7 @@ game files are included.
 The app contains everything else (the game process, the native GPU process, the libraries and
 a small Python for the launch scripts). Saves and settings go to
 `~/Library/Application Support/Bloodborne` (another save folder can be chosen in the launcher),
-the log to `~/Library/Logs/Bloodborne/game.log`. To change the game folder, use the launcher's
+the logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). To change the game folder, use the launcher's
 **Locations** (hold ⌥ while opening the app if the launcher is set not to show).
 
 **Updates.** The first time it opens, the app asks whether to check for updates automatically
@@ -429,8 +627,8 @@ This creates **`Bloodborne.app`** in the repository folder, with the game's own 
 your game folder, so the app is made on your Mac and never uploaded). Double-click it, or drag
 it to the Dock. It opens the same launcher window as the downloadable app (settings, game and
 save folders; see "New in 0.4.0" above), runs the game from this checkout without a Terminal
-window, and writes the game's log to `~/Library/Logs/Bloodborne/game.log` (the session before
-in `game.previous.log`). If the game stops with an error, the launcher offers the log. Run the
+window, and writes the game's logs to `~/Library/Logs/Bloodborne` (see [Logs](#logs)). If the
+game stops with an error, the launcher offers a crash report and the log. Run the
 script again if you move the repository folder. Its update check only tells you about new releases: update a
 checkout with `git pull` and build again.
 
@@ -470,6 +668,109 @@ before copying saves.
 To keep them elsewhere, set `BB_DATA_DIR=/some/folder` in `launch.conf` (or the environment).
 A checkout that already has saves in its own folder (`user/`, from before this default) keeps
 using them; move `user/` and `bbport.ini` to the folder above to switch.
+
+### Mods and cheats
+
+**Mods & Cheats…** at the bottom left of the launcher opens the mod manager. The text next to the
+button shows what's on ("No mods or cheats", "2 mods · 1 cheat on").
+
+- **Mods** are folders in `~/Library/Application Support/Bloodborne/mods` (**Open Mods Folder**).
+  A mod can hold `dvdroot_ps4/`, or the game's own top-level folders (`chr/`, `parts/`, ...),
+  optionally inside one wrapper folder. **Add Mod…** takes a folder or a .zip and checks its layout
+  straight away.
+  - Mods later in the list win when two replace the same file. The **Conflicts** list shows each
+    case.
+  - Each launch gets a private merged view of the game made of links. Your game folder and the
+    mod folders are never written to.
+  - Replacements for `eboot.bin`, `sce_module` and `sce_sys` are refused.
+  - The order and switches are saved in `mods.json`. [docs/MODS.md](docs/MODS.md) has the folder
+    rules.
+- **Cheats & Tweaks** are patches from the community patch file (`patches/Bloodborne.xml`), each
+  with its own note. Pairs that do opposite things switch each other off: rally decay or no rally,
+  lighter or heavier corpse physics. The choices are stored as `cheats=` in `bbport.ini`. *Enemy
+  Control* is not offered: it rewrites the same code as the frame-rate patches.
+- **Patch Files** lists `.xml` patch files you put in `~/Library/Application
+  Support/Bloodborne/patches`, each with an on/off switch.
+- **Save backups:** before the first launch with a set of mods or cheats it hasn't seen,
+  **Play** copies your save folder to `save-backups/<date and time>/`, keeping the newest five.
+  Other folders in `save-backups` are never touched.
+
+### Benchmark
+
+**Benchmark…** in the launcher starts the game twice with its own save and settings, about 6
+minutes in all. Your save and settings are not used or changed, and mods, patch files and cheats
+are off, so results from different Macs compare like for like.
+
+1. **Traversal:** a recorded walk through Central Yharnam at 1080p, capped at 60 FPS. New areas
+   stream in and new shaders compile on the way, so this pass shows traversal stutter.
+2. **Throughput:** 30 seconds standing still, uncapped, for the highest frame rate the Mac
+   reaches.
+
+The results window shows, for each pass:
+
+- average and best FPS, 1% and 0.1% lows, the longest frame;
+- frames over 33, 50 and 100 ms, and milliseconds lost to hitches per minute;
+- the worst hitches with their time on the route and likely cause;
+- GPU busy time, shader compiles, the game's CPU use and memory, swap, memory pressure and thermal
+  state.
+
+Each run is kept in `~/Library/Logs/Bloodborne/Benchmarks/<date and time>/`:
+
+- `report.md` (the same text, ready to paste into an issue) and `summary.json`;
+- a per-frame CSV for each pass, `system.csv`, and each pass's game log.
+
+Please run it when you are reporting a performance problem. The benchmark's own save (a character
+in Central Yharnam with the route cleared of enemies) and the recorded route are in `benchmark/`
+and inside the app; your own saves are never used.
+[docs/DESIGN_BENCHMARK.md](docs/DESIGN_BENCHMARK.md) has the details.
+
+### Logs
+
+Each game session started from the launcher writes two logs to **`~/Library/Logs/Bloodborne`**,
+named by the time it started. The last 20 sessions are kept, at most 256 MB in all, and one
+session's logs stop at 64 MB (a normal session is well under 1 MB): past that only its last
+1,000 lines are written, when the game ends, after a line saying how many were left out.
+
+- `game-2026-10-22_14-03-05.log`: the game's output, each line with its time and a syslog
+  severity (`CRIT`, `ERROR`, `WARN`, `NOTICE`, `INFO`, `DEBUG`):
+
+  ```text
+  2026-10-22T14:03:05.869+03:00 NOTICE launcher: Bloodborne for Mac 0.5.4 on Mac15,8 (Apple M3 Max), 64 GB, ...
+  2026-10-22T14:03:06.284+03:00 WARN   GPU [Render.Vulkan] <Warning> vk_pipeline_serialization.cpp:369 ...
+  2026-10-22T14:09:41.604+03:00 CRIT   Crash: the GPU process crashed (signal 11 in ...)
+  ```
+
+- `game-2026-10-22_14-03-05.jsonl`: the same lines as JSON, one object per line, for Grafana Loki
+  (Alloy/Promtail), Elasticsearch (Filebeat), Vector and similar: `@timestamp` (UTC),
+  `log.level`, `syslog.severity.code`, `log.logger` (who wrote the line: `runtime`, `bbgpu-host`,
+  `gpu.render.vulkan`, ...), `message`, `session.id` and `service.version`.
+
+`game.log` and `game.previous.log` link to the last two sessions' `.log` files. Warnings and
+errors also go to the macOS system log (unified logging), with the line's source as its category:
+open **Console.app** and search for `bloodborne-mac-port`, or in Terminal:
+
+```sh
+/usr/bin/log stream --predicate 'subsystem == "io.github.wooloomooloo2.bloodborne-mac-port"'
+```
+
+The game never depends on the logs: if the launcher quits or a log can't be written (a full
+disk), the game keeps running and only those lines are lost.
+
+The severity is read from the line itself: `Crash:` lines are critical, `STOP:` and `ERROR:` lines
+errors, the GPU library's own levels (`<Warning>`, `<Error>`) are kept, and lines saying something
+failed are warnings. Your home folder appears as `~` in the system log and in crash reports.
+
+**Crash reports.** When the game stops with an error, the launcher shows what happened and, by
+itself, puts a diagnostics zip in `~/Library/Logs/Bloodborne/Reports` (the last 10 are kept): the
+crash report, the session's `.log` and `.jsonl`, `bbport.ini`, `launch.conf`, and macOS's own
+crash reports (`.ips`) of the game's processes from that session. Their exception and crashed
+thread also go into the report. Your home folder is shown as `~`, and the identifiers macOS puts
+in `.ips` files (crash reporter key, sleep/wake and boot session ids) are removed. Other paths
+stay as they are: a game folder on an external drive shows as `/Volumes/<drive name>/...`, so
+check the report if a drive or folder name is private. **Report on
+GitHub** opens a new issue with the report already filled in (copied to the clipboard as well,
+for reports too long for the link) and shows the zip in Finder to drag onto the issue. Nothing is
+sent until you submit the issue.
 
 ### Typing text
 
@@ -594,11 +895,24 @@ saves and settings as the Finder launcher.
 
 ### In the game
 
+- **System → Mac Settings:** one native game-menu entry for renderer, quality, effects and
+  launch settings. Use Left/Right on **Page**, or L1/R1 (keyboard 1/3), to change groups.
+  Changes save to the same `bbport.ini`; `*` marks changes requiring a restart. On the final
+  page, enable **Confirm restart**, then **Restart now**. Native ultrawide remains a launcher
+  setting. The menu uses English captions in every supported game language.
+  Its assets are generated privately from your game files after user mods; originals stay
+  untouched. Set `BB_MAC_SETTINGS=0` to disable it. Unsupported assets/code leave it disabled.
+- **Exit Game:** the last entry in the native title menu closes the game and returns to
+  the launcher when launched from it. All six menu choices are visible, including in the
+  DLC title menus. The in-world System menu's save-and-return-to-title action is unchanged.
+  Set `BB_EXIT_GAME=0` to disable this entry independently of Mac Settings.
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.
 - **Full screen:** ⌃⌘F or the green window button.
-- **Input:** game controllers (through SDL) and the keyboard.
+- **Input:** game controllers (through SDL), the keyboard, and the mouse for the camera (turn on
+  **Mouse camera**). The launcher's **Controls** page rebinds keys, mouse buttons and the wheel
+  (two slots per action, a walk key) and sets the mouse speed; changes apply at the next start.
 - **First launch and new areas** compile shaders, so the first minutes stutter a little; later
   sessions load them from the cache at start. The first launch after a rebuild takes ~20 s to
   open the window.
@@ -630,12 +944,20 @@ This port stands entirely on the work of others:
 - **Mrsuss60** — [bloodborne_pc_windows_port](https://github.com/Mrsuss60/bloodborne_pc_windows_port),
   the Windows port this repository was forked from, including its stability, audio, memory
   and frame-pacing fixes (documented in that repository's `CHANGES.md`).
+- **Paleblood contributors** — system-module argument validation evidence from
+  [Paleblood, branch `codex/runtime-sysmodule-wire`](https://github.com/evill33t/Paleblood/tree/codex/runtime-sysmodule-wire),
+  commit `f9c5e5556db987d9fb4fa60b837d8a54817a0718`; provenance and limits in
+  [`docs/SYSMODULE_WIRE.md`](docs/SYSMODULE_WIRE.md).
 - **[shadPS4](https://github.com/shadps4-emu/shadPS4)** project — the Vulkan video core and
   shader recompiler (`gpu/shadps4/`, GPL-2.0-or-later).
 - **FireBurn** — [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan), the native Vulkan
   FSR 3.1 / FSR 4 runtime the port used until 0.5.0; FSR 3.1 is still built from its AMD
   FidelityFX SDK sources (MIT).
 - **Omar Cornut** — [Dear ImGui](https://github.com/ocornut/imgui), used for the in-game overlay (MIT).
+- **[evill33t/bloodborne_mac](https://github.com/evill33t/bloodborne_mac/tree/bbacb95c3338efcd627c0edaec05ff7534e555da)**
+  and **[droogie/bbhost](https://github.com/droogie/bbhost/tree/566184a74f071166299bb656c4af479e5bbe2771)** —
+  selected native menu builders and asset-generation techniques, adapted to this port's
+  existing settings and process bridge. [Provenance and validation](docs/NATIVE_MAC_SETTINGS.md).
 - **Alex Barney (Thealexbarney)** — [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9),
   AT9 audio decoding (MIT).
 - **sirit** — SPIR-V emitter used by the shader recompiler (BSD-3-Clause), with Khronos
@@ -651,9 +973,56 @@ This port stands entirely on the work of others:
   for the 60 FPS, camera and engine patches in `patches/Bloodborne.xml`.
 - **zackcage6** — testing and bug reports for the Windows port.
 
+### Contributors to this port
+
+Thank you to everyone who sent pull requests:
+
+- **[Noel Miller](https://github.com/noelmiller)**
+  - macOS 27 support for the GPU process (#7).
+  - A survivable GPU setup warning (#10).
+  - Touchpad gestures (#8).
+  - Buffer arena sizing for Macs with less memory (#13).
+  - The HUD item icon above 1080p (#17).
+  - Online play (#9, in progress).
+  - Survivable co-op renderer stops (#11).
+- **[Mojahed Abushawish](https://github.com/MojahedAbushawish)**
+  - Lossless texture compression (#33).
+  - The upscaler haze fix (#48).
+  - Invariant vertex positions, copies held to the end of a render pass, and the loading-screen fix
+    (from #20).
+  - Mouse look (#20).
+  - Guest memory mapped in runs for 16-18 GB Macs (#85, #86).
+  - Benchmarks on an M3 Pro.
+- **[DiAvisoo](https://github.com/DiAvisoo)**
+  - Native ultrawide (#30).
+  - Duplicate-launch and game-folder checks (#28).
+  - The disappearing-geometry finding (#36).
+  - Audio dropout diagnostics (#32).
+  - The launcher's Stop button (#31).
+- **[satperm](https://github.com/satperm)**
+  - The About panel and update check (#23).
+  - Dated session logs and crash reports (#40).
+- **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
+- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82), the
+  long-session crash guards (#100, #114), stale descriptor hardening (#98), the GPU watchdog
+  fix (#107), and MetalFX frame
+  generation (#64, in progress).
+
+Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
+measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
+@satperm, @IlyaDylko (keyboard sprint #61, long-session FPS #55), @wgorecodes (stuck game #71,
+preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9; the updater, #96), @Sah-D (#47),
+@ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84, tested 0.5.9), @Didjus (#18),
+@PensionPlanning (#19), @muharremsedona6034gm-hub (#22), @Walltor (#25), @AmberUpraity,
+@VanDung-dev, @douglasrlee, @jefer9011 and @mariuszparowa666 (GPU stalls, fixed in 0.5.4.2),
+@zhouhaoyaomei-ship-it, @SimonKabb and @juliotwo (the memmove crash, fixed in 0.5.5), @ELLDev
+and @GChaucer (the GPU crash in fights, #74), @brewboi (5120×2160 and the cursor, #93), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
+
 Each third-party component keeps its own license file in its directory.
 
 ## License
 
 GNU General Public License v2.0 or later (GPL-2.0-or-later), because of the shadPS4
-components. See [LICENSE](LICENSE).
+components. See [LICENSE](LICENSE). The native-menu adapters retain GPL-3.0-or-later;
+the combined runtime containing them is GPL-3.0-or-later. See
+[the retained license](LICENSES/GPL-3.0-or-later.txt).

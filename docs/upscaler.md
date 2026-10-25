@@ -1,5 +1,31 @@
 # Temporal upscaling and frame generation — frame analysis and plan
 
+## MetalFX startup targets above 1080p (#116, 2026-10-31)
+
+The **Avoid white scenes (MetalFX)** setting in the launcher's Advanced controls and the
+in-game Advanced → Resolution card opts into the native-guest workaround. It is **off by
+default** (`metalfx_white_scene_fix=0`); changing it requires a restart. When enabled for
+MetalFX output above 1920×1080, guest render targets remain 1920×1080 and the host scales
+scene targets at the selected preset size before MetalFX reconstructs the requested output.
+
+This keeps the game's post-processing at 1080p and adds resolves, which can reduce
+performance. Two noisy A/B pairs on battery in Hunter's Dream at 1440p MetalFX Quality
+reported roughly 5–20% extra GPU time. This is a limited observation, not a general cost
+estimate. Leave the setting off unless white scenes occur. The separate Live resolution
+changes setting still works, and the existing safeguard for scene sizes above 1080p remains.
+
+The old 1440p Quality startup patch creates 1708×960 guest targets. Passing between rooms
+in Forbidden Woods can then make the tonemapped scene uniformly white before MetalFX
+reads it. A local failed-frame dump confirmed constant color channels across the input,
+with valid varying depth. Reinitializing temporal history cannot repair that input.
+
+This is a mitigation of the startup-patched rendering path; its underlying game/post-process
+failure is not yet isolated. The live path keeps guest compute/post at native dimensions
+and adds proxy resolves, so its cost can differ. Gameplay comparison is bounded to the
+reported 1440p Quality route. Lower outputs and other providers retain their existing
+startup selection. Explicit `BB_RENDER_RES` remains available for diagnostics; native wide
+patches keep their existing path. See `FINDINGS.md` for the reproduction and validation limits.
+
 ## Native TAA and missing FSR 4 assets (2026-10-01)
 
 `upscaler=taa` / `BB_UPSCALER=taa` is a separate native-resolution temporal AA

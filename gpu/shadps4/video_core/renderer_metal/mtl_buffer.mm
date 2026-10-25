@@ -154,13 +154,18 @@ BufferRef LowOffset(BufferRef ref) {
 }
 
 Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::string_view label,
-                    u64* gpu_address, u8** contents) {
+                    u64* gpu_address, u8** contents, u8** host_view, bool guest_memory) {
     *gpu_address = 0;
     *contents = nullptr;
+    if (host_view) {
+        *host_view = nullptr;
+    }
     id<MTLDevice> mtl_device = (__bridge id<MTLDevice>)device.NativeDevice();
-    id<MTLBuffer> buffer = LazyArena(type, size)
-                               ? NewLazyBuffer(mtl_device, device, size)
-                               : [mtl_device newBufferWithLength:size options:OptionsFor(device, type)];
+    // bbport: guest memory (the buffer cache's chunks) is lazily committed at any size; its CPU
+    // view lets the buffer cache check the guards past its runs.
+    const bool lazy = guest_memory || LazyArena(type, size);
+    id<MTLBuffer> buffer = lazy ? NewLazyBuffer(mtl_device, device, size)
+                                : [mtl_device newBufferWithLength:size options:OptionsFor(device, type)];
     if (buffer == nil) {
         return {};
     }
@@ -172,6 +177,8 @@ Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::s
     *gpu_address = buffer.gpuAddress;
     if (type != VideoCore::MemoryType::DeviceLocal) {
         *contents = static_cast<u8*>(buffer.contents);
+    } else if (host_view && guest_memory) {
+        *host_view = static_cast<u8*>(buffer.contents);
     }
     return Object::Adopt((__bridge_retained void*)buffer);
 }

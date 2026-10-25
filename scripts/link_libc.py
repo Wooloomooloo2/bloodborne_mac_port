@@ -18,17 +18,24 @@ FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
 # gs:[slot*8], a pthread key that src/runtime_thread.c (TCB_KEY) reserves and fills
 # with each thread's guest TCB. Keep both values equal.
 MACOS_GS_SLOT = 384
+# Existing runtimes reject unknown capability bits before reading linked metadata.
+# With this bit, the next header word records the emitted GS byte displacement.
+TLS_SLOT_METADATA = 2
 
 
 def gs_load(slot=None):
     """Same-length replacement for FS_LOAD: gs:[0] (Linux) or gs:[slot*8] (macOS).
 
-    Default slot: $BBPORT_GS_SLOT, else MACOS_GS_SLOT on darwin, else 0 (Linux)."""
+    Default slot: $BBPORT_GS_SLOT, else MACOS_GS_SLOT on darwin, else 0 (Linux).
+    Overrides must agree with runtime_thread.c's fixed host contract."""
     if slot is None:
         env = os.environ.get('BBPORT_GS_SLOT')
         slot = int(env, 0) if env else MACOS_GS_SLOT if sys.platform == 'darwin' else 0
     if not 0 <= slot < 512:
         raise ValueError('GS slot outside the pthread key range')
+    expected = MACOS_GS_SLOT if sys.platform == 'darwin' else 0
+    if slot != expected:
+        raise ValueError(f'GS slot {slot} does not match the runtime slot {expected}')
     return b'\x65' + FS_LOAD[1:5] + struct.pack('<I', slot * 8)
 
 
@@ -93,6 +100,7 @@ def module(path):
 
 
 def link(game, out, gs_slot=None):
+    replacement = gs_load(gs_slot)  # Refuse incompatible settings before opening inputs/output.
     main = module(game/'eboot.bin')
     libc = module(game/'sce_module/libc.prx')
     raw = (out/'boot.bin').read_bytes()
@@ -182,7 +190,7 @@ def link(game, out, gs_slot=None):
     # TLS). glibc owns FS on Linux, so rewrite the segment prefix to GS; the
     # runtime points GS at each guest thread's TCB (macOS: see gs_load). Only
     # executable eboot segments are scanned, and only this exact 9-byte instruction.
-    fs_load, replacement = FS_LOAD, gs_load(gs_slot)
+    fs_load = FS_LOAD
     patched = 0
     for p in main['ph']:
         if p['type'] != 1 or not p['flags'] & 1:
@@ -204,7 +212,8 @@ def link(game, out, gs_slot=None):
     procparam = next(p for p in main['ph'] if p['type']==0x61000001)
     metadata = (base,libsize,base+libc['tags'][12],base+tls['vaddr'],tls['memsz'],tls['filesz'],len(bindings),procparam['vaddr'])
     with (out/'boot-libc.bin').open('wb') as f:
-        f.write(struct.pack('<8s6Q',b'BBPROBE4',len(image),entry,len(segments),len(relocs),len(names),flags))
+        f.write(struct.pack('<8s6Q',b'BBPROBE4',len(image),entry,len(segments),len(relocs),len(names),flags | TLS_SLOT_METADATA))
+        f.write(struct.pack('<Q',struct.unpack_from('<I',replacement,5)[0]))
         f.write(struct.pack('<8Q',*metadata))
         f.write(struct.pack('<4Q',*main_tls_values))
         for binding in bindings: f.write(struct.pack('<3Q',*binding))

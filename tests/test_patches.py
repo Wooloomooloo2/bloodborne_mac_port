@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 from paths import ROOT
+import contextlib
+import io
+import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -12,7 +16,7 @@ from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
                      SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
                      render_size, resolution_writes, scaled_sizes, effect_patches,
                      validate_patch_requirements, external_patches, external_selection,
-                     compile_external)
+                     compile_external, PatchAudit)
 
 XML = ROOT / 'patches/Bloodborne.xml'
 SEGMENTS = [(0, 0x6000000)]
@@ -183,6 +187,185 @@ class ExternalPatchTests(unittest.TestCase):
 
     def test_built_in_file_is_not_external(self):
         self.assertEqual(external_patches(XML.parent), [])
+
+
+
+class PatchSafetyTests(unittest.TestCase):
+    def test_frame_rate_patches_leave_original_timed_call(self):
+        first=0x02483ec1-EBOOT_BASE
+        for name in ('60 FPS++','90 FPS++','Uncap FPS++'):
+            for offset,data in compile_patches(XML,[name],'01.09',SEGMENTS):
+                self.assertFalse(offset < first+5 and first < offset+len(data),name)
+
+    def test_enemy_control_disagreements_are_rejected(self):
+        for name in ('60 FPS++','90 FPS++','Uncap FPS++'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError,'Enemy Control conflicts.*0x01972a'):
+                compile_patches(XML,[name,'Enemy Control'],'01.09',SEGMENTS)
+
+    def test_ordered_rewrites_and_identical_overlaps_are_preserved(self):
+        audit=PatchAudit()
+        writes=[(0x1000,b'\x90\x90'),(0x1001,b'\xcc')]
+        self.assertEqual(audit.add('First',writes),writes)
+        audit.add('Identical',[(0x1000,b'\x90\xcc')])
+        with self.assertRaisesRegex(ValueError,'First, Identical'):
+            audit.add('Different',[(0x1001,b'\x00')])
+        # A rejected group does not change ownership or effective bytes.
+        audit.add('Still identical',[(0x1001,b'\xcc')])
+
+    def test_external_override_must_name_each_replaced_patch(self):
+        def selected(overrides):
+            meta=ET.fromstring('<Metadata Name="Custom" Overrides="'+overrides+'">'
+                              '<PatchList><Line Type="bytes" Address="0x00401000" Value="CC"/>'
+                              '</PatchList></Metadata>')
+            return [('custom.xml/Custom',Path('custom.xml'),meta)]
+        audit=PatchAudit(); audit.add('Built-in',[(0x1000,b'\x90')])
+        for overrides in ('','Other patch'):
+            with self.subTest(overrides=overrides), contextlib.redirect_stderr(io.StringIO()) as log:
+                self.assertEqual(compile_external(selected(overrides),SEGMENTS,audit),[])
+                self.assertIn('Patches: skipped custom.xml/Custom:',log.getvalue())
+                self.assertIn('conflicts with Built-in',log.getvalue())
+            self.assertEqual(audit.bytes,{0x1000:(0x90,{'Built-in'})})
+        audit.add('Same bytes',[(0x1000,b'\x90')])
+        with contextlib.redirect_stderr(io.StringIO()) as log:
+            self.assertEqual(compile_external(selected('Built-in'),SEGMENTS,audit),[])
+            self.assertIn('Patches: skipped custom.xml/Custom:',log.getvalue())
+        self.assertEqual(audit.bytes,{0x1000:(0x90,{'Built-in','Same bytes'})})
+        self.assertEqual(compile_external(selected('Built-in;Same bytes'),SEGMENTS,audit),[(0x1000,b'\xcc')])
+
+    def test_conflicting_external_patch_cli_skips_whole_patch_and_continues(self):
+        from patches import FPS_PRESETS
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory); folder=out/'patches'; folder.mkdir()
+            elf=bytearray(120)
+            struct.pack_into('<Q',elf,0x20,64)
+            struct.pack_into('<HH',elf,0x36,56,1)
+            struct.pack_into('<IIQQQQQQ',elf,64,1,0,0,0,0,0,0x6000000,0)
+            (out/'eboot.elf').write_bytes(elf)
+            (out/'patches.bin').write_bytes(b'previous patch file')
+            collection=ET.Element('Patch')
+            def patch(root,name,lines):
+                meta=ET.SubElement(root,'Metadata',Name=name,AppVer='01.09',isEnabled='true')
+                group=ET.SubElement(meta,'PatchList')
+                for address,value in lines:
+                    ET.SubElement(group,'Line',Type='bytes',Address=address,Value=value)
+            patch(collection,"Someone else's 60 FPS",[('0x00401000','AB'),('0x00a3fc3f','90909090')])
+            # A later patch in the same collection reuses the skipped patch's
+            # otherwise-safe byte. Rejection must leave neither writes nor owners.
+            patch(collection,'Independent',[('0x00401000','CC')])
+            ET.ElementTree(collection).write(folder/'other.xml')
+            another=ET.Element('Patch')
+            patch(another,'Another file',[('0x00402000','DD')])
+            ET.ElementTree(another).write(folder/'z-other.xml')
+            args=[sys.executable,str(ROOT/'scripts/patches.py'),'--fps','60',
+                  '--out',str(out),'--settings',str(out/'none.ini'),
+                  '--patches-dir',str(folder),'--game-dir',str(out)]
+            env={k:v for k,v in os.environ.items() if not k.startswith('BB_')}
+            result=subprocess.run(args,env=env,capture_output=True,text=True,timeout=10)
+            self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+            self.assertIn("Patches: skipped other.xml/Someone else's 60 FPS:",result.stderr)
+            self.assertIn('conflicts with 60 FPS++ at 0x00a3fc3f',result.stderr)
+            self.assertIn('Patches: external other.xml/Independent (1 writes)',result.stdout)
+            self.assertIn('Patches: external z-other.xml/Another file (1 writes)',result.stdout)
+            blob=(out/'patches.bin').read_bytes()
+            magic,base,count=struct.unpack_from('<8sQQ',blob)
+            self.assertEqual((magic,base),(b'BBPATCH2',EBOOT_BASE))
+            writes=[]; cursor=24
+            for _ in range(count):
+                offset,size=struct.unpack_from('<QQ',blob,cursor);cursor+=16
+                writes.append((offset,blob[cursor:cursor+size]));cursor+=size
+            self.assertEqual(cursor,len(blob))
+            expected=compile_patches(XML,FPS_PRESETS['60'],'01.09',SEGMENTS)
+            self.assertEqual(writes,expected+[(0x1000,b'\xcc'),(0x2000,b'\xdd')])
+
+    def test_external_to_external_conflict_keeps_other_patches(self):
+        selected=[]
+        for name,lines in [('First',[(0x1000,'90')]),
+                           ('Conflicting',[(0x2000,'AB'),(0x1000,'CC')]),
+                           ('Later',[(0x2000,'EE')])]:
+            meta=ET.Element('Metadata',Name=name)
+            for offset,value in lines:
+                ET.SubElement(meta,'Line',Type='bytes',Address=hex(offset+EBOOT_BASE),Value=value)
+            selected.append((f'collection.xml/{name}',Path('collection.xml'),meta))
+        audit=PatchAudit()
+        with contextlib.redirect_stderr(io.StringIO()) as log:
+            self.assertEqual(compile_external(selected,SEGMENTS,audit),[(0x1000,b'\x90'),(0x2000,b'\xee')])
+        self.assertIn('Patches: skipped collection.xml/Conflicting:',log.getvalue())
+        self.assertIn('conflicts with collection.xml/First',log.getvalue())
+        self.assertEqual(audit.bytes,{0x1000:(0x90,{'collection.xml/First'}),
+                                     0x2000:(0xee,{'collection.xml/Later'})})
+
+    def test_supported_cheat_and_wide_combinations_remain_compatible(self):
+        from patches import FPS_PRESETS, CHEATS, ULTRAWIDE_PATCHES, ultrawide_writes
+        for fps,names in FPS_PRESETS.items():
+            for cheat in CHEATS:
+                with self.subTest(fps=fps,cheat=cheat):
+                    compile_patches(XML,names+[cheat],'01.09',SEGMENTS)
+            for wide in ULTRAWIDE_PATCHES.values():
+                with self.subTest(fps=fps,wide=wide):
+                    audit=PatchAudit()
+                    compile_patches(XML,names,'01.09',SEGMENTS,audit)
+                    audit.add(wide,ultrawide_writes(XML,wide,'01.09',SEGMENTS))
+
+    def test_rejected_selection_does_not_replace_previous_patch_file(self):
+        from patches import main
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory); elf=bytearray(120)
+            struct.pack_into('<Q',elf,0x20,64)
+            struct.pack_into('<HH',elf,0x36,56,1)
+            struct.pack_into('<IIQQQQQQ',elf,64,1,0,0,0,0,0,0x6000000,0)
+            (out/'eboot.elf').write_bytes(elf)
+            prior=b'previous patch file'; (out/'patches.bin').write_bytes(prior)
+            args=['patches.py','--fps','60','--extra','Enemy Control',
+                  '--out',str(out),'--settings',str(out/'none.ini')]
+            with mock.patch.object(sys,'argv',args), self.assertRaises(ValueError):
+                main()
+            self.assertEqual((out/'patches.bin').read_bytes(),prior)
+
+
+class SafetyTests(unittest.TestCase):
+    def test_fps_patches_never_write_ret_into_the_condition_wait(self):
+        from patches import UNSAFE_WRITES
+        start, length, _ = UNSAFE_WRITES[0]
+        for name in ('30 FPS++', '60 FPS++', '90 FPS++', 'Uncap FPS++'):
+            with self.subTest(name=name):
+                writes = compile_patches(XML, [name], '01.09', SEGMENTS)
+                self.assertTrue(writes)
+                self.assertFalse([w for w in writes if w[0] < start + length and w[0] + len(w[1]) > start])
+
+    def test_external_patch_over_the_condition_wait_is_skipped(self):
+        bad = EXTERNAL.replace('Address="0x00401000" Value="9090"', 'Address="0x02483EC1" Value="C390909090"')
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / 'bad.xml').write_text(bad)
+            found = external_patches(Path(directory))
+            writes = compile_external([f for f in found if f[0] == 'bad.xml/On'], SEGMENTS)
+            self.assertEqual(writes, [])
+
+    def test_enemy_control_is_refused_with_a_frame_rate_patch(self):
+        with self.assertRaisesRegex(ValueError, 'frame rate patch'):
+            validate_patch_requirements(['60 FPS++', 'Enemy Control'], Path('.'))
+        validate_patch_requirements(['Enemy Control'], Path('.'))
+
+
+class CheatTests(unittest.TestCase):
+    def test_cheats_setting_selects_known_patches(self):
+        from patches import CHEATS, cheat_patches
+        names = cheat_patches({'cheats': 'Player No Dead (Read note);Unknown;Increased camera distance'})
+        self.assertEqual(names, ['Player No Dead (Read note)', 'Increased camera distance'])
+        self.assertEqual(cheat_patches({}), [])
+        self.assertNotIn('Enemy Control', CHEATS)
+
+    def test_exclusive_cheats_are_refused_together(self):
+        from patches import cheat_patches
+        with self.assertRaises(ValueError):
+            cheat_patches({'cheats': 'No Rally Decay;Disable Rally (HP Regain)'})
+
+    def test_every_cheat_exists_and_has_a_group(self):
+        from patches import CHEATS, list_json
+        import json
+        listed = json.loads(list_json(XML, '01.09', None, None))
+        self.assertEqual([c['name'] for c in listed['cheats']], list(CHEATS))
+        self.assertTrue(all(c['group'] and c['label'] for c in listed['cheats']))
+        self.assertEqual(listed['external'], [])
 
 
 if __name__ == '__main__':

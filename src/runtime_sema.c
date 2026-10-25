@@ -1,5 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2026 Mark Hall
-/* Kernel semaphores: 32-bit IDs, counted tokens and FIFO waiters.
+/* Kernel semaphores: positive int32 IDs in 64-bit guest handles, counted tokens and FIFO waiters.
  * Priority-ordered semaphores are approximated by FIFO order. */
 #define _GNU_SOURCE
 #include "runtime.h"
@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <inttypes.h>
+#include <limits.h>
 #include <time.h>
 
 #define ERR(n) ((int32_t)(UINT32_C(0x80020000)|(n)))
@@ -19,7 +21,8 @@ typedef struct Waiter {
 } Waiter;
 
 typedef struct Sema {
-    uint32_t id, attr;
+    int32_t id;
+    uint32_t attr;
     int32_t count, initial, maximum;
     unsigned active;
     int deleted;
@@ -32,8 +35,8 @@ static Sema *registry;
 static uint32_t next_id=1;
 static size_t created, deleted, acquired, signaled, timed_out;
 
-static Sema *find(uint32_t id) {
-    for (Sema *s=registry;s;s=s->next) if (s->id==id) return s;
+static Sema *find(uint64_t id) {
+    for (Sema *s=registry;s;s=s->next) if ((uint64_t)s->id==id) return s;
     return NULL;
 }
 
@@ -43,23 +46,27 @@ static void host_check(int e) {
 
 static uint64_t now_ns(void) { return host_monotonic_ns(); }
 
-static ABI int32_t sem_create(uint32_t *out,const char *name,uint32_t attr,
+static ABI int32_t sem_create(void *out,const char *name,uint32_t attr,
                               int32_t initial,int32_t maximum,const void *options) {
+    /* libkernel rejects options before accessing any other argument. */
+    if (options) return ERR(22);
     if (!out || !name || attr>2 || initial<0 || maximum<=0 || initial>maximum) return ERR(22);
-    if (options) { fputs("STOP: semaphore options are not implemented\n",stderr); exit(21); }
     Sema *s=calloc(1,sizeof(*s));
     if (!s) return ERR(12);
     host_lock(&lock);
-    if (next_id==UINT32_MAX) { host_unlock(&lock); free(s); return ERR(28); }
-    s->id=next_id++; s->attr=attr; s->count=s->initial=initial; s->maximum=maximum;
-    s->next=registry; registry=s; *out=s->id; ++created;
-    CHECK_LOW_ADDR((uintptr_t)*out);
-    printf("Runtime: semaphore id=%u, attr=%u, initial=%d, max=%d\n",s->id,attr,initial,maximum);
+    if (next_id>INT32_MAX) { host_unlock(&lock); free(s); return ERR(28); }
+    s->id=(int32_t)next_id++; s->attr=attr; s->count=s->initial=initial; s->maximum=maximum;
+    s->next=registry; registry=s;
+    /* The native wrapper sign-extends its int32 result and stores eight bytes.
+       memcpy also admits an unaligned guest output slot. */
+    const int64_t handle=s->id;
+    memcpy(out,&handle,sizeof(handle)); ++created;
+    printf("Runtime: semaphore id=%d, attr=%u, initial=%d, max=%d\n",s->id,attr,initial,maximum);
     host_unlock(&lock);
     return 0;
 }
 
-static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) {
+static int32_t wait_count(uint64_t id,int32_t need,uint32_t *timeout,int block) {
     host_lock(&lock);
     Sema *s=find(id);
     int32_t result=0;
@@ -71,7 +78,7 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
     else {
         /* Priority-ordered semaphores (attr 2) are served FIFO: there is no
            PS4 priority scheduler, host threads run at equal priority. */
-        if (getenv("BB_TRACE_SEMA")) fprintf(stderr,"Runtime: blocking wait on semaphore %u (need %d, count %d)\n",id,need,s->count);
+        if (getenv("BB_TRACE_SEMA")) fprintf(stderr,"Runtime: blocking wait on semaphore %" PRIu64 " (need %d, count %d)\n",id,need,s->count);
         Waiter w={.need=need};
 #ifdef __APPLE__
         host_cond_init(&w.event); /* macOS: realtime clock only; waits below are relative */
@@ -119,13 +126,13 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
     return result;
 }
 
-static ABI int32_t sem_wait(uint32_t id,int32_t need,uint32_t *timeout) {
+static ABI int32_t sem_wait(uint64_t id,int32_t need,uint32_t *timeout) {
     int32_t r=wait_count(id,need,timeout,1); RUNTIME_SYNC("sema_wait",id,r); return r;
 }
-static ABI int32_t sem_poll(uint32_t id,int32_t need) {
+static ABI int32_t sem_poll(uint64_t id,int32_t need) {
     int32_t r=wait_count(id,need,NULL,0); RUNTIME_SYNC("sema_poll",id,r); return r;
 }
-static ABI int32_t sem_signal(uint32_t id,int32_t count) {
+static ABI int32_t sem_signal(uint64_t id,int32_t count) {
     RUNTIME_SYNC("sema_signal",id,count);
     host_lock(&lock);
     Sema *s=find(id);
@@ -156,7 +163,7 @@ static int32_t wake_all(Sema *s,int32_t result) {
     return count;
 }
 
-static ABI int32_t sem_cancel(uint32_t id,int32_t count,int32_t *waiters) {
+static ABI int32_t sem_cancel(uint64_t id,int32_t count,int32_t *waiters) {
     host_lock(&lock);
     Sema *s=find(id);
     int32_t result=0;
@@ -171,10 +178,10 @@ static ABI int32_t sem_cancel(uint32_t id,int32_t count,int32_t *waiters) {
     return result;
 }
 
-static ABI int32_t sem_delete(uint32_t id) {
+static ABI int32_t sem_delete(uint64_t id) {
     host_lock(&lock);
     Sema **p=&registry;
-    while (*p && (*p)->id!=id) p=&(*p)->next;
+    while (*p && (uint64_t)(*p)->id!=id) p=&(*p)->next;
     if (!*p) { host_unlock(&lock); return ERR(3); }
     Sema *s=*p; *p=s->next; s->deleted=1; ++deleted;
     wake_all(s,ERR(13));
@@ -184,7 +191,7 @@ static ABI int32_t sem_delete(uint32_t id) {
 }
 
 /* Read-only test/diagnostic snapshot, not exposed to guest code. */
-unsigned runtime_sema_waiters(uint32_t id) {
+unsigned runtime_sema_waiters(uint64_t id) {
     host_lock(&lock);
     Sema *s=find(id); unsigned n=0;
     if (s) for (Waiter *w=s->first;w;w=w->next) ++n;

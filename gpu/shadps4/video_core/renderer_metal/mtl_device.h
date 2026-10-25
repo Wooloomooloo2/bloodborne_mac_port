@@ -140,6 +140,10 @@ public:
     [[nodiscard]] u64 ErrorCount() const noexcept {
         return counters->errors.load(std::memory_order_relaxed);
     }
+    /// Of those, the ones that failed with a GPU page fault (an address no resident buffer maps).
+    [[nodiscard]] u64 PageFaultCount() const noexcept {
+        return counters->page_faults.load(std::memory_order_relaxed);
+    }
     /// GPU busy time so far (ns): the union of the GPU intervals (GPUStartTime..GPUEndTime) of
     /// the completed command buffers committed here (Commit, CommitUntracked) or passed to
     /// TrackGpuTime. Overlapping intervals (two queues) count once, in any completion order.
@@ -179,7 +183,7 @@ public:
     void TrackGpuTime(void* command_buffer);
 
 private:
-    /// Exits the process when committed command buffers stop completing (BB_GPU_WATCHDOG_MS).
+    /// Exits when submitted work stops signaling GPU progress (BB_GPU_WATCHDOG_MS).
     void StartWatchdog();
 
     std::unique_ptr<Impl> impl;
@@ -198,8 +202,9 @@ private:
     struct Counters {
         std::atomic<u64> gpu_tick{0};
         std::atomic<u64> errors{0};
+        std::atomic<u64> page_faults{0};
         std::atomic<u64> gpu_busy_ns{0};
-        std::atomic<u64> committed{0}; ///< the last tick Commit() signals
+        std::atomic<u64> committed{0}; ///< the last tick whose Metal commit returned
         std::atomic<bool> stop_watchdog{false};
         std::mutex busy_mutex;
         BusyIntervals busy; ///< busy_mutex

@@ -2,6 +2,7 @@
 // bbport: optimizations that can be switched off while the game runs (BB_TOGGLE_FILE,
 // see runtime_memory.c), to find which one changes rendering without restarting.
 #pragma once
+#include <array>
 #include <atomic>
 #include <csetjmp>
 #include <chrono>
@@ -157,6 +158,21 @@ inline std::atomic<std::uint64_t> gc_used_bytes{0}, gc_trigger_bytes{0}, gc_free
 /// Metal: MTLDevice.currentAllocatedSize and the resident guest buffers it includes (the GC
 /// compares the difference).
 inline std::atomic<std::uint64_t> gc_allocated_bytes{0}, gc_resident_bytes{0};
+/// bbport: the resident bytes this build's layout created (the arena, and the direct memory
+/// access tables with BB_DIRECT_MEMORY_ACCESS=1) and those the previous layout created (the
+/// arena and both tables, always): the texture budget's reference (GarbageCollectImages).
+inline std::atomic<std::uint64_t> layout_resident_bytes{0}, legacy_resident_bytes{0};
+/// Copies for Metal's 32-bit index and indirect offsets (ranges ending past 4 GiB into the
+/// arena): from guest memory (CPU-owned data) and in command order (GPU-written data); indirect
+/// draws with a GPU count there (their records are read at any offset, not copied); page table
+/// fills at first touches (direct memory access only).
+inline std::atomic<std::uint64_t> index_copies_cpu{0}, index_copies_gpu{0}, indirect_copies_cpu{0},
+    indirect_copies_gpu{0}, indirect_counted_high{0}, dma_first_touches{0};
+/// Staging pool bytes per memory type (DeviceLocal, HostUncached, HostCached), now and peak.
+inline std::array<std::atomic<std::uint64_t>, 3> staging_bytes{}, staging_peak{};
+/// Requests that stopped the game before and are absorbed now: size-0 writes outside the arena
+/// (a write sink), read-backs of memory the arena does not cover (declined).
+inline std::atomic<std::uint64_t> size0_sinks{0}, uncovered_readbacks{0};
 /// Seconds of a steady clock, updated at every guest submission (cheap ages for caches).
 inline std::atomic<std::uint32_t> coarse_second{0};
 /// Images the collector passed over (GPU-written, not evictable without memory pressure).

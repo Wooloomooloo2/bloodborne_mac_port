@@ -3,6 +3,7 @@ from paths import ROOT, EXE
 from pathlib import Path
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -23,7 +24,8 @@ def native_package(name='fixture-native', binding_address=4112, binding_kind=1,
     code = b'\x48\x83\xec\x08\xff\x15\x16\0\0\0\x48\x83\xc4\x08\xff\x25\x14\0\0\0'
     image = code.ljust(4096,b'\0') + init.ljust(16,b'\0') + native
     image = image.ljust(12288,b'\0')
-    header=struct.pack('<8s6Q',b'BBPROBE3',len(image),0,3,2,2,1)
+    header=struct.pack('<8s6Q',b'BBPROBE3',len(image),0,3,2,2,3)
+    header+=struct.pack('<Q',384*8 if sys.platform=='darwin' else 0)
     meta=metadata or (4096,8192,4096,8192,32,4,1,256)
     return (header + struct.pack('<8Q',*meta) + struct.pack('<3Q',0,binding_address,binding_kind)
             + struct.pack('<9Q',0,4096,5,4096,4096,lib_flags,8192,4096,6)
@@ -134,7 +136,7 @@ class LoaderTests(unittest.TestCase):
         self.assertIn('_init_env=0',r.stdout)
 
     def test_unknown_capabilities_rejected(self):
-        r = self.run_image(package(b'\xc3',capabilities=2))
+        r = self.run_image(package(b'\xc3',capabilities=4))
         self.assertEqual(r.returncode,1)
         self.assertIn('unknown runtime capabilities',r.stderr)
 

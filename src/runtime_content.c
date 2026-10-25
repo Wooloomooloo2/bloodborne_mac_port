@@ -22,10 +22,21 @@ static void require_provider(void) {
 }
 /* System modules: every library this eboot imports is provided by the host
  * runtime, so loading one only tracks a reference count. AppContent (0xb4)
- * additionally requires the configured content profile. */
+ * additionally requires the configured content profile. This host namespace is
+ * 16 bits, but the native entry points receive a complete 32-bit ID. Preserve it
+ * until validation so unsupported wide IDs cannot alias another module.
+ * Provenance and native/host-policy limits: docs/SYSMODULE_WIRE.md. */
 static unsigned module_refs[0x10000];
-static ABI int32_t module_load(uint16_t id) {
-    if (!id) return INVALID_ID;
+static void require_module_id(const char *function,uint32_t id) {
+    if (id>UINT16_MAX) {
+        fprintf(stderr,"STOP: %s: full-width module ID 0x%08x is outside the supported host namespace\n",function,(unsigned)id);
+        exit(21);
+    }
+}
+static ABI int32_t module_load(uint32_t id) {
+    /* Independently recovered early error; other wide IDs remain unsupported. */
+    if (!(id & UINT32_C(0x7fffffff))) return INVALID_ID;
+    require_module_id("sceSysmoduleLoadModule",id);
     if (id==0xb4) require_provider();
     if (module_refs[id]==UINT32_MAX) { fputs("STOP: module reference overflow\n",stderr); exit(21); }
     ++module_refs[id];
@@ -33,11 +44,14 @@ static ABI int32_t module_load(uint16_t id) {
     else printf("Runtime: system module 0x%x loaded (host implementation)\n",id);
     return 0;
 }
-static ABI int32_t module_loaded(uint16_t id) {
+static ABI int32_t module_loaded(uint32_t id) {
     if (!id) return INVALID_ID;
+    require_module_id("sceSysmoduleIsLoaded",id);
     return module_refs[id] ? 0 : NOT_LOADED;
 }
-static ABI int32_t module_unload(uint16_t id) {
+static ABI int32_t module_unload(uint32_t id) {
+    if (!id) return INVALID_ID;
+    require_module_id("sceSysmoduleUnloadModule",id);
     int32_t result=module_loaded(id);
     if (result) return result;
     --module_refs[id];
