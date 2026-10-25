@@ -22,6 +22,7 @@ const RuntimeTrophy *runtime_trophy_catalog(size_t *count);
 void runtime_trophy_configure(const char *user);
 void runtime_trophy_snapshot(RuntimeTrophySnapshot *out);
 int runtime_trophy_take_event(RuntimeTrophyEvent *out);
+/* Log failures return success to the game; the snapshot carries the UI error. */
 int32_t runtime_trophy_unlock(int id,int32_t *platinum);
 
 /* PS4 ABI used by the local trophy service. */

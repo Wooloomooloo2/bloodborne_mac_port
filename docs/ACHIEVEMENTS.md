@@ -28,16 +28,18 @@ The launcher reads the log and never writes or resets progress. It reports read 
 
 The 33 ordinary base-game trophies award platinum automatically. DLC is excluded.
 Loading a complete older history quietly adds a missing platinum, using the latest
-base-game unlock date. Loading history never replays notifications. A failed write returns
-the trophy-service error and displays an error in the in-game catalog without granting
-the failed trophy. File errors are cleared after a successful write.
+base-game unlock date. Loading history never replays notifications. A failed log write
+returns success to the game and displays an error in the in-game catalog without adding
+the failed trophy to history or queuing a banner. Retrying can persist the unlock; file
+errors are cleared after a successful write. Invalid trophy IDs, direct platinum requests
+and already-unlocked trophies retain their trophy-service error codes.
 
 `src/runtime_trophy.c` owns persistence, deduplication, queries and unlock events under a
 mutex. Guest trophy calls do not invoke AppKit or ImGui. The GPU library receives a snapshot
-and a session-only notification mask. In split mode it publishes them into `BbGpuShared`
-with atomic payload access and a sequence counter. The renderer makes at most three attempts
-to read a complete snapshot, keeping its last one when the writer is busy. Single-process
-mode uses the same interface with a local mutex. Shared-control version 5 rejects mismatched
+and a session-only notification mask. The Rosetta game process publishes them into
+`BbGpuShared` with atomic payload access and a sequence counter. The renderer makes at most three attempts
+to read a complete snapshot, keeping its last one when the writer is busy. macOS uses this
+split-process architecture exclusively. Shared-control version 5 rejects mismatched
 game/host binaries; rebuild/package both. No frame-generation or renderer changes are required.
 
 ## Original sources and adaptation
