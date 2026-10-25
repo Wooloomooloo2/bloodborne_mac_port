@@ -394,6 +394,10 @@ struct ModsView: View {
             if let problem = model.patchesProblem {
                 Text(problem).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
+            if launcher.online.online {
+                Text("Online play is on: cheats and gameplay changes are off, so everyone in a world plays the same game. They come back when online play is turned off.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             ForEach(Cheats.grouped(model.cheats), id: \.group) { entry in
                 Section(entry.group) {
                     if entry.group == "Cheats" {
@@ -401,7 +405,8 @@ struct ModsView: View {
                             .font(.caption).foregroundStyle(.orange)
                     }
                     ForEach(entry.cheats) { cheat in
-                        Toggle(isOn: Binding(get: { model.isOn(cheat) }, set: { model.setCheat(cheat, $0) })) {
+                        let offline = launcher.online.online && cheat.onlineOff
+                        Toggle(isOn: Binding(get: { model.isOn(cheat) && !offline }, set: { model.setCheat(cheat, $0) })) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(cheat.label)
                                 if !cheat.note.isEmpty {
@@ -409,8 +414,8 @@ struct ModsView: View {
                                 }
                             }
                         }
-                        .help(cheat.note)
-                        .disabled(launcher.running)
+                        .help(offline ? "Off during online play" : cheat.note)
+                        .disabled(launcher.running || offline)
                     }
                 }
             }
@@ -430,6 +435,10 @@ struct ModsView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             problem(model.patchesProblem)
+            if launcher.online.online {
+                Text("Online play is on: patch files are not applied. They come back when online play is turned off.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if model.external.isEmpty {
                 VStack(spacing: 8) {
                     Text("No patch files").font(.headline)
@@ -442,7 +451,7 @@ struct ModsView: View {
             } else {
                 List {
                     ForEach(model.external) { patch in
-                        Toggle(isOn: Binding(get: { patch.enabled }, set: { model.setExternal(patch.key, $0) })) {
+                        Toggle(isOn: Binding(get: { patch.enabled && !launcher.online.online }, set: { model.setExternal(patch.key, $0) })) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(patch.name ?? patch.key)
                                 Text(patch.author.isEmpty ? patch.file : "\(patch.file) · \(patch.author)")
@@ -453,6 +462,7 @@ struct ModsView: View {
                             }
                         }
                         .help(patch.note)
+                        .disabled(launcher.online.online)
                     }
                 }
                 .listStyle(.bordered(alternatesRowBackgrounds: true))
