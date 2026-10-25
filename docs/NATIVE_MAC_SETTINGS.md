@@ -118,6 +118,28 @@ before it completed, and no renderer synchronization change is included here.
   installation; invoking the installed callback in a child exits with status 0.
 - Generation against the player's dump covers all three title movies and 22 language
   bundles. All 26 source-file hashes remain unchanged; warm-cache generation is about 7 ms.
-- The complete x86-64 runtime compiles/links with `-Wall -Wextra -Werror`, reusing the
-  existing GPU library. The existing native Mac Settings hook fixture still passes.
-- The new title entry has not been exercised in a live game session or packaged app.
+- Both GPU libraries rebuild after the upstream merge. The complete x86-64 runtime and
+  both native host variants compile/link with `-Wall -Wextra -Werror` using protocol 6.
+  The existing native Mac Settings hook and launch-settings fixtures still pass.
+- The existing Rosetta-to-arm64 shared-rings fixture passes with protocol 6: two million
+  records, 500,000 events and 20,000 requests, with no corruption or incorrect events.
+- Live regular-runtime check with a fresh isolated profile: selected the visible Exit Game
+  command using the game's controller input. The runtime and native GPU host both exited
+  with status 0, the normal host parent-death path completed its cache flush, and no test
+  processes remained. No crash or fatal-stop lines appeared in the log.
+- Live saved-game check with the existing ignored DLC-aware content helper and a copied
+  save: all six title commands were visible; Continue loaded Central Yharnam. The normal
+  System-menu Exit Game confirmation saved and returned to the title screen. Selecting
+  the new title-menu Exit Game then closed both processes with status 0 and a completed
+  cache flush. Original menu assets and the source save copy retained their hashes.
+- Process statuses were observed with macOS kqueue NOTE_EXIT/NOTE_EXITSTATUS as well as
+  the launch command's return code; both successful menu exits required no external
+  termination signal. The initial DLC-incompatible run was closed through its normal
+  window close button and is excluded from these two menu-exit checks.
+- These live checks use checkout binaries, not the packaged launcher app; launcher
+  return/relaunch behavior and packaged-app shutdown remain untested here.
+
+The branch also merges current upstream master. The shared block retains upstream's
+benchmark fields alongside the native settings snapshot; protocol version 6 distinguishes
+that layout from upstream's benchmark-only version 5. Game and GPU processes must use
+matching rebuilt libraries.
