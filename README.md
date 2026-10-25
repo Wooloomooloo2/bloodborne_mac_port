@@ -53,6 +53,9 @@ These are in the repository now; build from source to try them, or wait for the 
 - **About panel and update check** (from @satperm, #23), and the **game's own icon in the Dock**
   (from [@soulripper13](https://github.com/soulripper13), #66; made in memory from your game
   folder, never saved).
+- **16:10 resolutions** (#75, asked for by @Frosty2804): 1280×800, 1920×1200 and 2560×1600 under
+  **Ultrawide or 16:10** in the launcher, using Kyo's patches (correct HUD and lock-on positions).
+  That is closer to the shape of MacBook displays, so full screen has thinner black bars.
 - **Audio dropout diagnostics** (from [@DiAvisoo](https://github.com/DiAvisoo), #32): opt-in
   logging of the audio signal, queue and decoder, for reports of crackling or gaps.
 - **Fixes:**

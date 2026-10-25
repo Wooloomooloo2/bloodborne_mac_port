@@ -88,7 +88,7 @@ struct LauncherView: View {
         HStack(alignment: .top, spacing: 0) {
             Form {
                 Section("Display") {
-                    Toggle("Ultrawide", isOn: $model.settings.ultrawide)
+                    Toggle("Ultrawide or 16:10", isOn: $model.settings.ultrawide)
                     if model.settings.ultrawide {
                         Picker("Resolution", selection: $model.settings.wideOutput) {
                             ForEach(Resolution.ultrawideOutputs, id: \.self) { Text(Resolution.wideLabel($0)).tag($0) }

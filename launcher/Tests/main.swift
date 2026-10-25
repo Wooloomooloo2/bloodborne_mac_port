@@ -382,6 +382,12 @@ do {
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
     }
     check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
+    check(Resolution.ultrawideMemoryWarning(PixelSize(2560, 1600), memoryBytes: 16 * gib) != nil
+          && Resolution.ultrawideMemoryWarning(PixelSize(1920, 1200), memoryBytes: 16 * gib) == nil, "16:10 memory warning")
+    check(Resolution.wideLabel(PixelSize(1920, 1200)) == "1920 × 1200 · 16:10" && Resolution.wideLabel(PixelSize(3440, 1440)).hasSuffix("21:9")
+          && Resolution.wideLabel(PixelSize(2560, 1080)).hasSuffix("21:9") && Resolution.wideLabel(PixelSize(5120, 1440)).hasSuffix("32:9"), "aspect labels")
+    let sixteen = GameSettings(ini: IniFile(text: "ultrawide_res=2560x1600\n"))
+    check(sixteen.ultrawide && sixteen.wideOutput == PixelSize(2560, 1600), "16:10 from bbport.ini")
 }
 
 // SessionLog: severity from the game's own line shapes (taken from a real game.log).

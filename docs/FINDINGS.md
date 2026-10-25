@@ -1942,3 +1942,11 @@ lifts, exact animation/camera-speed equivalence and longer runs in other areas
 remain unverified. This does not establish that the reported lift issue is fixed.
 Private build hashes, inputs, screenshots, logs and results are kept under
 `out/fps-gameplay-2026-10-25/`; no game or save files are included in the PR.
+
+## 2026-10-25: 16:10 native resolutions (#75)
+
+Kyo's 16:10 patches (1280x800, 1920x1200, 2560x1600) go through the same path as the ultrawide
+presets (`ultrawide_writes`: scene/UI size, camera aspect, the texture pool above 1080p).
+M4 Max, benchmark save in Central Yharnam, upscaler off: both 1920x1200 and 2560x1600 render the
+whole scene at that size ("observed scene depth"), the HUD and item boxes sit correctly, 60 FPS
+at the cap. 2560x1600 gets the under-24 GB memory warning like the 1440p ultrawides.
