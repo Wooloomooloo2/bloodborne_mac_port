@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 import struct
 from prepare import parse_self, span, unpack
-from link_libc import FS_LOAD, encode_id, gs_load
+from link_libc import FS_LOAD, TLS_SLOT_METADATA, encode_id, gs_load
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
 
@@ -90,6 +90,7 @@ def patch_fs_loads(image, ph, base, replacement):
 
 
 def link(game, out, module_names=DEFAULT_MODULES, gs_slot=None):
+    replacement = gs_load(gs_slot)  # Validate against the runtime before touching output.
     main = module(game / 'eboot.bin')
     raw = (out / 'boot.bin').read_bytes()
     magic, size, entry, ns, nr, ni, flags = unpack('<8s6Q', raw, 0)
@@ -125,7 +126,6 @@ def link(game, out, module_names=DEFAULT_MODULES, gs_slot=None):
     exports, by_nid = {}, collections.defaultdict(list)
     table = []
     base = (size + 65535) & ~65535
-    replacement = gs_load(gs_slot)
     fs_patched = patch_fs_loads(image, main['ph'], 0, replacement)
     tls_module = 2
     for filename in module_names:
@@ -215,7 +215,8 @@ def link(game, out, module_names=DEFAULT_MODULES, gs_slot=None):
         raise ValueError('unsupported eboot TLS layout')
     procparam = next(p for p in main['ph'] if p['type'] == 0x61000001)
     with (out / 'boot-linked.bin').open('wb') as f:
-        f.write(struct.pack('<8s6Q', b'BBPROBE5', len(image), entry, len(segments), len(relocs), len(names), flags))
+        f.write(struct.pack('<8s6Q', b'BBPROBE5', len(image), entry, len(segments), len(relocs), len(names), flags | TLS_SLOT_METADATA))
+        f.write(struct.pack('<Q', unpack('<I', replacement, 5)[0]))
         f.write(struct.pack('<Q', procparam['vaddr']))
         f.write(struct.pack('<4Q', *main_tls_values))
         f.write(struct.pack('<Q', len(table)))
