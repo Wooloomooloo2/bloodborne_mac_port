@@ -1967,3 +1967,43 @@ SDL signal fix passed a restored-game stop with both guest and renderer confirme
 Split validation: both production-Process termination tests pass on macOS with x86 SDL,
 including removal of the merged view and unchanged synthetic source/mod files. Launcher
 build/model tests pass. No private save data is used by these regression tests.
+
+## Tessellation runs hold plain draws: one lighting-pass split per run (M3 Pro, 2026-10-21)
+
+MacBook Pro M3 Pro (14 GPU cores), 18 GB, macOS 15.7.5; a copy of a player's save at the lamp
+in Iosefka's Clinic (~1595 draws per frame) and Hunter's Dream, native 1080p, 60 s measured per
+run, same build with `BB_HOLD_DRAWS=0` against the default.
+
+**Where the splits came from.** 73 of the ~87 tessellated draws per frame at the clinic are light
+volumes in the deferred lighting pass (2x R11G11B10 + D32S8, ~477 draws), alternating with plain
+draws. Each tessellated draw's vertex/control kernels end the render encoder, so the pass
+reopened 82 times per frame after compute (an empty split costs ~0.05 ms there; skipping the
+tessellated draws, wrong image, gave +22.5%). Holding plain draws in the run alone held none:
+86 runs per frame all ended at a `Scheduler::Record()` before the next draw. A caller histogram
+of those `Record()`s:
+- 87% `Runtime::FlushBarriers`, the next draw's order wait. Its vertex V# covers a **4 MiB + 16
+  byte** ring of per-draw data (each draw 384 bytes further on), and that window overlaps the
+  uploads hoisted ahead for the following draws (an `Ahead` request), plus a few copies thousands
+  of commands old;
+- 8% pass ends; 6% `SignalAfterHostCopies`, which encodes nothing.
+
+**Change.** Plain draws that store to no image wait in the run, in order; an order wait naming no
+command of the open run no longer ends it (`Runs::OrderWait` applies it at once and again before
+the held draw); `SignalAfterHostCopies` keeps the run.
+
+| | Off | On |
+|---|---|---|
+| Clinic FPS (2 runs each) | 44.4 / 44.4 | **50.7 / 50.7 (+14.2%)** |
+| GPU busy, ms per frame | 22.39 | 19.62 |
+| CPU per frame, both processes | 77.1 ms | 74.4 ms |
+| Tessellation runs per frame | 86.4 | 11.1 (8.8-9 draws held) |
+| Render passes reopened after compute (experiment counter) | 82.3 | 7.0 |
+| Hunter's Dream 1080p uncapped (1 run each) | 62.8 | 64.3 (+2.3%) |
+
+- Images: clinic on vs off 1.27 / 1.30 (mean per channel, 0-255), two off runs 1.28.
+- Metal API validation (`MTL_DEBUG_LAYER=1`) at the clinic: no errors.
+- A play session through Central Yharnam (1080p and 1440p) had no errors; passes reopened after
+  compute there were 3.8 per frame (51-71 in sessions without), 1080p 53.9 FPS, GPU 17.3 ms
+  (routes differ between sessions).
+- The remaining ~7 reopens per frame are one per run whose pass drew before its first tessellated
+  draw: hoisting the kernels to the pass start would remove them (~0.3 ms).

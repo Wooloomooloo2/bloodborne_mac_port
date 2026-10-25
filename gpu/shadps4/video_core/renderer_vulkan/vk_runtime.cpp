@@ -195,7 +195,7 @@ void Runtime::FlushBarriers(const Metal::OrderRequest& need) {
          ? BbStats::arena_barriers
          : BbStats::arena_other_barriers)
         .fetch_add(1, std::memory_order_relaxed);
-    scheduler.Record([need](Metal::Encoder& e) { e.OrderWait(need); });
+    scheduler.RecordOrderWait(need);
 }
 
 bool Runtime::UsedInFlight(const VideoCore::Buffer* buffer,

@@ -337,6 +337,14 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
     return chunk;
 }
 
+void Scheduler::RecordOrderWait(const Metal::OrderRequest& need) {
+    if (draw_run_open && draw_runs.HoldsDraws() && !need.NamesFrom(draw_run_first)) {
+        RecordCommand([need, runs = &draw_runs](Metal::Encoder& e) { runs->OrderWait(e, need); });
+        return;
+    }
+    Record([need](Metal::Encoder& e) { e.OrderWait(need); });
+}
+
 void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     if (!IsRecordingDeferred()) {
         WaitHostCopies();
@@ -345,12 +353,19 @@ void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     }
     BbCopy::FlushBatch();
     deferred_signals_issued.fetch_add(1, std::memory_order_relaxed);
-    Record([signal = std::move(signal), done = deferred_signals_done](Metal::Encoder&) mutable {
+    // It encodes nothing, so a waiting tessellation run with held draws goes on across it.
+    auto command = [signal = std::move(signal),
+                    done = deferred_signals_done](Metal::Encoder&) mutable {
         BbCopy::AfterCopies([signal = std::move(signal), done = std::move(done)] {
             signal();
             done->fetch_add(1, std::memory_order_release);
         });
-    });
+    };
+    if (draw_runs.HoldsDraws()) {
+        RecordCommand(std::move(command));
+    } else {
+        Record(std::move(command));
+    }
     KickRecording(true);
 }
 
@@ -589,6 +604,15 @@ u64 Scheduler::SubmitExecution() {
     const u64 tick = timeline.Committed(draw_runs.Submit(encoder));
     debug_groups = 0; // Encoder::Submit closed them
     draw_runs.ReportSkips(); // dropped draws by reason, every 5 s when there are any
+    if (BbStats::enabled) {
+        const auto& runs = draw_runs.GetCounters();
+        const u64 run_count = runs.runs.load(std::memory_order_relaxed);
+        const u64 held = runs.held_draws.load(std::memory_order_relaxed);
+        BbStats::tess_runs.fetch_add(run_count - runs_reported, std::memory_order_relaxed);
+        BbStats::held_draws.fetch_add(held - held_reported, std::memory_order_relaxed);
+        runs_reported = run_count;
+        held_reported = held;
+    }
     BbStats::queue_submit_ns.fetch_add(bbport::CyclesToNs(bbport::CpuCycles() - submit_start),
                                        std::memory_order_relaxed);
     BbStats::queue_submits.fetch_add(1, std::memory_order_relaxed);

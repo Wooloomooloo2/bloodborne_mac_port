@@ -190,4 +190,6 @@ inline std::atomic<std::uint64_t> background_builds{0}, background_build_ns{0};
 inline std::atomic<std::uint64_t> compile_skipped_draws{0};
 /// Draws with real tessellation, and rect/quad lists (emulated with tessellation).
 inline std::atomic<std::uint64_t> tess_draws{0}, rect_draws{0};
+/// bbport: tessellation runs drawn, and plain draws held in them (Metal::Draw::Runs).
+inline std::atomic<std::uint64_t> tess_runs{0}, held_draws{0};
 } // namespace BbStats

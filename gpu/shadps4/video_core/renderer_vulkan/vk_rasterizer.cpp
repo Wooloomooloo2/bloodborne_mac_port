@@ -147,8 +147,20 @@ Metal::Draw::Runs::Graphics DrawPipelines(const GraphicsPipeline& pipeline) {
         return {};
     }
     // Guest shaders reach only the arena (ordered by the Runtime's barriers: a plain access for
-    // the Encoder) and tracked buffers.
-    return {pipeline.Render(), pipeline.Tessellation(), pipeline.Geometry(), Metal::Access::Read};
+    // the Encoder) and tracked buffers. Image stores and atomics Metal orders by encoder order:
+    // those draws are not held in tessellation runs (Metal::Draw::Runs).
+    bool writes_images = false;
+    for (const auto* stage : pipeline.GetStages()) {
+        if (!stage) {
+            continue;
+        }
+        writes_images = writes_images || stage->has_storage_images;
+        for (const auto& image : stage->images) {
+            writes_images = writes_images || image.is_written || image.is_atomic;
+        }
+    }
+    return {pipeline.Render(), pipeline.Tessellation(), pipeline.Geometry(), Metal::Access::Read,
+            writes_images};
 }
 
 /// Recording thread: the same for a compute pipeline (an empty view: skipped and counted).
