@@ -94,6 +94,8 @@ void *runtime_low_map(size_t size, int prot);
 void *runtime_low_alloc(size_t size);
 /* runtime_hooks.c: one lock around the engine paths that share the immediate GX context. */
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size);
+/* Reject patches that change active hook prologues or the retained timed wait. */
+const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, size_t size);
 void runtime_context_lock_stats(void);
 /* runtime_thread.c (macOS): CPU time of the game's main thread (0) or the calling thread (1). */
 uint64_t runtime_thread_cpu_ns(int which);

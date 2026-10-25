@@ -89,7 +89,13 @@ Default enablement comes from the file's `isEnabled`; the launcher's selection i
 Supported line types: `bytes`, `bytes16/32/64`, `float32/64`, `utf8`, `utf16`.
 A patch with `mask` lines (pattern search) or with an address outside the eboot is skipped
 entirely, with a message in the log. Third-party patches are applied after the built-in ones
-(`patches/Bloodborne.xml`): on overlap the third-party patch wins. From the terminal:
+(`patches/Bloodborne.xml`). Identical overlaps are accepted. Different bytes from two selected
+patches stop preparation with their names and the first conflicting address. For an intentional
+override, the later patch's `Metadata` can declare `Overrides="Built-in patch name"`, or
+`Overrides="file.xml/Patch name"` for another external patch. Separate multiple names with `;`.
+Writes within one patch retain their original order. Required runtime hook prologues and the
+original timed-condition-wait call remain protected even with an override declaration.
+See [patch safety](PATCH_SAFETY.md). From the terminal:
 `BB_PATCHES_DIR=/path BB_PATCHES_CONFIG=/path/patches.json bash run.sh`.
 
 Patches that replace pointers in tables (such as `60 FPS++` and `90 FPS++`) are relocated by

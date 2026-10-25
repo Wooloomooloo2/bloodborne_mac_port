@@ -7,6 +7,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include "runtime.h"
+#include "runtime_patch_guard.h"
 #include "gpu/bbgpu.h"
 #include "gpu_process.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
@@ -560,6 +561,10 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
     char magic[8];
     if (!f || fread(magic,1,8,f)!=8 || memcmp(magic,"BBPATCH2",8)) fail("invalid patch file");
     uint64_t base=read64(f), count=read64(f), bytes=0, rebased=0;
+    const char *conflict=NULL;
+    int checked=runtime_validate_patch_set(f,count,&conflict);
+    if (checked==2) { fprintf(stderr,"Patch conflict: %s\n",conflict); fail("patch set changes required runtime code"); }
+    if (checked) fail("bad patch entry or file extent");
     unsigned char data[4096];
     for (uint64_t i=0;i<count;++i) {
         uint64_t offset=read64(f), length=read64(f);
