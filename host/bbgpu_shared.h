@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include "../gpu/bbmac_settings.h"
 
 #ifdef __cplusplus
 #define BBGPU_ALIGNAS(n) alignas(n)
@@ -34,7 +35,7 @@
 #define BBGPU_GUEST_MAX UINT64_C(0xfc00000000)
 
 #define BBGPU_SHARED_MAGIC 0x31424742u /* "BGB1" */
-#define BBGPU_SHARED_VERSION 4u /* 3: command buffer copy arena; 4: game fault counters */
+#define BBGPU_SHARED_VERSION 5u /* 4: game fault counters; 5: native Mac Settings snapshot */
 #define BBGPU_CONTROL_SIZE (UINT64_C(4) << 20) /* control block and rings */
 /* Command buffer copies (game side, at submit; the host parses these): the game may rewrite its
  * command buffers once the submit returns, before the host has parsed them. */
@@ -70,6 +71,7 @@ enum {
     BBGPU_REC_VERIFY,              /* BbGpuVerifyRecord: mirror check, answered on the control port */
     BBGPU_REC_START,               /* BbGpuStart (request): start the renderer with the configuration */
     BBGPU_REC_TEXT_BEGIN,          /* BbGpuTextBegin (request): open the window's text entry (IME) */
+    BBGPU_REC_MAC_SETTING,         /* BbGpuMacSetting: async native menu edit, no reply */
     BBGPU_REC_COUNT,
 };
 
@@ -141,6 +143,8 @@ typedef struct {
 typedef struct { BbGpuRecord r; uint32_t slot, pad; } BbGpuStart; /* configuration: in the block */
 /* flags: 1 = password entry (the window shows the typed text as dots). */
 typedef struct { BbGpuRecord r; uint32_t slot, flags; char initial[512], prompt[128]; } BbGpuTextBegin;
+typedef struct { BbGpuRecord r; uint32_t field; int32_t value; } BbGpuMacSetting;
+BBGPU_STATIC_ASSERT(sizeof(BbGpuMacSetting) == 16, "native setting record ABI");
 
 typedef struct { BbGpuRecord r; uint32_t id, seq; } BbGpuIrq;
 typedef struct { BbGpuRecord r; uint64_t address, size; uint32_t read, write, seq, pad; } BbGpuProtect;
@@ -192,6 +196,9 @@ typedef struct {
      * for the game's pad emulation; keys_valid once written. Input proper is M5. */
     uint32_t keys_valid, overlay_captures; /* overlay_captures: the settings menu is open */
     uint8_t keys[512];
+    /* Host-owned settings, published before readiness and refreshed with keyboard state.
+     * Game-side menu reads use acquire loads, with no per-frame request/reply traffic. */
+    int32_t mac_settings[BBMAC_COUNT];
     /* Text entry in the host window (IME dialog): text_state 0 typing, 1 confirmed, 2 cancelled;
      * text_seq bumps with each update (written by the host, the game polls). */
     uint32_t text_active, text_state, text_seq, pad1;
