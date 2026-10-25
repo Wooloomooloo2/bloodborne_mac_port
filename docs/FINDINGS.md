@@ -1886,6 +1886,30 @@ M4 Max, benchmark save in Central Yharnam, upscaler off: both 1920x1200 and 2560
 whole scene at that size ("observed scene depth"), the HUD and item boxes sit correctly, 60 FPS
 at the cap. 2560x1600 gets the under-24 GB memory warning like the 1440p ultrawides.
 
+## 2026-10-25: native title-menu Exit Game (PR #76)
+
+The title menu's unused Opinion Box is shown as Exit Game. Its condition and relocated
+callback are guarded against the original 1.09 code; the callback exits the runtime with
+status 0 and the existing GPU-host parent watcher handles renderer/cache shutdown. The
+in-world save-and-return-to-title action stays intact. The generated title movies have
+six animated rows; all three variants and 22 language bundles generate successfully with
+all 26 source hashes unchanged. Warm cache lookup is about 7 ms.
+
+22 asset fixtures, native/Rosetta exit-hook fixtures, existing Mac Settings hooks and
+launch-settings fixtures pass. After merging upstream, both GPU libraries, the runtime
+and both native hosts rebuild with protocol 6 (benchmark fields plus settings snapshot).
+The cross-architecture rings fixture passes: two million records, 500,000 events and
+20,000 requests, with zero corruptions.
+
+Live Exit Game checks now pass on the regular runtime with a fresh profile, and after
+loading Central Yharnam and saving/returning to title using the existing DLC-aware test
+helper and an isolated copied save. In both checks, controller input selected the new
+title command, runtime and native GPU host exited with status 0, the pipeline cache flush
+completed, and no test processes remained. macOS kqueue exit-status events and the launch
+command return code corroborate the logs. No crash/fatal-stop lines were present, and the
+26 original menu assets plus source save copy stayed unchanged. The initial missing-DLC
+check was closed normally and excluded from the menu-exit results. The packaged launcher
+app was not exercised. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
 ## 2026-10-25: benchmark route repeatability (replay clock)
 
 The traversal replay stepped by the GPU host's presented frames, which lag the game by a varying
@@ -1967,3 +1991,14 @@ SDL signal fix passed a restored-game stop with both guest and renderer confirme
 Split validation: both production-Process termination tests pass on macOS with x86 SDL,
 including removal of the merged view and unchanged synthetic source/mod files. Launcher
 build/model tests pass. No private save data is used by these regression tests.
+
+## 2026-10-25: native menu PR #76 refreshed against 0.5.7
+
+Merged `af0fae2` while preserving the native menus, upstream mouse input, launch settings,
+benchmark and launcher lifecycle. Shared protocol 8 distinguishes the native settings
+snapshot from upstream's mouse layout (6) and the independent achievements PR's layout
+(7). Both GPU architectures, the runtime, both GPU hosts and launcher compile. Native
+settings with mouse-preference persistence, menu/Exit Game hooks, asset/mod/patch fixtures,
+launcher model/Stop lifecycle, runtime/semaphore/pad, launch/restart settings, shared rings
+and the Metal overlay (plain and validation layer) pass. Gameplay and packaged-app checks
+were not repeated. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md#upstream-refresh-25-october-2026).

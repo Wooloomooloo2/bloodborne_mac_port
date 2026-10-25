@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,13 +15,17 @@ namespace BbSettings {
 
 namespace {
 
+// Both menus share one ini writer. Hold this across read/merge/write so a native edit and
+// the renderer's Save cannot each truncate the other's preserved launch or future keys.
+std::mutex file_mutex;
+
 const char* Path() {
     const char* env = std::getenv("BB_CONFIG");
     return env && env[0] ? env : "bbport.ini";
 }
 
-/// Keys Save() writes; every other key=value line of the file is kept as it is (the launcher's
-/// fps_cap and fullscreen, the removed FSR 4 checks fsr4_auto_exposure/fsr4_invert_jitter, ...).
+/// Keys Save() writes; every other key=value line of the file is kept as it is (future launcher
+/// options, the removed FSR 4 checks fsr4_auto_exposure/fsr4_invert_jitter, ...).
 /// `renderer` (metal|vulkan until 0.5.2) is owned but no longer written: saving drops it.
 bool OwnedKey(const std::string& key) {
     static constexpr const char* owned[] = {
@@ -28,7 +33,8 @@ bool OwnedKey(const std::string& key) {
         "reactive_scale", "reactive_threshold", "reactive_max", "debug_view", "show_fps",
         "frame_pacing",
         "model_lod", "output_res",
-        "live_resolution", "shader_compile", "renderer",
+        "live_resolution", "shader_compile", "renderer", "fps_cap", "game_timing",
+        "fullscreen", "metal_hud", "texture_compression",
         "mouse_look", "mouse_sensitivity", "mouse_invert_y"};
     for (const char* k : owned) {
         if (key == k) {
@@ -80,6 +86,16 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "frame_pacing") {
         v.frame_pacing = i != 0;
+    } else if (key == "fps_cap") {
+        if (i == 30 || i == 40 || i == 60 || i == 90 || i == 120) v.fps_cap = i;
+    } else if (key == "game_timing") {
+        v.game_timing = value == "variable" ? 1 : 0;
+    } else if (key == "fullscreen") {
+        v.fullscreen = i != 0;
+    } else if (key == "metal_hud") {
+        v.metal_hud = i != 0;
+    } else if (key == "texture_compression") {
+        v.texture_compression = i != 0;
     } else if (key == "mouse_look") {
         v.mouse_look = i != 0;
     } else if (key == "mouse_sensitivity") {
@@ -124,7 +140,13 @@ std::array<int, 2> OutputSize() {
 }
 
 void Load() {
+    std::scoped_lock lock{file_mutex};
     auto& v = Get();
+    v.fps_cap = 60;
+    v.game_timing = 0;
+    v.fullscreen = false;
+    v.metal_hud = false;
+    v.texture_compression = true;
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = Effects[e].default_on;
     }
@@ -193,6 +215,11 @@ void Load() {
     v.startup_model_lod = v.model_lod;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_fps_cap = v.fps_cap;
+    v.startup_game_timing = v.game_timing;
+    v.startup_fullscreen = v.fullscreen;
+    v.startup_metal_hud = v.metal_hud;
+    v.startup_texture_compression = v.texture_compression;
 }
 
 void ConfigureUpscalerSupport(bool metalfx, bool fsr3) {
@@ -265,6 +292,7 @@ bool ResolutionNeedsRestart() {
 }
 
 void Save() {
+    std::scoped_lock lock{file_mutex};
     const auto& v = Get();
     std::vector<std::string> kept;
     if (FILE* old = std::fopen(Path(), "r")) {
@@ -315,6 +343,11 @@ void Save() {
     static constexpr const char* compile_modes[] = {"wait", "skip", "balanced"};
     std::fprintf(file, "shader_compile=%s\n",
                  compile_modes[std::clamp(v.shader_compile.load(), 0, 2)]);
+    std::fprintf(file, "fps_cap=%d\ngame_timing=%s\nfullscreen=%d\nmetal_hud=%d\n"
+                       "texture_compression=%d\n",
+                 v.fps_cap.load(), v.game_timing ? "variable" : "fixed",
+                 int(v.fullscreen.load()), int(v.metal_hud.load()),
+                 int(v.texture_compression.load()));
     for (const std::string& line : kept) {
         std::fprintf(file, "%s\n", line.c_str());
     }
@@ -349,6 +382,7 @@ int show_launcher = -2; ///< -2: not read yet
 } // namespace
 
 int ShowLauncher() {
+    std::scoped_lock lock{file_mutex};
     if (show_launcher == -2) {
         show_launcher = -1;
         if (LaunchConfPath()) {
@@ -367,6 +401,7 @@ int ShowLauncher() {
 }
 
 void SetShowLauncher(bool show) {
+    std::scoped_lock lock{file_mutex};
     if (!LaunchConfPath()) {
         return;
     }

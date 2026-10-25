@@ -84,6 +84,7 @@ done
 # Launch scripts and patches (run.sh runs them; BB_PREBUILT=1 skips building).
 install -m755 run.sh "$contents/Resources/port/"
 install -m644 scripts/*.py "$contents/Resources/port/scripts/"
+install -m644 scripts/mac_menu_messages.json "$contents/Resources/port/scripts/"
 install -m644 scripts/launch_settings.sh "$contents/Resources/port/scripts/"
 cp -R patches "$contents/Resources/port/patches"
 if [[ -f benchmark/route.pad && -d benchmark/savedata ]]; then
@@ -118,6 +119,8 @@ find "$py" -name __pycache__ -type d -prune -exec rm -rf {} +
 # Licences: the port's (GPL), Python's and the bundled or compiled-in third-party code.
 lic=$contents/Resources/licenses
 cp LICENSE "$lic/LICENSE-bloodborne-mac-port.txt"
+cp LICENSES/GPL-3.0-or-later.txt "$lic/LICENSE-native-menu.txt"
+cp docs/NATIVE_MAC_SETTINGS.md "$lic/native-menu-provenance.txt"
 cp "$stdlib/LICENSE.txt" "$lic/LICENSE-Python.txt"
 for pair in SDL:LICENSE.txt Vulkan-Headers:LICENSE.md SPIRV-Cross:LICENSE FFmpeg:COPYING.LGPLv2.1 \
             FFmpeg:LICENSE.md fmt:LICENSE magic_enum:LICENSE miniz:LICENSE robin-map:LICENSE \
@@ -157,8 +160,9 @@ commit=$(git rev-parse --short HEAD)
 cat > "$lic/README.txt" <<EOF
 Bloodborne macOS port $version (commit $commit)
 Source code: https://github.com/Wooloomooloo2/bloodborne_mac_port/tree/$commit
-The port is licensed GPL-2.0-or-later (LICENSE-bloodborne-mac-port.txt); the other files are
-the licences of the libraries and code it bundles or compiles in. No game files are included.
+Existing port sources are GPL-2.0-or-later (LICENSE-bloodborne-mac-port.txt). The native menu
+adapters and combined runtime retain GPL-3.0-or-later (LICENSE-native-menu.txt).
+The other files are the licences of bundled libraries. No game files are included.
 EOF
 
 cat > "$contents/Info.plist" <<EOF

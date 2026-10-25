@@ -90,3 +90,24 @@ echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, game_timi
     [[ $BB_DMEM_MB == 10240 ]]
 ) || { echo 'FAIL: ultrawide restart/disable'; exit 1; }
 echo 'PASS: native ultrawide restart and disable'
+
+# Config-derived values must be recomputed on restart, including enabled -> disabled.
+(
+    source scripts/launch_settings.sh
+    unset BB_FPS BB_FPS_AUTO BB_FPS_LIMIT BB_FULLSCREEN MTL_HUD_ENABLED BB_LAZY_TEXTURE_USAGE
+    printf 'fps_cap=60\nfullscreen=1\nmetal_hud=1\ntexture_compression=0\n' > "$ini"
+    bb_launch_settings "$ini"
+    [[ $BB_FPS == 60 && $BB_FPS_LIMIT == 60 && $BB_FULLSCREEN == 1 && $MTL_HUD_ENABLED == 1 && $BB_LAZY_TEXTURE_USAGE == 0 ]]
+    printf 'fps_cap=90\nfullscreen=0\nmetal_hud=0\ntexture_compression=1\n' > "$ini"
+    export BB_VBLANK_HZ=60 BB_LAUNCH_AUTO_VBLANK=60
+    bb_launch_settings "$ini"
+    [[ -z ${BB_VBLANK_HZ:-} && -z ${BB_LAUNCH_AUTO_VBLANK:-} ]]
+    [[ $BB_FPS == 90 && $BB_FPS_LIMIT == 90 && -z ${BB_FULLSCREEN:-} && -z ${MTL_HUD_ENABLED:-} && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]
+    # An explicit override changed after the first launch stays authoritative.
+    export BB_FPS_LIMIT=120 BB_FULLSCREEN=0 MTL_HUD_ENABLED=0 BB_LAZY_TEXTURE_USAGE=1
+    export BB_VBLANK_HZ=480
+    bb_launch_settings "$ini"
+    [[ $BB_VBLANK_HZ == 480 ]]
+    [[ $BB_FPS_LIMIT == 120 && $BB_FULLSCREEN == 0 && $MTL_HUD_ENABLED == 0 && $BB_LAZY_TEXTURE_USAGE == 1 ]]
+) || { echo 'FAIL: native menu launch settings restart'; exit 1; }
+echo 'PASS: native menu launch settings restart'

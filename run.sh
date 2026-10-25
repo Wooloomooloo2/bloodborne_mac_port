@@ -45,13 +45,31 @@ if [[ ! -f $game/eboot.bin ]]; then echo "No eboot.bin in $game (set BB_GAME_DIR
 # Hooks and patches use the addresses of the 1.09 executable (BB_SKIP_GAME_CHECK=1 skips this).
 if ! "$PYTHON" scripts/game_check.py "$game" >&2; then exit 1; fi
 original_game=$game
+mod_views=()
+cleanup_mod_views() {
+    for view in "${mod_views[@]}"; do
+        "$PYTHON" -c 'import shutil,sys; shutil.rmtree(sys.argv[1])' "$view"
+    done
+}
 game=$("$PYTHON" scripts/mods.py "$game" --out "$out" \
     --mods-dir "${BB_MODS_DIR:-$data/mods}" --config "${BB_MODS_CONFIG:-$data/mods.json}" \
     --enabled "${BB_MODS_ENABLED:-1}")
 # A private merged view lasts for this launch, including restarts. Cleanup only our own view.
 if [[ $game != "$(realpath "$original_game")" ]]; then
     mod_game=$game
-    trap '"$PYTHON" -c '\''import shutil,sys; shutil.rmtree(sys.argv[1])'\'' "$mod_game"' EXIT
+    mod_views+=("$mod_game")
+    trap cleanup_mod_views EXIT
+fi
+unset BB_MAC_SETTINGS_READY BB_EXIT_GAME_READY
+if [[ ${BB_MAC_SETTINGS:-1} != 0 || ${BB_EXIT_GAME:-1} != 0 ]]; then
+    if mac_game=$("$PYTHON" scripts/mac_menu.py "$game" "$out") && [[ -n $mac_game && -d $mac_game ]]; then
+        game=$mac_game
+        mod_game=$mac_game
+        mod_views+=("$mac_game")
+        export BB_MAC_SETTINGS_READY=1
+        export BB_EXIT_GAME_READY=1
+        trap cleanup_mod_views EXIT
+    fi
 fi
 "$PYTHON" scripts/prepare.py "$game" --out "$out"
 "$PYTHON" scripts/link_libc.py "$game" --out "$out"
@@ -113,6 +131,7 @@ fi
     --patches-dir "${BB_PATCHES_DIR:-$data/patches}" --patches-config "${BB_PATCHES_CONFIG:-$data/patches.json}"
 if [[ -z ${BB_VBLANK_HZ:-} ]]; then
     case $fps in uncap) export BB_VBLANK_HZ=0 ;; 90) export BB_VBLANK_HZ=90 ;; *) export BB_VBLANK_HZ=60 ;; esac
+    export BB_LAUNCH_AUTO_VBLANK=$BB_VBLANK_HZ
 fi
 if [[ -n ${BB_PREBUILT:-} ]]; then
     probe=${BB_PROBE:-bin/bb-probe}

@@ -1,0 +1,287 @@
+{
+  "126000": {
+    "text": "Mac Settings"
+  },
+  "126001": {
+    "text": "Mac Settings",
+    "help": "Renderer, performance and launch settings for the Mac port."
+  },
+  "126010": {
+    "text": "Upscaling"
+  },
+  "126011": {
+    "text": "Quality"
+  },
+  "126012": {
+    "text": "Output"
+  },
+  "126013": {
+    "text": "Renderer"
+  },
+  "126014": {
+    "text": "Effects"
+  },
+  "126015": {
+    "text": "Tools"
+  },
+  "126016": {
+    "text": "Resolution"
+  },
+  "126017": {
+    "text": "Launch"
+  },
+  "126018": {
+    "text": "Restart"
+  },
+  "126020": {
+    "text": "Page",
+    "help": "Left/Right on Page, or L1/R1 (1/3). Auto-save. * Restart required."
+  },
+  "126021": {
+    "text": "*"
+  },
+  "126022": {
+    "text": "Confirm restart",
+    "help": "Enable this, then Restart now. Save your game progress before restarting."
+  },
+  "126023": {
+    "text": "Launcher only"
+  },
+  "126024": {
+    "text": "Native ultrawide"
+  },
+  "126100": {
+    "text": "Upscaler",
+    "help": "Unavailable saved renderers are kept until you choose a supported renderer."
+  },
+  "126101": {
+    "text": "Upscaling preset",
+    "help": "Reconstruction quality. Startup resolution mode may require a restart."
+  },
+  "126102": {
+    "text": "Output resolution",
+    "help": "16:9 output size. May require a restart. Set native ultrawide in the launcher."
+  },
+  "126103": {
+    "text": "Sharpen",
+    "help": "Enable sharpening when supported by the selected upscaler."
+  },
+  "126104": {
+    "text": "Sharpness",
+    "help": "0-200 represents 0.00-2.00, in steps of 0.01."
+  },
+  "126105": {
+    "text": "Temporal jitter",
+    "help": "Jitter the camera for temporal reconstruction."
+  },
+  "126106": {
+    "text": "Object motion vectors",
+    "help": "Object motion vectors improve temporal reconstruction. Restart required."
+  },
+  "126107": {
+    "text": "Reactive mask",
+    "help": "Generate a reactive mask for temporal reconstruction."
+  },
+  "126108": {
+    "text": "Reactive scale",
+    "help": "0-160 represents 0.0-16.0, in steps of 0.1."
+  },
+  "126109": {
+    "text": "Reactive threshold",
+    "help": "0-100 represents 0.00-1.00."
+  },
+  "126110": {
+    "text": "Reactive maximum",
+    "help": "0-100 represents 0.00-1.00."
+  },
+  "126111": {
+    "text": "Debug view",
+    "help": "Show the normal image, reactive mask or motion vectors."
+  },
+  "126112": {
+    "text": "FPS counter",
+    "help": "Show the renderer FPS counter."
+  },
+  "126113": {
+    "text": "Frame pacing",
+    "help": "Pace presentation evenly."
+  },
+  "126114": {
+    "text": "Model detail",
+    "help": "0 highest, 1 high, 2 game default, 3 low, 4 lowest. Restart required."
+  },
+  "126115": {
+    "text": "Live resolution",
+    "help": "Auto, startup patches or live resizing. Restart required."
+  },
+  "126116": {
+    "text": "Shader compilation",
+    "help": "Wait: complete draws. Skip: missing draws during compilation. Balanced: limit waits."
+  },
+  "126117": {
+    "text": "Chromatic aberration",
+    "help": "Game effect. Restart required."
+  },
+  "126118": {
+    "text": "Depth of field",
+    "help": "Game effect. Restart required."
+  },
+  "126119": {
+    "text": "Motion blur",
+    "help": "Game effect. Restart required."
+  },
+  "126120": {
+    "text": "Ambient occlusion",
+    "help": "Game SSAO effect. Restart required."
+  },
+  "126121": {
+    "text": "Game anti-aliasing",
+    "help": "Built-in game anti-aliasing. Restart required."
+  },
+  "126122": {
+    "text": "Dynamic shadows",
+    "help": "Shadows from dynamic lights. Restart required."
+  },
+  "126123": {
+    "text": "Screen-space reflections",
+    "help": "Community SSR patch. Restart required."
+  },
+  "126124": {
+    "text": "Skip intro",
+    "help": "Skip the opening logos. Restart required."
+  },
+  "126125": {
+    "text": "Debug camera",
+    "help": "Community debug camera patch. Restart required."
+  },
+  "126126": {
+    "text": "Debug menu",
+    "help": "Community debug menu patch. Restart required."
+  },
+  "126127": {
+    "text": "Frame cap",
+    "help": "30, 40, 60, 90 or 120 real frames per second. Restart required."
+  },
+  "126128": {
+    "text": "Variable game timing",
+    "help": "Off: fixed at 30/60/90. On: variable timing. 40/120 always variable. Restart required."
+  },
+  "126129": {
+    "text": "Fullscreen",
+    "help": "Open the window fullscreen on the next launch. Restart required."
+  },
+  "126130": {
+    "text": "Metal performance HUD",
+    "help": "Show Apple Metal performance statistics on the next launch. Restart required."
+  },
+  "126131": {
+    "text": "Texture compression",
+    "help": "Use Metal lossless texture compression. Restart required."
+  },
+  "126132": {
+    "text": "Show launcher at start",
+    "help": "Available only when this session was started by the launcher."
+  },
+  "126133": {
+    "text": "Restart required",
+    "help": ""
+  },
+  "126134": {
+    "text": "Renderer capabilities",
+    "help": ""
+  },
+  "126135": {
+    "text": "Restart now",
+    "help": "Enable Confirm restart first. Restart reloads the game with saved settings."
+  },
+  "126300": {
+    "text": "Off"
+  },
+  "126301": {
+    "text": "FSR 3.1"
+  },
+  "126302": {
+    "text": "FSR 4 (unavailable)"
+  },
+  "126303": {
+    "text": "FSR 4.1.1 (unavailable)"
+  },
+  "126304": {
+    "text": "TAA"
+  },
+  "126305": {
+    "text": "MetalFX"
+  },
+  "126310": {
+    "text": "Native AA"
+  },
+  "126311": {
+    "text": "Quality"
+  },
+  "126312": {
+    "text": "Balanced"
+  },
+  "126313": {
+    "text": "Performance"
+  },
+  "126314": {
+    "text": "Ultra Performance"
+  },
+  "126320": {
+    "text": "1280 x 720"
+  },
+  "126321": {
+    "text": "1920 x 1080"
+  },
+  "126322": {
+    "text": "2560 x 1440"
+  },
+  "126323": {
+    "text": "3456 x 1944"
+  },
+  "126324": {
+    "text": "3840 x 2160"
+  },
+  "126330": {
+    "text": "Wait"
+  },
+  "126331": {
+    "text": "Skip"
+  },
+  "126332": {
+    "text": "Balanced"
+  },
+  "126340": {
+    "text": "Normal"
+  },
+  "126341": {
+    "text": "Reactive mask"
+  },
+  "126342": {
+    "text": "Motion vectors"
+  },
+  "126350": {
+    "text": "Auto"
+  },
+  "126351": {
+    "text": "Startup patches"
+  },
+  "126352": {
+    "text": "Live resizing"
+  },
+  "126360": {
+    "text": "30 FPS"
+  },
+  "126361": {
+    "text": "40 FPS"
+  },
+  "126362": {
+    "text": "60 FPS"
+  },
+  "126363": {
+    "text": "90 FPS"
+  },
+  "126364": {
+    "text": "120 FPS"
+  }
+}

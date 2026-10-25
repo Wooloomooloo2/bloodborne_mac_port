@@ -5,6 +5,7 @@
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
+void runtime_mac_settings_pad(uint32_t *buttons) { (void)buttons; }
 int bbgpu_mouse_look_enabled(void) { return 0; }
 const bool *bbgpu_split_keyboard(void) { return NULL; }
 uint32_t bbgpu_bench_frame_draws(void) { return 0; }
