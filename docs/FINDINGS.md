@@ -1895,3 +1895,14 @@ once per frame (7815 reads = 7815 frames shown), so the replay now counts pad re
 with the new clock (M4 Max, test data): 0-5% in every block. The route file's wall-clock times
 still make the character bump walls/items near spots where the recording hitched (the same way
 every run); re-recording with frame numbers is planned (DESIGN_BENCHMARK "Next").
+
+## 2026-10-25: FPS++ patches wrote RET into the game's condition wait
+
+30/60/90/Uncap FPS++ write `C3 90 90 90 90` at 0x02483EC1, the timed-wait `call` inside the
+game's condition wait (0x02483E80: push rbp/r15/r14/rbx/rax; untimed waits, edx = -1, take another
+call). A RET there returns to the saved rax: any timed wait would crash (one caller would jump to
+0). Never seen, so timed waits are evidently not reached in normal play. patches.py now drops that
+write from every patch file (UNSAFE_WRITES), leaving the game's own wait. M4 Max, test data: 60 FPS
+benchmark walk 59.9 FPS, 8 frames > 33 ms (as before), same route; 120 cap with Uncap FPS++ 60 s,
+119.4 FPS, no crash. Enemy Control is now refused alongside an FPS patch (overlapping bytes at
+0x1972a7d). Source: an assessment comparing the port with Paleblood, verified by disassembly.

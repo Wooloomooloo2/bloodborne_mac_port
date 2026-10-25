@@ -1,11 +1,13 @@
-# Legacy FPS patches and runtime hook protection
+# Runtime hook protection and selected patch conflicts
 
-The built-in FPS++ sets retain the original timed-condition-wait call at PS4
-address `0x02483ec1`. The community edits replaced it with `RET` before the
-function restored its stack and saved registers. REA inspection of the 1.09
-image confirms that this is unsafe if the timed branch executes. Previously
-recorded calls used the untimed branch; this change is not tied to a reproduced
-gameplay crash or a claim about moving-lift collision.
+Upstream commit `551c84b` already filters unsafe writes over the original
+timed-condition-wait call at PS4 address `0x02483ec1` and rejects the known
+Enemy Control/FPS combination. This change retains those fixes and adds general
+cross-patch disagreement checks plus native protection of active hook code and
+the retained call, including binary patch files that bypass the XML compiler.
+The community `RET` edit bypassed stack cleanup if the timed branch executed;
+the REA evidence below confirms that instruction hazard. No new gameplay crash
+or moving-lift correction is claimed here.
 
 Selected patches are compared using their effective bytes after replaying each
 patch's ordered writes. Equal cross-patch writes are accepted. Disagreements
