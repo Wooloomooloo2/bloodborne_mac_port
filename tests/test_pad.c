@@ -13,6 +13,7 @@ uint32_t bbgpu_bench_frame_draws(void) { return 0; }
 uint64_t bbgpu_bench_host_flips(void) { return 0; }
 void bbgpu_bench_set_phase(uint32_t phase, const char *error) { (void)phase; (void)error; }
 volatile int runtime_bench_map_opened;
+void runtime_mac_settings_pad(uint32_t *buttons) { (void)buttons; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
