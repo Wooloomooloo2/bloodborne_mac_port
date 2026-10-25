@@ -128,7 +128,7 @@ BB_GPU_LOG=debug BB_GAME_DIR=/path/to/CUSA03173 bash run.sh 2>&1 | tee ~/Library
 | `the shadNet server rejected this client` | the server refuses this build's version string | `BB_SHADNET_CLIENT_VERSION` in `launch.conf`; see the README |
 | sign posted (`summon_messenger/create ... status=200`) but never requested | the host cannot see it: other pool, other password, or far away | compare pool and password with the host |
 | `Handshake[...] SEND kind=1` repeating, then `DEAD (errorCode=0x80552711)` (shadNet pool) | your offers never get an answer: a router in the way | switch to The Hunter's Dream pool |
-| `SSL connection failed` now and then | a known intermittent failure of the game's own HTTPS calls | harmless for play; being investigated |
+| `SSL connection failed` now and then | a historical report from the game's HTTPS calls; not reproduced in the current public-endpoint check | preserve the error log for a gameplay reproduction; see [verification results and limits](HTTPS_VERIFICATION.md) |
 
 `online=0` (or removing the line, or **Play online** off in the launcher) returns the game to
 offline play; `upnp=0` stops the port mapping; `BB_DISABLE_HTTPS=1` turns certificate checks
