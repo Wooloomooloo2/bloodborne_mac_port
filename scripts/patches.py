@@ -323,7 +323,37 @@ def unsafe_write(offset, data):
     return None
 
 
-def compile_patches(xml, names, app_version, segments):
+class PatchAudit:
+    """Compare effective bytes between selected patches, preserving each patch's order.
+
+    A metadata Overrides="name;file.xml/name" declaration permits an intentional
+    cross-patch replacement. Same-byte overlaps and later writes within a patch
+    need no declaration. Native runtime hook protection cannot be overridden.
+    """
+    def __init__(self):
+        self.bytes = {}
+
+    def add(self, source, writes, overrides=()):
+        effective = {offset+i: byte for offset, data in writes for i, byte in enumerate(data)}
+        overrides = set(overrides)
+        for address, byte in effective.items():
+            previous = self.bytes.get(address)
+            if previous and previous[0] != byte and not previous[1] <= overrides:
+                owners = ', '.join(sorted(previous[1]))
+                raise ValueError(f'{source} conflicts with {owners} at {address+EBOOT_BASE:#010x}; '
+                                 'select only one patch, or declare an intentional Overrides entry')
+        for address, byte in effective.items():
+            previous = self.bytes.get(address)
+            owners = previous[1] | {source} if previous and previous[0] == byte else {source}
+            self.bytes[address] = byte, owners
+        return writes
+
+
+def patch_overrides(meta):
+    return [name.strip() for name in meta.get('Overrides', '').split(';') if name.strip()]
+
+
+def compile_patches(xml, names, app_version, segments, audit=None):
     found={}
     for meta in ET.parse(xml).getroot().iter('Metadata'):
         if meta.get('Name') in names and meta.get('AppVer')==app_version and meta.get('AppElf','eboot.bin')=='eboot.bin':
@@ -331,7 +361,9 @@ def compile_patches(xml, names, app_version, segments):
     missing=[n for n in names if n not in found]
     if missing: raise ValueError(f'patches not found for app version {app_version}: {missing}')
     writes=[]
+    audit = audit if audit is not None else PatchAudit()
     for name in names:
+        ours=[]
         for line in found[name].iter('Line'):
             offset=int(line.get('Address'),0)-EBOOT_BASE
             data=encode(line)
@@ -339,7 +371,8 @@ def compile_patches(xml, names, app_version, segments):
                 print(f'Warning: {name}: address {line.get("Address")} is outside the eboot; skipping', file=sys.stderr)
                 continue
             if unsafe_write(offset,data): continue  # see UNSAFE_WRITES
-            writes.append((offset,data))
+            ours.append((offset,data))
+        writes += audit.add(name, ours, patch_overrides(found[name]))
     return writes
 
 
@@ -378,9 +411,10 @@ def external_selection(found, config):
             if key in enabled or (key not in disabled and meta.get('isEnabled','false').lower()=='true')]
 
 
-def compile_external(selected, segments):
+def compile_external(selected, segments, audit=None):
     """Writes of the selected external patches; a patch with unsupported lines is skipped whole."""
     writes=[]
+    audit = audit if audit is not None else PatchAudit()
     for key,_,meta in selected:
         try:
             ours=[]
@@ -396,7 +430,7 @@ def compile_external(selected, segments):
         except ValueError as error:
             print(f'Patches: skipped {key}: {error}',file=sys.stderr)
             continue
-        writes+=ours
+        writes += audit.add(key, ours, patch_overrides(meta))
         print(f'Patches: external {key} ({len(ours)} writes)')
     return writes
 
@@ -457,9 +491,10 @@ def main():
     if wide and (a.render_res or any(n.startswith('Resolution Patch ') or
                                     n == 'Increased Graphics Heap Sizes' for n in names)):
         raise ValueError('Ultrawide already selects the native resolution; remove conflicting resolution/heap overrides')
-    writes=compile_patches(a.xml,names,a.app_version,segments)
+    audit=PatchAudit()
+    writes=compile_patches(a.xml,names,a.app_version,segments,audit)
     if wide:
-        writes += ultrawide_writes(a.xml, wide, a.app_version, segments)
+        writes += audit.add(wide, ultrawide_writes(a.xml, wide, a.app_version, segments))
         names.append(f'Native scene/UI with bounded texture pool: {wide}')
     size=render_size(read_settings(a.settings),a.render_res) if a.render_res else None
     # The UI keeps the game's 1920x1080 coordinates even for a larger output: the port draws
@@ -467,16 +502,17 @@ def main():
     # (UiComposition::NativeViewport), so it is rasterized at the output resolution.
     ui=OUTPUT_SIZE
     if size:
-        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
+        writes+=audit.add('Render resolution',resolution_writes(a.xml,size,a.app_version,segments,ui))
         if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
             heap='Increased Graphics Heap Sizes'
-            writes+=compile_patches(a.xml,[heap],a.app_version,segments)
+            writes+=compile_patches(a.xml,[heap],a.app_version,segments,audit)
             names.append(heap)
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
     if a.patches_dir:
-        # After the built-in ones: an external patch of the same bytes wins.
+        # After built-ins. Different bytes require an explicit Overrides entry;
+        # equal writes and a patch's own ordered rewrites remain valid.
         writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
-                                                    a.patches_config),segments)
+                                                    a.patches_config),segments,audit)
     # BBPATCH2: the patch base, so the loader can rebase pointers the patches write into
     # relocated slots (60/90 FPS++ replace function pointers).
     blob=struct.pack('<8sQQ',b'BBPATCH2',EBOOT_BASE,len(writes))

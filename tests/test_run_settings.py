@@ -75,9 +75,11 @@ class RestartResolutionTests(unittest.TestCase):
     def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
         rows = self.run_restarts()
         # 720p Quality, 720p Ultra Performance after a restart, then 1080p (live host targets).
-        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', None])
-        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', None])
-        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', None])
+        # macOS also applies the startup patch at 1080p (patches.scaled_sizes).
+        mac = sys.platform == 'darwin'
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', '640x360' if mac else None])
+        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', '1920x1080' if mac else None])
+        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', '1' if mac else None])
 
     def test_live_resolution_keeps_guest_sizes_native(self):
         rows = self.run_restarts(live=True)
