@@ -679,7 +679,20 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
 
     /// Ends encoding and commits; `tracked` takes a tick. Returns 0 for an untracked commit.
     u64 Finish(bool tracked) {
-        ASSERT_MSG(!in_pass, "Submit inside a render pass");
+        if (in_pass) {
+            // bbport: a submission while a pass is open (seen once in co-op, as a summoned
+            // player loaded in: the scheduler had already counted its pass as ended). A Metal
+            // command buffer cannot commit with a render encoder open, but the pass survives it:
+            // the encoder is closed here and the next draw reopens the pass with load actions,
+            // as after compute or blit work inside a pass. Clears not yet recorded are kept for
+            // that reopening (pass_opened stays false).
+            static std::atomic<int> reported{0};
+            if (reported.fetch_add(1, std::memory_order_relaxed) < 8) {
+                LOG_WARNING(Render, "Submit inside a render pass ({}): the pass continues in the "
+                            "next command buffer",
+                            pass_opened ? "opened" : "not opened yet");
+            }
+        }
         EndRender();
         EndCompute();
         EndBlit();

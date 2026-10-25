@@ -50,6 +50,16 @@ Each item: what was done for now, what the refinement is, and where it lives.
   visibility culling reading stale results (`BB_READBACKS` Relaxed). Unknown whether 0.4.0 does it.
   Repro: long scripted walk from `save-backups/dense-20261017` with before/after snapshots.
 
+- **Metal-native: "Submit inside a render pass" assertion ended a co-op session (2026-10-17,
+  online-shadnet; made survivable).** The first phantom to load in on The Hunter's Dream pool
+  hit `Encoder::Finish`'s `ASSERT_MSG(!in_pass)` (bbgpu-host exited with status 23). The
+  scheduler ends its pass before every submission (`SubmitExecution` → `EndRendering`), so the
+  encoder's `in_pass` and the scheduler's `is_rendering` had come apart; the two direct
+  `BeginRenderPass` users in vk_runtime.cpp (layer resolves, clears) are balanced, so the path is
+  not found yet (no backtrace from the host process). Now `Finish` closes the render encoder,
+  commits, and keeps the pass: the next draw reopens it with load actions, as after compute or
+  blit work inside a pass; a `Submit inside a render pass` warning (first 8) marks it in the log.
+  *Open:* which recorded command begins a pass the scheduler does not count.
 - **Metal-native (M4 → M5): render pipelines declare a depth/stencil format the pass does not
   bind.** Fixed 2026-10-16 (M5 Task 3): `BoundDepthAttachment` (vk_depth_attachment.h) is the one
   rule for the pass's depth attachment and the pipeline key's formats; `MTL_DEBUG_LAYER=1` title +
@@ -408,6 +418,43 @@ Each item: what was done for now, what the refinement is, and where it lives.
   chunk users ("two threads use the recording chunk at once", with both callers and a
   backtrace). Not reproduced in 6 reloads. *Next:* read that report from the next crash, add
   the missing drain there.
+  *2026-10-17 (co-op on The Hunter's Dream, two phantoms in the world, ~40 min in):* the report
+  fired once and the game froze (no frame presented after it; the user closed the window):
+  `bb:DrawRec` from `BufferCache::ObtainBuffer+0xcbc` (SmallGuestCopy → Record) while another
+  thread had entered from `Vulkan::Runtime::CopyBuffer` (its Record). Paths checked and found
+  draining first: the DMA copies (`Rasterizer::CopyBuffer`), queued commands
+  (`Liverpool::ProcessCommands`), the fault relay (`bbgpu_host_fault` → `ReadMemory(assume_locks
+  = false)` → `SendCommand<true>`), `OnWriteFault` / `InvalidateMemory`; stage B advances
+  `consumed` only after a packet's handler returns, so `Drain` does not return early. The
+  remaining `Runtime::CopyBuffer` users are `BufferCache::ReadMemory`'s download (runs on A after
+  a drain, or inline on B/A with `assume_locks`) and `ObtainBuffer`'s upload (line ~489). Still
+  open which thread it was; the log has no thread name for the other side (worth adding to
+  `ReportChunkRace`: the other thread's name, captured with its caller). Workaround for long
+  co-op sessions: `BB_DRAW_PIPE=0` (no stage B, so no chunk race; ~18% slower draw recording).
+  *2026-10-17, later (code review of every thread that can record):* **found and fixed.** The
+  other thread was the GPU command thread itself, through `Liverpool::ProcessCommands`: it
+  drained stage B only `if (num_commands)` *before* the `while (num_commands)` loop, so a
+  command queued between those two reads ran without a drain. The queue is fed by the fault
+  relay thread (`bbgpu_host_fault` → `ReadMemory(assume_locks=false)` → `SendCommand<true>`)
+  and by non-EOP flips; `ProcessCommands` runs before every PM4 packet, the game faults ~1000
+  times a second, so the two-instruction window is hit in a long session. The relayed read
+  fault's download (`ReadMemory` → `DownloadMemory` → `Runtime::CopyBuffer` → `Record`,
+  the reported caller) then raced stage B's draw. The same hole explains the 2026-10-14
+  crash: that download's `scheduler.Finish()` kicks the recorder (`SyncRecording` →
+  `KickRecording`, `record_chunk` momentarily null) while stage B kicked from `RunWriteData`.
+  Fix: `ProcessCommands` drains after a command was taken, before it runs (the fast path, no
+  command, is unchanged: one atomic load); `Rasterizer::WaitDeferredSignals` drains too (its
+  kick touches the chunk; every caller drained already). Every other recording thread was
+  checked: stage B's own faults run inline (it owns the chunk), the fault relay, the host ring
+  thread (`UnmapMemory`, `InvalidateMemory`), the copy threads, the recorder, the priority-ops
+  thread, the present/swap threads, the draw-preparation workers and the pipeline builders
+  never record or go through `SendCommand`; the EOP flip's `PrepareFrame` runs on the
+  signalling thread (B via `RunInOrder`, else A drained); the opt-in texture bind helper binds
+  without refreshing images. `ReportChunkRace` now names both threads and, on macOS, prints
+  the other thread's stack at report time (the thread is suspended, its frame chain walked),
+  so a future report needs no guessing. Tests pass; an offline run with `BB_GPU_LOG=debug`
+  showed no report. The co-op reproduction (long session, phantoms) is the user's to confirm;
+  `BB_DRAW_PIPE=0` stays a fallback until then.
   *Same day, test runs:* the load-time corrupted command buffer (cloth-thread entry above) also
   killed the host twice in ~14 test loads: `SignalFence: Unreachable code!` (pm4_cmds.h:492)
   after "Gnm check: bad packet", and a SIGSEGV in `Shader::StageSpecialization` building a
