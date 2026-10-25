@@ -4,12 +4,13 @@ import SwiftUI
 
 struct LauncherView: View {
     /// The window's content size (main.swift).
-    static let size = CGSize(width: 920, height: 680)
+    static let size = CGSize(width: 920, height: 730)
 
     @ObservedObject var model: LauncherModel
 
     private enum Page: Hashable { case general, advanced }
     @State private var page = Page.general
+    @State private var showingControls = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -169,21 +170,6 @@ struct LauncherView: View {
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
                     Toggle("Show FPS", isOn: $model.settings.showFPS)
-                    Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
-                        .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
-                    Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
-                }
-                Section("Controls") {
-                    Toggle("Mouse camera", isOn: $model.settings.mouseLook)
-                    Text(model.settings.mouseLook
-                         ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
-                         : "The arrow keys turn the camera. Controllers always work.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    DisclosureGroup("Keyboard and mouse") {
-                        ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
-                            LabeledContent(row.0, value: row.1)
-                        }
-                    }
                 }
                 Section("Locations") {
                     FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
@@ -191,6 +177,26 @@ struct LauncherView: View {
                               choose: model.chooseGameFolder, reset: model.resetGameFolder)
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
+                }
+                Section("Controls") {
+                    HStack {
+                        Toggle("Mouse camera", isOn: $model.settings.mouseLook)
+                            .help(model.settings.mouseLook
+                                  ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
+                                  : "Off: the arrow keys turn the camera. Controllers always work.")
+                        Spacer()
+                        Button("Keyboard and Mouse…") { showingControls = true }
+                            .popover(isPresented: $showingControls, arrowEdge: .bottom) {
+                                Form {
+                                    ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
+                                        LabeledContent(row.0, value: row.1)
+                                    }
+                                }
+                                .formStyle(.grouped)
+                                .frame(width: 440)
+                                .fixedSize(horizontal: false, vertical: true)
+                            }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -229,6 +235,9 @@ struct LauncherView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Startup and debugging") {
+                    Toggle("Skip intro videos", isOn: effectBinding("skip_intro"))
+                    Toggle("Metal Performance HUD", isOn: $model.settings.metalHUD)
+                        .help("Apple's Metal HUD: FPS, GPU time and frame pacing, top right")
                     ForEach(GameSettings.debugEffects) { effect in
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
