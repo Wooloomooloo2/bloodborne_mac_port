@@ -119,6 +119,33 @@ static Hook hooks[] = {
 };
 #define HOOK_COUNT (sizeof(hooks) / sizeof(hooks[0]))
 
+static int changes_bytes(uint64_t offset, const unsigned char *data, size_t size,
+                         uint64_t start, const unsigned char *expected, size_t length) {
+    if (offset>=start+length || start>=offset+size) return 0;
+    uint64_t first=offset>start ? offset : start;
+    uint64_t end=offset+size<start+length ? offset+size : start+length;
+    return memcmp(data+(first-offset),expected+(first-start),(size_t)(end-first))!=0;
+}
+
+const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, size_t size) {
+    if (size>UINT64_MAX-offset) return "overflowing patch range";
+    /* REA: replacing this CALL with RET leaves the function's saved stack in
+       place. The original timed-wait call is required in every timing mode. */
+    static const unsigned char timed_call[]={0xe8,0xa2,0xce,0xb3,0x00};
+    if (changes_bytes(offset,data,size,0x2483ec1-0x400000,timed_call,sizeof(timed_call)))
+        return "timed condition wait";
+    const char *env=getenv("BB_CONTEXT_LOCK");
+    const int lock_off=env && env[0]=='0';
+    env=getenv("BB_FRAME_POOL");
+    const int pool_off=env && env[0]=='0';
+    for (size_t i=0;i<HOOK_COUNT;++i) {
+        const Hook *h=&hooks[i];
+        if (h->before ? pool_off : lock_off) continue;
+        if (changes_bytes(offset,data,size,h->offset,h->prologue,h->prologue_size)) return h->name;
+    }
+    return NULL;
+}
+
 static pthread_mutex_t lock_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t lock_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t lock_holder;
@@ -535,5 +562,8 @@ void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
 }
 void runtime_context_lock_stats(void) {}
 const char *runtime_context_lock_other(void) { return NULL; }
+const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, size_t size) {
+    (void)offset; (void)data; (void)size; return NULL;
+}
 
 #endif

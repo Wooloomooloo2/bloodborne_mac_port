@@ -12,7 +12,7 @@ from patches import (EBOOT_BASE, OUTPUT_SIZE, RESOLUTION_TEMPLATE, SCENE_HEIGHT,
                      SCENE_WIDTH, UI_HEIGHT, UI_WIDTH, compile_patches,
                      render_size, resolution_writes, scaled_sizes, effect_patches,
                      validate_patch_requirements, external_patches, external_selection,
-                     compile_external)
+                     compile_external, PatchAudit)
 
 XML = ROOT / 'patches/Bloodborne.xml'
 SEGMENTS = [(0, 0x6000000)]
@@ -184,6 +184,72 @@ class ExternalPatchTests(unittest.TestCase):
     def test_built_in_file_is_not_external(self):
         self.assertEqual(external_patches(XML.parent), [])
 
+
+
+class PatchSafetyTests(unittest.TestCase):
+    def test_frame_rate_patches_leave_original_timed_call(self):
+        first=0x02483ec1-EBOOT_BASE
+        for name in ('60 FPS++','90 FPS++','Uncap FPS++'):
+            for offset,data in compile_patches(XML,[name],'01.09',SEGMENTS):
+                self.assertFalse(offset < first+5 and first < offset+len(data),name)
+
+    def test_enemy_control_disagreements_are_rejected(self):
+        for name in ('60 FPS++','90 FPS++','Uncap FPS++'):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError,'Enemy Control conflicts.*0x01972a'):
+                compile_patches(XML,[name,'Enemy Control'],'01.09',SEGMENTS)
+
+    def test_ordered_rewrites_and_identical_overlaps_are_preserved(self):
+        audit=PatchAudit()
+        writes=[(0x1000,b'\x90\x90'),(0x1001,b'\xcc')]
+        self.assertEqual(audit.add('First',writes),writes)
+        audit.add('Identical',[(0x1000,b'\x90\xcc')])
+        with self.assertRaisesRegex(ValueError,'First, Identical'):
+            audit.add('Different',[(0x1001,b'\x00')])
+        # A rejected group does not change ownership or effective bytes.
+        audit.add('Still identical',[(0x1001,b'\xcc')])
+
+    def test_external_override_must_name_each_replaced_patch(self):
+        def selected(overrides):
+            meta=ET.fromstring('<Metadata Name="Custom" Overrides="'+overrides+'">'
+                              '<PatchList><Line Type="bytes" Address="0x00401000" Value="CC"/>'
+                              '</PatchList></Metadata>')
+            return [('custom.xml/Custom',Path('custom.xml'),meta)]
+        audit=PatchAudit(); audit.add('Built-in',[(0x1000,b'\x90')])
+        with self.assertRaisesRegex(ValueError,'custom.xml/Custom conflicts with Built-in'):
+            compile_external(selected(''),SEGMENTS,audit)
+        with self.assertRaises(ValueError):
+            compile_external(selected('Other patch'),SEGMENTS,audit)
+        audit.add('Same bytes',[(0x1000,b'\x90')])
+        with self.assertRaises(ValueError):
+            compile_external(selected('Built-in'),SEGMENTS,audit)
+        self.assertEqual(compile_external(selected('Built-in;Same bytes'),SEGMENTS,audit),[(0x1000,b'\xcc')])
+
+    def test_supported_cheat_and_wide_combinations_remain_compatible(self):
+        from patches import FPS_PRESETS, CHEATS, ULTRAWIDE_PATCHES, ultrawide_writes
+        for fps,names in FPS_PRESETS.items():
+            for cheat in CHEATS:
+                with self.subTest(fps=fps,cheat=cheat):
+                    compile_patches(XML,names+[cheat],'01.09',SEGMENTS)
+            for wide in ULTRAWIDE_PATCHES.values():
+                with self.subTest(fps=fps,wide=wide):
+                    audit=PatchAudit()
+                    compile_patches(XML,names,'01.09',SEGMENTS,audit)
+                    audit.add(wide,ultrawide_writes(XML,wide,'01.09',SEGMENTS))
+
+    def test_rejected_selection_does_not_replace_previous_patch_file(self):
+        from patches import main
+        with tempfile.TemporaryDirectory() as directory:
+            out=Path(directory); elf=bytearray(120)
+            struct.pack_into('<Q',elf,0x20,64)
+            struct.pack_into('<HH',elf,0x36,56,1)
+            struct.pack_into('<IIQQQQQQ',elf,64,1,0,0,0,0,0,0x6000000,0)
+            (out/'eboot.elf').write_bytes(elf)
+            prior=b'previous patch file'; (out/'patches.bin').write_bytes(prior)
+            args=['patches.py','--fps','60','--extra','Enemy Control',
+                  '--out',str(out),'--settings',str(out/'none.ini')]
+            with mock.patch.object(sys,'argv',args), self.assertRaises(ValueError):
+                main()
+            self.assertEqual((out/'patches.bin').read_bytes(),prior)
 
 
 class SafetyTests(unittest.TestCase):
