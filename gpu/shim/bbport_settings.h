@@ -91,6 +91,13 @@ struct Values {
     /// missing for a few frames), Balanced waits within a small time budget and skips past it.
     /// bbport.ini shader_compile=wait|skip|balanced; live.
     std::atomic<int> shader_compile{ShaderBalanced};
+    /// Launcher options, read from the same ini and changed by native Mac Settings. The
+    /// launcher consumes them on the next start; no running renderer state is changed here.
+    std::atomic<int> fps_cap{60};
+    std::atomic<int> game_timing{0}; ///< 0 fixed, 1 variable
+    std::atomic<bool> fullscreen{false};
+    std::atomic<bool> metal_hud{false};
+    std::atomic<bool> texture_compression{true};
     /// Providers this build and device can run (ConfigureUpscalerSupport); off and TAA always.
     std::atomic<bool> metalfx_supported{false}; ///< macOS: Apple MetalFX temporal scaler
     std::atomic<bool> fsr3_supported{false};    ///< FSR 3.1: Apple7+ (shim/ffx_metal)
@@ -107,6 +114,11 @@ struct Values {
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
+    int startup_fps_cap = 60;
+    int startup_game_timing = 0;
+    bool startup_fullscreen = false;
+    bool startup_metal_hud = false;
+    bool startup_texture_compression = true;
 };
 
 Values& Get();
