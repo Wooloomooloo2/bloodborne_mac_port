@@ -81,6 +81,8 @@ public:
     class TransferMark {
     public:
         TransferMark(Runtime& runtime, const char* what, const VideoCore::Image& image);
+        /// The same for work on an image's guest layout without the image (tiling kernels).
+        TransferMark(Runtime& runtime, const char* what, const VideoCore::ImageInfo& info);
         ~TransferMark();
         TransferMark(const TransferMark&) = delete;
         TransferMark& operator=(const TransferMark&) = delete;

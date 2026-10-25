@@ -159,6 +159,17 @@ void GraphicsPipeline::Build(bool clip_emulation_fragment, const std::string& de
     }
 }
 
+const Metal::RenderPipeline* GraphicsPipeline::BuildRenderVariant(
+    const GraphicsPipelineKey& pass_key) const {
+    const Metal::RenderPipeline* render = psos.render;
+    if (!render || psos.tessellation || psos.geometry) {
+        return nullptr;
+    }
+    return factory.Psos().GetRenderPipeline(
+        pass_key, render->vs, render->fs,
+        {.vertex_attributes = attributes, .rect_list_triangles = psos.rect_list});
+}
+
 GraphicsPipeline::~GraphicsPipeline() {
     WaitReady(); // a build still on the creation pool uses this object
 }

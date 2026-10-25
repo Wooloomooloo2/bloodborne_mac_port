@@ -81,6 +81,10 @@ public:
     bool IsRectList() const noexcept {
         return psos.rect_list;
     }
+    /// bbport: the plain render pipeline again with `pass_key`, a copy of Render()->key whose
+    /// extra attachments the draw does not write (Rasterizer::MergeIntoOpenPass). Built on the
+    /// calling thread; null when it failed or the pipeline is tessellated or geometry.
+    const Metal::RenderPipeline* BuildRenderVariant(const GraphicsPipelineKey& pass_key) const;
     /// The vertex attributes the pipeline was built with (fetch shader order).
     std::span<const VertexAttribute> Attributes() const noexcept {
         return attributes;

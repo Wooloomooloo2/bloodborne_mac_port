@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
 #include <optional>
+#include <unordered_map>
 #include "common/recursive_lock.h"
 #include "common/shared_first_mutex.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -314,6 +317,48 @@ private:
     void NoteFrameStart();
     /// BB_GPU_PROFILE: a timestamp where a render pass starts (vk_gpu_profiler.h).
     void MarkPass(const GraphicsPipeline* pipeline, const RenderState& state);
+    /// bbport: render-pass merging (on; BB_MERGE_PASSES=0: off). A draw whose attachments are a subset of the open render
+    /// pass's (the same textures, no clears, the same size) is drawn in it with a variant of its
+    /// pipeline: the pass's other attachments get their formats and an empty write mask (depth
+    /// and stencil tests stay off: DynamicState::SetAttachments takes the draw's own state).
+    /// Returns that variant, or null: the draw begins its own pass as before. A variant not built
+    /// yet is queued on the pipeline creation pool and the draw takes the old path meanwhile.
+    const Metal::RenderPipeline* MergeIntoOpenPass(const GraphicsPipeline* pipeline,
+                                                   const RenderState& state);
+    /// After a draw began (or continued) its own pass: what MergeIntoOpenPass needs of it.
+    void NoteOpenPass(const GraphicsPipeline* pipeline, const RenderState& state);
+    struct OpenPass {
+        bool valid = false;
+        RenderState state; ///< as BeginRendering got it
+        std::array<VideoCore::ImageId, AmdGpu::NUM_COLOR_BUFFERS + 1> images{}; ///< colors, depth
+        std::array<Shader::PsColorBuffer, AmdGpu::NUM_COLOR_BUFFERS> color_buffers{};
+        AmdGpu::DepthBuffer::ZFormat z_format{};
+        AmdGpu::DepthBuffer::StencilFormat stencil_format{};
+        u8 num_samples{};
+    } open_pass;
+    struct PassVariant {
+        std::atomic<bool> built{false};
+        std::atomic<const Metal::RenderPipeline*> render{nullptr};
+    };
+    /// A variant's identity: the pipeline and the full variant key, compared on lookup (a hash
+    /// collision would otherwise draw with another variant's attachment formats).
+    struct PassVariantKey {
+        const GraphicsPipeline* pipeline;
+        GraphicsPipelineKey key;
+        bool operator==(const PassVariantKey& other) const noexcept {
+            return pipeline == other.pipeline && key == other.key;
+        }
+    };
+    struct PassVariantKeyHash {
+        size_t operator()(const PassVariantKey& k) const noexcept {
+            const size_t h = std::hash<GraphicsPipelineKey>{}(k.key);
+            return h ^ (std::hash<const void*>{}(k.pipeline) + 0x9e3779b97f4a7c15ull + (h << 6) +
+                        (h >> 2));
+        }
+    };
+    /// Recording thread.
+    std::unordered_map<PassVariantKey, std::shared_ptr<PassVariant>, PassVariantKeyHash>
+        pass_variants;
     /// bbport: obtains the draw's vertex streams (vertex_binds) and index buffer (index_bind);
     /// the draw binds them in its recorded command (bindings do not survive a submission).
     void ResolveVertexBuffers(const GraphicsPipeline* pipeline,
