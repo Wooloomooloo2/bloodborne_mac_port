@@ -338,9 +338,14 @@ struct ModsView: View {
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             problem(model.modsProblem)
+            if launcher.online.online {
+                Text("Online play is on: mods are not loaded, so everyone in a world plays the same game. They come back when online play is turned off.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             List(selection: $model.selection) {
                 ForEach(model.mods) { mod in
-                    ModRow(mod: mod, enabled: Binding(get: { mod.enabled }, set: { model.setEnabled(mod.name, $0) }))
+                    ModRow(mod: mod, enabled: Binding(get: { mod.enabled && !launcher.online.online }, set: { model.setEnabled(mod.name, $0) }),
+                           online: launcher.online.online)
                         .tag(mod.name)
                         .contextMenu {
                             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([model.folder(mod.name)]) }
@@ -479,10 +484,12 @@ struct ModsView: View {
 private struct ModRow: View {
     let mod: ModEntry
     @Binding var enabled: Bool
+    /// Online play: mods are off (scripts/mods.py), the switch can't be turned on.
+    var online = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Toggle("", isOn: $enabled).labelsHidden()
+            Toggle("", isOn: $enabled).labelsHidden().disabled(online).help(online ? "Off during online play" : "")
             VStack(alignment: .leading, spacing: 2) {
                 Text(mod.name)
                 if let error = mod.error {
