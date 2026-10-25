@@ -1999,3 +1999,28 @@ while slow; `sysctl iogpu.wired_limit_mb`; then (diagnostic, resets at reboot)
 `sudo sysctl iogpu.wired_limit_mb=14000` on an 18 GB Mac; and one at a time BB_GC_BUDGET_MB=6000,
 BB_ARENA_GIB=5, BB_ARENA_LAZY=0, BB_FRAMES_AHEAD=2 with the benchmark. If (1) holds, the fix is an
 arena that grows with the game's mappings (backlog idea (d), placement heaps / sparse-like).
+
+## 2026-10-25: full screen vs window on an external 4K display (Reddit: "full screen is slower")
+
+Several Reddit players report full screen slower than a window, especially on external displays.
+Not reproduced on the M4 Max (48 GB, macOS 27) with an external 4K panel (GS27U, "looks like
+1920x1080", 120 Hz, main display); throughput pass (standing, 45 s), test data:
+
+| | window (3840x1902 px) | full screen (3840x2160) | full screen, drawable = image size |
+|---|---|---|---|
+| 1080p, 120 cap | 119.2 FPS, 1% low 70.2 | 119.8, 99.7 | 119.6, 91.2 |
+| 1080p, uncapped, no vsync | 122.9, 75.8 | 120.1, 85.6 | 119.6, 77.8 |
+| 1440p render, uncapped, no vsync (GPU 95% busy) | 110.8, 75.5 | 111.6, 88.0 | 110.8, 75.2 |
+
+- The frame is prepared at the window's pixel size (`PrepareFrame` fits the image into the window),
+  so in full screen the post-process pass, the present copy and the three drawables are at the
+  display's full backing size (5120x2880 for "looks like 2560x1440" on a 4K panel). On this Mac
+  that costs nothing measurable, even GPU-bound.
+- Game Mode turns on for full-screen runs (gamepolicyd logs `gameDidLaunch`, other apps' states
+  change) but bb-probe's and bbgpu-host's thread priorities are the same as in a window.
+- Experiment on branch `fullscreen-drawable`: `BB_FULLSCREEN_DRAWABLE=output` sizes the frame and
+  drawable to the image (in the display's shape) and lets Core Animation scale; `BB_DISPLAY=n`
+  opens on the n-th display (#60). Not merged: no gain here; the drawable size follows each
+  image, so it changes during loads (1080p loading screen vs 1440p scene); the overlay is drawn
+  at the smaller size. *Next:* logs and benchmark reports from affected players (Mac, display,
+  scaling, refresh rate, window vs full screen), and `BB_HIGH_DPI=0` as their quick test.
