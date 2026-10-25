@@ -667,6 +667,10 @@ This port stands entirely on the work of others:
 - **Mrsuss60** — [bloodborne_pc_windows_port](https://github.com/Mrsuss60/bloodborne_pc_windows_port),
   the Windows port this repository was forked from, including its stability, audio, memory
   and frame-pacing fixes (documented in that repository's `CHANGES.md`).
+- **Paleblood contributors** — system-module argument validation evidence from
+  [Paleblood, branch `codex/runtime-sysmodule-wire`](https://github.com/evill33t/Paleblood/tree/codex/runtime-sysmodule-wire),
+  commit `f9c5e5556db987d9fb4fa60b837d8a54817a0718`; provenance and limits in
+  [`docs/SYSMODULE_WIRE.md`](docs/SYSMODULE_WIRE.md).
 - **[shadPS4](https://github.com/shadps4-emu/shadPS4)** project — the Vulkan video core and
   shader recompiler (`gpu/shadps4/`, GPL-2.0-or-later).
 - **FireBurn** — [FSR-Vulkan](https://github.com/FireBurn/FSR-Vulkan), the native Vulkan
