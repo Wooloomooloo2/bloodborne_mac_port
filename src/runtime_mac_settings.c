@@ -189,6 +189,11 @@ static void poll_values(void) {
         if (r->kind==CONFIRM) confirmed=next!=0;
         else if (r->kind==RESTART) {
             if (next && confirmed) bbgpu_mac_setting_set(BBMAC_RESTART,1);
+            // RestoreDefaults also resets the native choice index and redraws Off. Merely
+            // changing its backing byte leaves the rejected action visibly On.
+            uintptr_t begin=read64((unsigned char *)dialog+0xe58);
+            uintptr_t widget=read64((void *)(begin+(i+1)*0x90+0x80));
+            if (widget) invoke(read64((void *)(read64((void *)widget)+0x20)),widget,0,0,0,0,0);
             v->byte=0; v->last=0;
         } else bbgpu_mac_setting_set(r->field,r->kind==SLIDER ? (next+r->min)*r->unit : next);
     }
