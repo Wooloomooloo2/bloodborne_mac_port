@@ -284,7 +284,9 @@ private:
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
-        BbFrameGen::FramePtr framegen;
+        // A drawn buffer that is never flipped must not reserve a snapshot.
+        // Lock the current lease in DisplayOverride; expired leases fall back.
+        std::weak_ptr<BbFrameGen::Frame> framegen;
     };
     std::mutex display_mutex;
     std::unordered_map<VAddr, DisplayImage> displays;

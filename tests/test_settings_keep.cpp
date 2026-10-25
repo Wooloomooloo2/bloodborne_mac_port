@@ -91,13 +91,36 @@ int main() {
     setenv("BB_METAL_FRAMEGEN", "0", 1);
     Load();
     assert(!Get().framegen && !Get().startup_framegen && Get().framegen_forced);
+    Get().show_fps = true; // an unrelated menu change must not save the override
+    Save(); Save(); Load();
+    assert(Count(Read(path), "framegen=1") == 1);
+    assert(!Get().framegen && Get().saved_framegen);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Load();
+    assert(Get().framegen && Get().startup_framegen && !Get().framegen_forced);
+    Get().framegen = false;
+    Save(); Load();
     setenv("BB_METAL_FRAMEGEN", "1", 1);
     Load();
     assert(Get().framegen && Get().startup_framegen && Get().framegen_forced);
+    Get().show_fps = false;
+    Save(); Save(); Load();
+    assert(Count(Read(path), "framegen=0") == 1);
+    assert(Get().framegen && !Get().saved_framegen);
     unsetenv("BB_METAL_FRAMEGEN");
-    Get().framegen = false;
-    Save(); Load();
+    Load();
     assert(!Get().framegen && !Get().startup_framegen && !Get().framegen_forced);
+    // An absent preference must also stay opt-in after an overridden launch.
+    f = std::fopen(path, "w");
+    assert(f);
+    std::fputs("fps_cap=60\n", f);
+    std::fclose(f);
+    setenv("BB_METAL_FRAMEGEN", "1", 1);
+    Load(); Save();
+    assert(Get().framegen && Count(Read(path), "framegen=0") == 1);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Load();
+    assert(!Get().framegen && !Get().startup_framegen);
     std::remove(path);
     std::puts("PASS: settings menu keeps the launcher's keys");
     return 0;

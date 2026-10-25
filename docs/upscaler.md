@@ -10,10 +10,19 @@ back to the running choice clears the restart notice. The current session keeps
 its existing presentation resources until restart.
 
 It requires macOS 26+, a build with the macOS 26 SDK or newer, a
-device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, and an active
-temporal upscaler (`metalfx`, `fsr3`, or `taa`). The control explains when generation
-is unavailable. `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
-disables the menu switch for that session; remove it to use the menu. For example,
+device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, an active
+temporal upscaler (`metalfx`, `fsr3`, or `taa`), and a known window-display refresh
+rate at least twice the configured real FPS cap. A 60 Hz display permits a 30 FPS
+cap, while a 60 FPS cap needs at least 120 Hz; 120 FPS needs at least 240 Hz.
+An uncapped launch or unknown refresh rate disables the switch with a short note.
+The window thread reads SDL's current mode for the window's own display and updates
+it on display/mode/fullscreen changes. Moving to a slower display suspends snapshot
+capture and paired presentation; returning to a suitable display resumes them.
+The control explains when generation is unavailable.
+`BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
+disables the menu switch for that session; remove it to use the menu. It never
+overwrites the file's `framegen` preference: unrelated menu saves preserve the
+pre-override value (including the default off when no key existed). For example,
 with your existing game/data configuration:
 
 ```sh
@@ -27,8 +36,10 @@ real-frame stream plus intermediates. Generating images adds GPU work and latenc
 it does not make the game simulate faster or guarantee a higher delivered rate.
 The FPS counter and settings footer show **Real** and **Displayed** rates separately
 only while frame generation is enabled for the running session on a supported path.
-With frame generation off or unavailable, they retain the single FPS and frame-time
-display. Pending changes to the frame-generation switch take effect after restart.
+With frame generation off or unavailable, they retain the original single FPS and
+frame-time readout: the exponential present-interval average (95% previous / 5%
+new interval), including reused and blank frames. Pending changes to the
+frame-generation switch take effect after restart.
 Real FPS counts new game frames supplied to the presenter, excluding reused and
 blank frames. Displayed FPS counts distinct, positive Metal drawable presentation
 timestamps for real and generated images, rather than assuming a 2x multiplier or
@@ -36,30 +47,41 @@ counting GPU completions. Missing generated frames, refresh limits and real-only
 fallback therefore affect the displayed reading. Both rates use bounded one-second
 cadence windows and expire after a pause; the milliseconds are frame intervals,
 not GPU execution times. The generated/real pair replays the same counter snapshot.
-Presentation callbacks are requested only while the FPS counter or settings menu
-is visible. The counter reserves a fixed width with extra room when frame generation
-is active, and right-aligns the FPS and millisecond columns so changing digit counts
+Presentation callbacks are requested only while frame generation is active and
+the FPS counter or settings menu is visible. The counter reserves a fixed width
+with extra room when frame generation is active, and right-aligns the FPS and
+millisecond columns so changing digit counts
 cannot resize the box or shift the columns.
 
 The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
 tonemapped scene/UI boundary. A second pass identifies changes made by the HUD.
 Interpolation reads through the actual video-out view after the game's gamma LUT,
-so its channel swizzle and sRGB decode match the real frame. A dilated HUD mask
+so its channel swizzle and sRGB decode match the real frame. Source coordinates
+clamp to the actual video-out texture's width and height, including native 16:10
+and ultrawide paths with smaller video-out images. A dilated HUD mask
 restores current real-frame colors after interpolation. At native 1080p this
 opt-in mode uses the existing output-size UI path and reconstructs the tonemapped
 scene, rather than the default HDR reconstruction before game post-processing.
 
 Snapshots belong to individual frames and travel with the display buffer to the
-presenter. Four reusable snapshot sets bound allocation; busy slots skip generation
-without waiting. Deferred closures, GPU completion handlers, interpolation history,
+presenter. Three reusable snapshot sets bound allocation (25% fewer sets than the
+original four-set pool); busy slots skip generation without waiting. Deferred
+closures, GPU completion handlers, interpolation history,
 and the final real-frame present pin the relevant sets until all reads complete.
+The real present's completion releases its snapshot before returning the frame
+to the pool; skipped presents release it too. Display-buffer entries hold weak
+references to a distinct lease for each use of a snapshot allocation, so buffers
+that were drawn but never flipped cannot reserve a set or acquire it after reuse.
+Queued recording, history, and GPU completion handlers keep strong leases until
+their reads finish.
 The two presents wait on the same render tick. A three-drawable layer admits the
 pair; a missing second drawable presents the real frame alone. The same overlay
 draw data is rendered over both images without advancing UI/input/FPS timing twice.
 The minimum display interval comes only from the configured real FPS cap (half its
 period, with scheduling slack). Measured frame cadence includes drawable waits;
 using it to extend the next display hold creates a feedback loop that can collapse
-real FPS. Uncapped output requests no additional minimum display duration.
+real FPS. The duration helper returns zero for uncapped output; the display policy
+disables paired generation for uncapped launches.
 
 Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
 timing, and gaps in real-frame sequence reset history. Menus/loading screens with
@@ -93,20 +115,25 @@ out/gpu-arm64/frame-rates-test
 
 The overlay fixture covers L3+R3 opening/closing, D-pad/Cross activation of the new
 row, saved preferences, reverting a pending restart, and unavailable/overridden
-controls. The settings round-trip fixture checks launch overrides and preservation
+controls, refresh-limited/uncapped launches, and re-enabling after a display change.
+The settings round-trip fixture checks temporary launch overrides in both
+directions, the absent-key default, unrelated saves, and preservation
 of the launcher's other keys. These are offscreen input events, not a physical
 controller gameplay test.
 
 The frame-rate fixture checks independent real/displayed rates, 2x delivery,
 real-only fallback, refresh limits, invalid/duplicate/out-of-order callbacks,
-pause/resume and concurrent updates. The overlay fixture verifies the single-rate
+pause/resume, the original off-path interval average, and concurrent updates.
+The overlay fixture verifies the single-rate
 counter and settings footer with frame generation off or unavailable, restart-dependent
 display changes, independent displayed FPS with frame generation on, identical replay over a
 generated/real pair, and stable counter bounds across changing digit counts and
 unavailable readings in both modes.
 
 The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
-through GPU completion, bounded-pool fallback, warmup/cut/gap resets and moving
+through GPU completion, three-set bounded-pool fallback, unpresented-buffer lease
+expiry and safe slot reuse, smaller video-out width/height
+clamping, refresh/cap gating, warmup/cut/gap resets and moving
 geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
 pixels interpolated to the expected midpoint 49.5. These are fixture results,
 not gameplay or FPS measurements. The existing present and overlay fixtures also
@@ -149,6 +176,10 @@ use distinct positive drawable presentation timestamps. These are cadence
 intervals, not GPU durations or input latency. Included windows had no logged
 occlusion, render errors or render stalls; an interrupted control was excluded.
 All original source-save hashes remained unchanged.
+
+These measurements predate the refresh-rate guard: a 120 FPS real cap now
+requires at least 240 Hz and is disabled on this 120 Hz panel. The review fixes
+have offscreen regression coverage; the gameplay benchmark was not rerun.
 
 At a 120 FPS real cap, valid off controls varied from 63.28 to 77.04 FPS. Battery
 and thermal conditions do not establish constant clocks. Showing two images per

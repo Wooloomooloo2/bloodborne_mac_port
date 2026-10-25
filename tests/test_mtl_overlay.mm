@@ -157,6 +157,8 @@ int main() {
     unsetenv("BB_OVERLAY");
     unsetenv("BB_MENU_OPEN");
     unsetenv("BB_METAL_FRAMEGEN");
+    BbSettings::Get().display_refresh_hz = 120;
+    BbSettings::Get().framegen_real_cap = 60;
     @autoreleasepool {
         Metal::Device device;
         id<MTLDevice> mtl = (__bridge id<MTLDevice>)device.NativeDevice();
@@ -227,6 +229,10 @@ int main() {
         for (int i = 0; i < 4; ++i) Present(t, true);
         Expect(counter() == counter_before, "unsupported framegen uses the single FPS display");
         s.framegen_supported = true;
+        s.display_refresh_hz = 60;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == counter_before, "refresh-limited generation uses the single FPS display");
+        s.display_refresh_hz = 120;
         const std::array<BbFrameRates::Sample, 6> changing_rates{{
             {9, 18}, {99, 198}, {100, 200}, {999, 1998}, {0, 0}, {60, 120}}};
         for (const auto rates : changing_rates) {
@@ -308,6 +314,13 @@ int main() {
         const auto unsupported_footer = footer();
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
         Expect(footer() == unsupported_footer, "unavailable framegen hides displayed FPS in the footer");
+        s.framegen_supported = true;
+        s.display_refresh_hz = 60;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        const auto limited_footer = footer();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(footer() == limited_footer, "refresh-limited generation hides displayed FPS in the footer");
+        s.display_refresh_hz = 120;
         s.framegen = s.startup_framegen = false;
         s.framegen_supported = true;
 
@@ -415,6 +428,21 @@ int main() {
         Click(t, fx, fy);
         Expect(!s.framegen, "a launch environment override disables the menu toggle");
         s.framegen_forced = false;
+        s.display_refresh_hz = 60;
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(!s.framegen, "60 Hz display cannot enable 2x generation at a 60 FPS cap");
+        s.display_refresh_hz = 120;
+        s.framegen_real_cap = 0;
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(!s.framegen, "uncapped real FPS cannot enable paired generation");
+        s.framegen_real_cap = 60;
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Click(t, fx, fy);
+        Expect(s.framegen, "moving back to 120 Hz re-enables the switch for a 60 FPS cap");
+        Click(t, fx, fy);
+        Expect(!s.framegen, "re-enabled switch can be reverted");
         StickChord();
     }
     std::remove(config);

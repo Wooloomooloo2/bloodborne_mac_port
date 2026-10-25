@@ -16,6 +16,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_framegen.h"
 #include "bbport_overlay_metal.h"
 #include "imgui.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -720,15 +721,28 @@ void DisplayTab(BbSettings::Values& s) {
     EndCard();
 
     BeginCard("Frame generation", int(BbSettings::FrameGenerationNeedsRestart()));
-    const bool framegen_available = s.framegen_supported;
+    const bool framegen_available = s.framegen_supported && BbFrameGen::DisplaySupported();
     ImGui::BeginDisabled(!framegen_available || s.framegen_forced);
     Toggle("MetalFX 2x (experimental)", s.framegen);
     ImGui::EndDisabled();
     HintBelow("Adds an intermediate image between real frames. Requires an active temporal "
               "upscaler; the FPS cap still controls real frames. Adds GPU work and latency.");
-    if (!framegen_available) {
+    if (!s.framegen_supported) {
         Note("Unavailable in this session. Requires macOS 26 or newer, a supported GPU, "
              "and the temporal renderer.");
+    } else if (!BbFrameGen::DisplaySupported()) {
+        if (!s.framegen_real_cap) {
+            Note("Set a real FPS cap to use frame generation. The display must refresh at "
+                 "least twice as fast as that cap.");
+        } else {
+            char text[192];
+            std::snprintf(text, sizeof(text),
+                          "Requires at least %.0f Hz for the %u FPS real cap. "
+                          "This window's display reports %.1f Hz (0 means unknown).",
+                          2.0 * s.framegen_real_cap, s.framegen_real_cap,
+                          double(s.display_refresh_hz.load()));
+            Note(text);
+        }
     } else if (s.framegen_forced) {
         Note("Set by BB_METAL_FRAMEGEN at launch. Remove that override to change it here.");
     } else if (s.framegen && !upscaler_on) {
@@ -1170,7 +1184,7 @@ void Menu() {
             ImGui::Unindent(r * 2.0f + 8.0f * base_scale);
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
-            if (s.startup_framegen && s.framegen_supported) {
+            if (BbFrameGen::Active()) {
                 ImGui::Text("Real %.0f / Displayed %.0f FPS   Saved to bbport.ini",
                             frame_rates.real_fps, frame_rates.displayed_fps);
             } else {
@@ -1220,7 +1234,7 @@ void Menu() {
 void FpsCounter() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const auto& s = BbSettings::Get();
-    const bool framegen_active = s.startup_framegen && s.framegen_supported;
+    const bool framegen_active = BbFrameGen::Active();
     const float pad = 14.0f * base_scale;
     const float gap = 8.0f * base_scale;
     const float fps_width = ImGui::CalcTextSize("9999 FPS").x;

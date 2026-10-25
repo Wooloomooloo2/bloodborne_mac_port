@@ -4,6 +4,7 @@
 
 #include "video_core/renderer_metal/mtl_object.h"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -16,6 +17,11 @@ namespace BbFrameGen {
 
 bool Requested();                      // launch setting; menu changes need a restart
 bool Supported(Metal::Device& device); // macOS 26+, queried on the actual device
+// Two vsync-presented drawables must fit inside each real-frame period.
+bool DisplaySupported(double refresh_hz, uint32_t real_cap);
+bool DisplaySupported(); // current window display and configured real cap
+bool Active(); // running launch choice, device/path support, and display support
+inline constexpr std::size_t MaxSnapshotSets = 3;
 
 struct Description {
     uint32_t width{}, height{}, out_width{}, out_height{}, ui_format{};
@@ -26,7 +32,8 @@ struct Description {
 
 // Immutable texture allocation for one real frame. A shared pointer pins its
 // pool slot through deferred recording, interpolation history, and presentation
-// on the second queue.
+// on the second queue. Each use has a distinct lease; weak display references
+// expire when that use finishes, even though the pool keeps the textures.
 struct Frame {
     Description description;
     Metal::Object depth, motion, before_ui, ui_change, ui_mask, color, generated;
@@ -49,7 +56,7 @@ class Generator {
     Generator(const Generator&) = delete;
     Generator& operator=(const Generator&) = delete;
 
-    // Producer thread. At most four texture sets; an exhausted pool skips
+    // Producer thread. At most three texture sets; an exhausted pool skips
     // generation.
     FramePtr Prepare(const Description& description);
     // Recorder thread, in scene order: before the first HUD draw, then before

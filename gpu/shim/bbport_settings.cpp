@@ -150,6 +150,7 @@ void Load() {
         std::fclose(file);
         std::printf("Settings: %s\n", Path());
     }
+    v.saved_framegen = v.framegen;
     // Environment overrides (scripts, A/B tests).
     if (const char* env = std::getenv("BB_UPSCALER")) {
         v.upscaler = UpscalerOff;
@@ -317,7 +318,7 @@ void Save() {
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()), int(v.frame_pacing.load()),
-                 int(v.framegen.load()),
+                 int(v.framegen_forced ? v.saved_framegen : v.framegen.load()),
                  int(v.mouse_look.load()), v.mouse_sensitivity.load(),
                  v.mouse_vertical.load(), int(v.mouse_invert_y.load()),
                  int(v.pad_menu_combo.load()));
