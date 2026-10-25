@@ -33,12 +33,27 @@ enum FrameCap: Int, CaseIterable, Identifiable {
 
 /// bbport.ini game_timing, read by run.sh at start (scripts/launch_settings.sh picks BB_FPS).
 enum GameTiming: String, CaseIterable, Identifiable {
-    case fixed, variable
+    case fixed, variable, adaptive
     var id: String { rawValue }
     var label: String {
         switch self {
         case .fixed: "Fixed steps"
         case .variable: "Variable"
+        case .adaptive: "Adaptive (experimental)"
+        }
+    }
+    func help(for cap: FrameCap) -> String {
+        switch self {
+        case .adaptive:
+            cap == .fps30
+                ? "At 30 FPS, Adaptive keeps the game's original timing. Above 30 it adjusts movement, physics, cloth and wind to each frame's duration. Experimental; moving platforms still need gameplay testing. Applies at the next start."
+                : "Adjusts movement, physics, cloth, wind and play-time accounting to each frame's duration. Experimental; moving platforms still need gameplay testing. Applies at the next start."
+        case .fixed:
+            cap.hasFixedSteps
+                ? "The game advances the same amount every frame, as on the PS4. If a scene can't hold the cap it slows down a little. Applies at the next start."
+                : "\(cap.label) FPS uses variable timing with this choice: there is no fixed-step patch for it. Uneven frames can drop you through moving lifts. Applies at the next start."
+        case .variable:
+            "Keeps full speed when frames are late, but uneven frames can drop you through moving lifts and floors. Applies at the next start."
         }
     }
 }

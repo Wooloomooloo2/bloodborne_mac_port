@@ -1878,6 +1878,71 @@ data, `--benchmark` runs alternating builds, no compiles in any run.
   GPU time −9%, but more hitches on the route in every run (extra single frames of 35-60 ms GPU),
   as in the 300 s soak. Repeat before merging (posted on #39).
 
+## Opt-in adaptive FPS timing: CPU validation (2026-10-25)
+
+Added `game_timing=adaptive` in the launcher, adapting the timing system from
+`evill33t/bloodborne_mac` (`bbacb95c`) and `droogie/bbhost` (`566184a`). It runs in
+the x86-64 runtime, with a private timing-data tail and a checked SysV limiter
+replacement. Fixed remains the default; 30 FPS remains unmodified. The loader
+refuses conflicting patch sets before applying any of their writes. Original game
+files and saves were not changed.
+
+CPU checks passed: 20 limiter/reference cases, 93 numerical checks, 21 executed
+wind-instruction cases and detection of all 20 deliberately altered results.
+Private supported-1.09-image checks passed at 30/40/60/90/120/144/165/240 and
+uncapped, including 1,001 variable frames per converted rate, post-protection
+writes, the installed entry jump, whole-patch-set conflicts, and seven admission
+corruptions that left the image unchanged.
+
+After merging upstream `c5ab1e0`, the native ARM64 launcher and its expanded model
+tests pass, as do all 16 patch tests, seven preparation/restart tests,
+launch-settings checks and renderer-settings persistence. The restart fixture's
+final 1080p expectation matches the Mac startup-patch path already covered by
+`test_patches.py`. See [setup and boundaries](ADAPTIVE_FPS.md) and
+[provenance](../src/fps/PROVENANCE.md).
+
+## Adaptive FPS: live gameplay checks (2026-10-25)
+
+Built both current GPU libraries (`x86_64` and `arm64`, RelWithDebInfo, LTO on),
+the full x86-64 runtime and both native host variants from `356daba`, including
+the current upstream benchmark protocol. Reused the existing pinned SDL/FFmpeg
+and ATRAC9 dependencies. Tested the split-process game on an M4 Max, macOS 27.0
+(26A428), 1920x1080 MetalFX, with frame generation off. The normal ini selection
+(`game_timing=adaptive`) installed the adapter; no legacy FPS++ preset was applied.
+
+The old copied save required DLC that the base-game content provider does not
+expose, so the gameplay tests used a newly created base-game character and private
+save/settings/cache folders. No DLC-provider change was used in these builds.
+
+- **60 target, approximately 22 minutes including setup and idle:** character
+  creation, Iosefka's Clinic, walking, camera rotation, stairs and door opening,
+  unarmed attacks, dodging, target lock, the first enemy's AI and damage, death,
+  loading into Hunter's Dream, then the normal Exit Game path to the title.
+- **120 target, approximately 12 minutes including loading and idle:** reloaded
+  a copy of the new save into Hunter's Dream, sprinted upstairs with stamina
+  consumption, opened the messengers' gift dialog/menu, performed a heavy attack
+  and dodge, and rotated the camera. The user visually checked the result and
+  closed the game window; SDL quit, pipeline-cache flush and runtime exit were
+  logged. No test game process remained afterward.
+- No fatal runtime error or Metal command-buffer failure was logged in either
+  gameplay interval. Original source-save, seed-save, executable and param.sfo
+  hashes were unchanged.
+
+The post-load five-second **flip-rate** windows ranged from 37.9 to 60.0 FPS at
+the 60 target, and 45.7 to 87.7 FPS at the 120 target. These mixed standing,
+movement, menus and streaming diagnostics are not a clean presentation benchmark
+or a comparison with fixed/variable mode. In the 120 run's standing Dream scene,
+the rate was around 78-80 FPS; the logged step followed it at roughly 12-13 ms,
+with cloth stiffness around 0.58-0.60. Logged steps across both runs stayed within
+their configured floor and the 33.33 ms ceiling. The 120 target is not a claim
+of sustained 120 FPS.
+
+The basic gameplay checks passed; no implementation change was needed. Moving
+lifts, exact animation/camera-speed equivalence and longer runs in other areas
+remain unverified. This does not establish that the reported lift issue is fixed.
+Private build hashes, inputs, screenshots, logs and results are kept under
+`out/fps-gameplay-2026-10-25/`; no game or save files are included in the PR.
+
 ## 2026-10-25: 16:10 native resolutions (#75)
 
 Kyo's 16:10 patches (1280x800, 1920x1200, 2560x1600) go through the same path as the ultrawide
@@ -1967,3 +2032,17 @@ SDL signal fix passed a restored-game stop with both guest and renderer confirme
 Split validation: both production-Process termination tests pass on macOS with x86 SDL,
 including removal of the merged view and unchanged synthetic source/mod files. Launcher
 build/model tests pass. No private save data is used by these regression tests.
+
+## 2026-10-25: Adaptive timing PR #77 refreshed against 0.5.7
+
+Merged `af0fae2`, retaining upstream mouse/keyboard controls, launcher Stop, benchmark
+and session logs. Both timing and Stop tests remain in the build's test runner; repeated
+settings saves preserve Adaptive selection and mouse preferences together. Timing and
+patch/restart implementation are unchanged from `3a37beb`.
+
+Both GPU architectures, the complete game runtime with the Adaptive adapter, both native
+hosts and launcher build. CPU timing and negative controls, patch/preparation/restart
+fixtures, launcher model/Stop lifecycle, settings, runtime/semaphore/pad, shared rings
+and the Metal overlay (plain and validation layer) pass. This refresh did not repeat
+gameplay, packaged-app or optional real-image installation checks. Detailed results:
+[ADAPTIVE_FPS.md](ADAPTIVE_FPS.md#upstream-refresh-25-october-2026).
