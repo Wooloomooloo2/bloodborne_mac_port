@@ -814,6 +814,25 @@ do {
     try? fm.removeItem(at: data)
 }
 
+// Benchmark report: extra launch.conf variables are named.
+do {
+    let info = BenchmarkSystemInfo(model: "Mac15,7", chip: "Apple M3 Pro", performanceCores: 6, efficiencyCores: 6, gpuCores: 14,
+                                   memoryGB: 18, macOS: "27.0.1", macOSBuild: "26A434", appVersion: "0.5.8", appBuild: "0.5.8",
+                                   commit: nil, display: "Built-in", power: "AC", lowPowerMode: false)
+    var summary = BenchmarkSummary(date: "d", system: info, passes: [])
+    check(!summary.markdown.contains("Extra variables"), "no extra variables line by default")
+    summary.extra = ["BB_ARENA_GIB": "5", "BB_FRAMES_AHEAD": "2"]
+    check(summary.markdown.contains("**Extra variables (launch.conf):** `BB_ARENA_GIB=5`, `BB_FRAMES_AHEAD=2`"), "extra variables in the report")
+}
+
+// launch.conf: other BB_ assignments reach the game; the environment wins (#69).
+do {
+    let conf = LaunchConfig(ini: IniFile(text: "BB_GAME_DIR='/g'\nBB_FRAME_STATS=1\nMTL_HUD_ENABLED=1\nBB_FPS='60'\nBB_UPDATE_CHECKED=5\nOTHER=1\nbb_lower=1\n"))
+    let env = conf.environment(adding: ["BB_FPS": "uncap", "PATH": "/usr/bin"])
+    check(env["BB_FRAME_STATS"] == "1" && env["MTL_HUD_ENABLED"] == "1" && env["BB_FPS"] == "uncap", "extra launch.conf variables, environment wins")
+    check(env["BB_GAME_DIR"] == nil && env["BB_UPDATE_CHECKED"] == nil && env["OTHER"] == nil && env["bb_lower"] == nil, "launcher keys and others stay out")
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)

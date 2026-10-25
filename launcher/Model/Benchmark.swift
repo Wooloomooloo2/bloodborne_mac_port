@@ -456,6 +456,8 @@ struct BenchmarkSummary: Codable, Equatable {
     var format = 1
     var date: String
     var settings = Benchmark.settingsLine
+    /// launch.conf's extra BB_/MTL_/MVK_ variables, which can change the results (A/B tests).
+    var extra: [String: String]? = nil
     var system: BenchmarkSystemInfo
     var passes: [PassSummary]
 
@@ -484,6 +486,10 @@ struct BenchmarkSummary: Codable, Equatable {
         - **Settings:** \(settings)
 
         """
+        if let extra, !extra.isEmpty {
+            out += "- **Extra variables (launch.conf):** "
+                + extra.keys.sorted().map { "`\($0)=\(extra[$0]!)`" }.joined(separator: ", ") + "\n"
+        }
         for p in passes {
             out += "\n## \(p.pass.title): \(p.pass.subtitle)\n\n"
             if !p.ok {

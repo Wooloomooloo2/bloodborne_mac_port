@@ -235,7 +235,8 @@ final class LauncherModel: ObservableObject {
             save()
         }
         guard backUpSavesIfNeeded() else { onExit?(-1); return }
-        let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir, env: env)
+        let plan = layout.launchPlan(gameDir: game, saveDir: config.saveDir, dataDir: dataDir,
+                                     env: config.environment(adding: env))
         do {
             let log = try SessionLogWriter(folder: logsFolder, appVersion: appVersion)
             log.note("Bloodborne for Mac \(appVersion) on \(SystemInfo.current(appVersion: appVersion).line); "
@@ -282,8 +283,9 @@ final class LauncherModel: ObservableObject {
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
         }
-        let job = BenchmarkRunner.Job(layout: layout, gameDir: game, dataDir: dataDir, env: env,
-                                      assets: layout.benchmarkAssets(env: env))
+        let job = BenchmarkRunner.Job(layout: layout, gameDir: game, dataDir: dataDir,
+                                      env: config.environment(adding: env),
+                                      assets: layout.benchmarkAssets(env: env), extra: config.extraEnvironment)
         do {
             try benchmark.start(job, home: URL(fileURLWithPath: NSHomeDirectory()), started: { [weak self] in
                 self?.running = true

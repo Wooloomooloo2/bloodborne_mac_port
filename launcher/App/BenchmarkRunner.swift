@@ -202,6 +202,8 @@ final class BenchmarkRunner: ObservableObject {
         let dataDir: URL
         let env: [String: String]
         let assets: URL
+        /// launch.conf's extra variables (already in `env`), named in the report.
+        var extra: [String: String] = [:]
     }
 
     @Published private(set) var progress: String?
@@ -306,7 +308,8 @@ final class BenchmarkRunner: ObservableObject {
 
     private func finish() {
         guard let folder, let system else { return }
-        let summary = BenchmarkSummary(date: date, system: system, passes: passes)
+        var summary = BenchmarkSummary(date: date, system: system, passes: passes)
+        summary.extra = (job?.extra).flatMap { $0.isEmpty ? nil : $0 }
         let csv = ([SystemSample.csvHeader] + samples.map(\.csvRow)).joined(separator: "\n") + "\n"
         try? csv.write(to: folder.appendingPathComponent("system.csv"), atomically: true, encoding: .utf8)
         try? summary.json.write(to: folder.appendingPathComponent("summary.json"))
