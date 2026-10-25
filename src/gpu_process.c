@@ -323,14 +323,17 @@ static int spawn(const char *path, mach_port_t port) {
 }
 
 /* SIGTERM, then SIGKILL if the host has not exited within 3 s (a stuck host may never get to
- * its exit path, and the game must not wait on it forever). */
+ * its exit path, and the game must not wait on it forever). A host stuck in the kernel on hung
+ * GPU work does not finish exiting even after SIGKILL: give it 2 s more, then go on (#71). */
 static void stop_host(void) {
     if (host_pid > 0) {
         kill(host_pid, SIGTERM);
         for (int i = 0; i < 300 && waitpid(host_pid, NULL, WNOHANG) == 0; ++i) usleep(10000);
         if (kill(host_pid, 0) == 0) {
             kill(host_pid, SIGKILL);
-            waitpid(host_pid, NULL, 0);
+            int i = 0;
+            while (i++ < 200 && waitpid(host_pid, NULL, WNOHANG) == 0) usleep(10000);
+            if (i > 200) printf("GPU process: host %d did not exit after SIGKILL (stuck GPU?)\n", host_pid);
         }
         host_pid = 0;
     }

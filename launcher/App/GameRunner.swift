@@ -20,6 +20,31 @@ enum GameRunner {
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
+    /// Runs a short command whose output is data (the scripts' JSON): stdout and stderr apart.
+    static func runSeparately(_ command: [String]) -> (status: Int32, output: String, errors: String) {
+        final class Box: @unchecked Sendable { var data = Data() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command[0])
+        process.arguments = Array(command.dropFirst())
+        let out = Pipe(), err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        process.standardInput = FileHandle.nullDevice
+        do { try process.run() } catch { return (-1, "", error.localizedDescription) }
+        // Both pipes at once: a full stderr pipe would block the script while we wait on stdout.
+        let errors = Box()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errors.data = err.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        let output = out.fileHandleForReading.readDataToEndOfFile()
+        group.wait()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: output, as: UTF8.self), String(decoding: errors.data, as: UTF8.self))
+    }
+
     /// The game's processes (one copy at a time).
     static var isGameRunning: Bool {
         run(["/usr/bin/pgrep", "-x", "bbgpu-host"]).status == 0 ||

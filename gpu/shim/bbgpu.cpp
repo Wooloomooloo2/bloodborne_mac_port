@@ -11,6 +11,7 @@
 #include <boost/asio/io_context.hpp>
 #include "common/polyfill_thread.h"
 #include "video_core/renderdoc.h"
+#include <cstdio>
 #include <cstring>
 #include <unistd.h>
 #include <memory>
@@ -343,6 +344,26 @@ extern "C" const bool* bbgpu_split_keyboard(void) {
     }
     static_assert(sizeof(bool) == 1);
     return reinterpret_cast<const bool*>(BbSplit::Shared()->keys);
+}
+
+extern "C" uint32_t bbgpu_bench_frame_draws(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->bench_frame_draws, __ATOMIC_RELAXED)
+                             : 0;
+}
+
+extern "C" uint64_t bbgpu_bench_host_flips(void) {
+    return BbSplit::Remote() ? __atomic_load_n(&BbSplit::Shared()->host_flips, __ATOMIC_RELAXED) : 0;
+}
+
+extern "C" void bbgpu_bench_set_phase(uint32_t phase, const char* error) {
+    if (!BbSplit::Remote()) {
+        return;
+    }
+    BbGpuShared* s = BbSplit::Shared();
+    if (error) {
+        std::snprintf(s->bench_error, sizeof(s->bench_error), "%s", error);
+    }
+    __atomic_store_n(&s->bench_phase, phase, __ATOMIC_RELEASE);
 }
 
 extern "C" void bbgpu_split_push(const void* record) {

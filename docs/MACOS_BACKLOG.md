@@ -710,6 +710,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Preferred display (#60, 2026-10-24).** The window always opens centred on the main display
+  (`gpu/shim/window.cpp`, `SDL_WINDOWPOS_CENTERED`) and the default resolution comes from it
+  (`gpu/shim/bbgpu.cpp`). Add a `display=` setting chosen in the launcher, applied with
+  `SDL_WINDOWPOS_CENTERED_DISPLAY(id)`, and keep resolution/ultrawide per display so docking does
+  not reset them.
+- **Leftover game processes (#71, 2026-10-24).** After a force-quit of a hung game, `bb-probe`
+  and a GPU host stuck in exit stay alive and the launcher refuses to start ("only one copy").
+  `stop_host` no longer waits forever after SIGKILL (fixes-0.5.6); the launcher should also offer
+  "End the previous copy" (SIGKILL the pgrep'd PIDs, check again, else say a restart is needed).
 - **Show the release version in the launcher (user, 2026-10-23).** Nothing in the window says
   which build is installed, so players (and bug reports) can't tell 0.5.4.2 from 0.5.4.4 without
   opening About. The bundle already carries it: `package_app.sh` writes `CFBundleShortVersionString`

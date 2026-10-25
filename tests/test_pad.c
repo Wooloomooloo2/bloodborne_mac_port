@@ -6,6 +6,10 @@
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
 const bool *bbgpu_split_keyboard(void) { return NULL; }
+uint32_t bbgpu_bench_frame_draws(void) { return 0; }
+uint64_t bbgpu_bench_host_flips(void) { return 0; }
+void bbgpu_bench_set_phase(uint32_t phase, const char *error) { (void)phase; (void)error; }
+volatile int runtime_bench_map_opened;
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;

@@ -35,10 +35,14 @@ struct LauncherView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
             HStack(spacing: 12) {
+                Button("Mods & Cheats…") { ModsWindow.show(launcher: model) }
+                Text(model.modsSummary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Toggle("Show launcher every time", isOn: $model.config.showLauncher)
                 UpdateBadge(updater: model.updater)
                 Spacer()
-                if let message = model.exitMessage {
+                if let progress = model.benchmark.progress {
+                    Text(progress).foregroundStyle(.secondary).lineLimit(1)
+                } else if let message = model.exitMessage {
                     Text(message).foregroundStyle(.red).lineLimit(2)
                     if model.crashReport != nil {
                         Button("Crash Report…") { model.showingCrashReport = true }
@@ -46,6 +50,10 @@ struct LauncherView: View {
                         Button("Show Log", action: model.showLog)
                     }
                 }
+                Button("Benchmark…") { model.startBenchmark() }
+                    .controlSize(.large)
+                    .disabled(!model.canPlay)
+                    .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
                 Button(action: model.play) {
                     Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
                 }
@@ -65,6 +73,13 @@ struct LauncherView: View {
         .background {
             Color.clear.sheet(isPresented: Binding(get: { model.updater.showing }, set: { if !$0 { model.updater.dismiss() } })) {
                 UpdateView(model: model, updater: model.updater)
+            }
+        }
+        .background {
+            Color.clear.sheet(isPresented: Binding(get: { model.benchmark.showingResult }, set: { model.benchmark.showingResult = $0 })) {
+                if let result = model.benchmark.result {
+                    BenchmarkResultView(result: result, runner: model.benchmark)
+                }
             }
         }
     }
