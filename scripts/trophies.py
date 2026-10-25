@@ -1,11 +1,16 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Bloodborne trophies: the list (PS4 trophy ids of CUSA03173) and the unlocks the game made.
 
-The game unlocks a trophy through sceNpTrophyUnlockTrophy; the runtime appends "id unix-time" to
-<saves folder>/trophies.log and prints "Runtime: trophy <id> unlocked". The launcher records
-what it reads in the game's output (or in last_run.log) in the same file, so older runtimes and
-games started without the launcher are tracked too. The platinum is the console's job: it is
-awarded here once every base-game trophy is unlocked (The Old Hunters does not count).
+The macOS runtime handles sceNpTrophyUnlockTrophy and appends "id unix-time" to
+<runtime user directory>/trophies.log: <data directory>/user/trophies.log by default,
+overridden by BB_USER_DIR / --user. BB_SAVE_DIR moves game saves independently.
+The native SwiftUI launcher reads this log; the in-game UI receives runtime snapshots
+through the shared control block. The runtime alone writes the macOS achievement history.
+
+This module supplies the generated C and Swift catalogs and retains the original Python
+Tracker helpers for compatibility and tests. Tracker can also import unlock messages from
+game output or last_run.log. Platinum requires every ordinary base-game trophy; The Old
+Hunters does not count.
 """
 import re
 import time
@@ -104,8 +109,8 @@ def platinum_due(unlocked):
 
 
 class Tracker:
-    """The unlocks of one saves folder, kept up to date from trophies.log, last_run.log and the
-    lines of a running game. poll() and observe() return the ids that are new since the last call."""
+    """Compatibility tracker for one runtime user directory, updated from trophies.log,
+    last_run.log and game output. poll() and observe() return newly seen trophy ids."""
 
     def __init__(self, user_dir):
         self.user_dir = Path(user_dir)

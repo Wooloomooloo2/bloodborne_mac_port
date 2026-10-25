@@ -100,8 +100,10 @@ int32_t runtime_trophy_unlock(int id,int32_t *platinum) {
     int32_t result=0;
     if (state.unlocked[id]) result=(int32_t)0x8055160c;
     else if (!id) result=(int32_t)0x8055160d;
-    else if (!append(id,(int64_t)time(NULL),1)) result=(int32_t)0x80551612;
-    else if (award_platinum(1) && platinum) *platinum=0;
+    else if (append(id,(int64_t)time(NULL),1)) {
+        if (award_platinum(1) && platinum) *platinum=0;
+    }
+    /* Local persistence failures stay in state.error for the UI, never the game's result. */
     bbgpu_trophy_update(&state,notifications);
     pthread_mutex_unlock(&trophy_lock); return result;
 }

@@ -8,6 +8,7 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <sys/stat.h>
 #include <unistd.h>
 void runtime_restart(void) { abort(); }
 static atomic_int wins;
@@ -70,8 +71,23 @@ int main(void) {
     fclose(file); runtime_trophy_configure(folder);
     runtime_trophy_snapshot(&snapshot); assert(snapshot.unlocked[0]==133 && !runtime_trophy_take_event(&event));
     char bad[512]; snprintf(bad,sizeof(bad),"%s/missing",folder); runtime_trophy_configure(bad);
-    assert(runtime_trophy_unlock(1,&platinum)==(int32_t)0x80551612);
-    runtime_trophy_snapshot(&snapshot); assert(!snapshot.unlocked[1] && snapshot.error[0] && !runtime_trophy_take_event(&event));
+    runtime_trophy_snapshot(&snapshot); const uint64_t before_failure=snapshot.revision;
+    platinum=99;
+    /* Exercise the guest ABI: local I/O failures must not change the game's control flow. */
+    assert(!unlock(1,1,1,&platinum) && platinum==-1);
+    runtime_trophy_snapshot(&snapshot);
+    assert(snapshot.revision>before_failure && !snapshot.unlocked[1] && snapshot.error[0] && !runtime_trophy_take_event(&event));
+    assert(!trophy(1,1,1,NULL,&trophy_data) && !trophy_data.unlocked && !trophy_data.timestamp);
+    assert(!mkdir(bad,0700));
+    assert(!unlock(1,1,1,&platinum) && platinum==-1);
+    runtime_trophy_snapshot(&snapshot);
+    assert(snapshot.unlocked[1]>0 && !snapshot.error[0]);
+    assert(runtime_trophy_take_event(&event) && event.id==1 && !runtime_trophy_take_event(&event));
+    assert(unlock(1,1,1,&platinum)==(int32_t)0x8055160c);
+    runtime_trophy_configure(bad); runtime_trophy_snapshot(&snapshot);
+    assert(snapshot.unlocked[1]==event.timestamp && !snapshot.error[0] && !runtime_trophy_take_event(&event));
+    char recovered[1024]; snprintf(recovered,sizeof(recovered),"%s/trophies.log",bad);
+    unlink(recovered); rmdir(bad);
     unlink(path); rmdir(folder);
     puts("Achievements: persistent history, concurrent deduplication, platinum, event queue and PS4 queries passed");
     return 0;
