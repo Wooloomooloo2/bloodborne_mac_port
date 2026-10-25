@@ -168,6 +168,7 @@ int main() {
         desc.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         desc.storageMode = MTLStorageModeShared;
         Target t{[mtl newCommandQueue], [mtl newTextureWithDescriptor:desc]};
+        BbSettings::Load();
         auto& s = BbSettings::Get();
         s.show_fps = false;
 
@@ -199,15 +200,33 @@ int main() {
         };
         const auto counter_before = counter();
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
-        Expect(counter() != counter_before, "displayed FPS changes independently of real FPS");
+        Expect(counter() == counter_before, "framegen off hides displayed FPS");
+        for (int i = 0; i < 4; ++i) Present(t, true, {30, 90});
+        Expect(counter() != counter_before, "framegen off still updates the single FPS reading");
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 120});
         Expect(counter() == counter_before, "FPS labels return to the same measured values");
         const auto normal_bounds = CounterBounds(t);
+        s.framegen = true;
+        s.framegen_supported = true;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == counter_before, "enabling framegen waits for restart to show both rates");
         s.startup_framegen = true;
         for (int i = 0; i < 4; ++i) Present(t, true);
         const auto framegen_bounds = CounterBounds(t);
         Expect(framegen_bounds[2] - framegen_bounds[0] > normal_bounds[2] - normal_bounds[0],
                "framegen reserves a wider FPS counter");
+        Expect(framegen_bounds[3] - framegen_bounds[1] > normal_bounds[3] - normal_bounds[1],
+               "framegen adds a second FPS row");
+        const auto framegen_counter = counter();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(counter() != framegen_counter, "displayed FPS changes independently of real FPS");
+        s.framegen = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == framegen_counter, "disabling framegen keeps both rates until restart");
+        s.framegen_supported = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == counter_before, "unsupported framegen uses the single FPS display");
+        s.framegen_supported = true;
         const std::array<BbFrameRates::Sample, 6> changing_rates{{
             {9, 18}, {99, 198}, {100, 200}, {999, 1998}, {0, 0}, {60, 120}}};
         for (const auto rates : changing_rates) {
@@ -215,9 +234,6 @@ int main() {
             Expect(CounterBounds(t) == framegen_bounds,
                    "FPS digit counts and unavailable readings cannot shift the counter bounds");
         }
-        s.startup_framegen = false;
-        for (int i = 0; i < 4; ++i) Present(t, true);
-        Expect(CounterBounds(t) == normal_bounds, "normal counter width is restored");
         // A generated/real pair reuses one UI frame. Replaying must draw exactly
         // the same pixels without sampling the FPS clock or consuming input twice.
         Target repeated{t.queue, [mtl newTextureWithDescriptor:desc]};
@@ -239,6 +255,15 @@ int main() {
                    fromRegion:MTLRegionMake2D(0, 0, Width, Height) mipmapLevel:0];
         Expect(repeat_cb.status == MTLCommandBufferStatusCompleted && first == second,
                "generated/real pair uses identical overlay draw data");
+        s.startup_framegen = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == counter_before && CounterBounds(t) == normal_bounds,
+               "disabling framegen restores the single FPS display and normal bounds");
+        for (const auto rates : changing_rates) {
+            for (int i = 0; i < 4; ++i) Present(t, true, rates);
+            Expect(CounterBounds(t) == normal_bounds,
+                   "single FPS counter bounds stay stable across digit counts and unavailable readings");
+        }
         s.show_fps = false;
 
         // Cmd+, opens the menu; the game's input is held while it is open.
@@ -257,6 +282,34 @@ int main() {
                "menu drawn over the middle");
         // Contents kept under the menu's edges (load action Load): the corners stay the game's.
         Expect(Changed(t, 0, 0, 16, 16) == 0.0, "corner outside the menu keeps the frame");
+
+        // Compare only the footer: switches elsewhere in the menu animate after a mode change.
+        const auto footer = [&] {
+            std::vector<u8> pixels(size_t(Width) * Height * 4);
+            [t.texture getBytes:pixels.data() bytesPerRow:Width * 4
+                     fromRegion:MTLRegionMake2D(0, 0, Width, Height) mipmapLevel:0];
+            u32 bottom = Height;
+            while (bottom && std::memcmp(&pixels[((bottom - 1) * Width + Width / 2) * 4],
+                                          Fill, 4) == 0) --bottom;
+            const u32 top = bottom > 64 ? bottom - 64 : 0;
+            return std::vector<u8>(pixels.begin() + size_t(top) * Width * 4,
+                                   pixels.begin() + size_t(bottom) * Width * 4);
+        };
+        const auto normal_footer = footer();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(footer() == normal_footer, "framegen off hides displayed FPS in the settings footer");
+        s.framegen = s.startup_framegen = true;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        const auto framegen_footer = footer();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(footer() != framegen_footer, "framegen on updates displayed FPS in the settings footer");
+        s.framegen_supported = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        const auto unsupported_footer = footer();
+        for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
+        Expect(footer() == unsupported_footer, "unavailable framegen hides displayed FPS in the footer");
+        s.framegen = s.startup_framegen = false;
+        s.framegen_supported = true;
 
         // Escape closes it; then nothing is drawn and typed text reaches the game again.
         Expect(BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true)), "Escape consumed");
