@@ -59,7 +59,7 @@ void *runtime_thread_get_tcb(void);
 int32_t *runtime_errno(void);
 uintptr_t runtime_sema_resolve(const char *name);
 void runtime_sema_report(void);
-unsigned runtime_sema_waiters(uint32_t id);
+unsigned runtime_sema_waiters(uint64_t id);
 uintptr_t runtime_time_resolve(const char *name);
 void runtime_content_configure(const uint32_t values[5]);
 uintptr_t runtime_content_resolve(const char *name);
