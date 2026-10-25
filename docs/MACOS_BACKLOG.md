@@ -832,6 +832,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   Still open on that pool: about one in six `sceHttp` calls to thehuntersdream.com:18671 fails
   with cpp-httplib error 8 (SSL connection failed), intermittently, including sign-ins; the
   backend's own httplib client (keep-alive) never failed in the same runs.
+  *2026-10-25 verification:* no transport/TLS errors in 36 serial unauthenticated GETs through
+  the actual x86-64 game HTTP module: 30 on port 18671, 6 on port 443, with and without the
+  custom-CA flag. Certificate verification stayed enabled. This did not reproduce the older
+  report; authenticated gameplay remains untested. See `HTTPS_VERIFICATION.md`.
   *2026-10-18, The Hunter's Dream operators' feedback (via the user):* the server now supports
   long polling on `/np/events/poll` and asked clients to use it (99% of their load was empty
   250 ms polls), to send play logs no more often than the game's default or 45-60 s, and to keep

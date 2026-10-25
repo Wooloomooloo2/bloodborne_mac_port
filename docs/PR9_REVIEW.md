@@ -58,8 +58,11 @@ history are retained. No remote branch, PR description or comments were changed.
 
 ## Remaining verification
 
-Live sign-in, Mac–Windows co-op with the distinct `bbport-mac` identity, and the reported
-intermittent game HTTPS failure still need real sessions. The PR discussion records prior
+Live sign-in and Mac–Windows co-op with the distinct `bbport-mac` identity still need real
+sessions. The historical intermittent HTTPS failure did not reproduce in a subsequent
+36-request check through the actual x86-64 game HTTP module, including the custom-CA flag;
+see [HTTPS verification](HTTPS_VERIFICATION.md) for results and limits. Authenticated gameplay
+was not tested, so this is not a confirmed fix for the earlier report. The PR discussion records prior
 co-op success, but that does not verify this local rebase. No gameplay or FPS improvement is
 claimed from these network changes. No game files or player credentials were used.
 
