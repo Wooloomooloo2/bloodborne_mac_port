@@ -77,3 +77,29 @@ collision, exact animation/camera-speed equivalence and wider-area stability
 remain unverified. Adaptive is not a claim that the legacy variable-mode lift
 problem is fixed. See [live findings](FINDINGS.md#adaptive-fps-live-gameplay-checks-2026-10-25)
 and [source credits and exact adaptation boundaries](../src/fps/PROVENANCE.md).
+
+## Upstream refresh, 25 October 2026
+
+Merged upstream `master` (`af0fae2`), retaining the mouse controls, keyboard fixes,
+launcher Stop behavior, benchmark, session logs and 0.5.7 release notes. The build's
+test runner keeps both the Adaptive timing checks and upstream's Stop lifecycle tests.
+The settings fixture also verifies that repeated overlay saves preserve Adaptive
+timing alongside mouse enablement, sensitivity and inversion. Timing implementation,
+patch guards and restart-selection code are unchanged from `3a37beb`.
+
+Fresh arm64 and x86-64 GPU libraries, the full game runtime including the Adaptive
+adapter, both native GPU-host variants and the launcher build successfully. GPU
+builds used CMake/Unix Makefiles with LTO disabled. The full Ninja-based
+`build_macos.sh --test` command was not run; checks were built and run individually.
+
+Passing checks: 20 limiter cases, 93 numerical checks, 21 wind-instruction cases and
+all 20 negative-control mutations; unsupported-image refusal; 19 Python patch tests,
+six preparation tests, seven restart tests, both launcher Stop tests, launcher model
+tests, settings persistence, launch settings, runtime, semaphore, pad and upscaler
+support. Cross-architecture rings verify two million records, 500,000 events and
+20,000 requests without corruption. The offscreen Metal overlay passes normally
+and with `MTL_DEBUG_LAYER=1`.
+
+No gameplay, packaged-app session or optional real-1.09-image installation test was
+repeated for this update. The live gameplay results above describe the earlier build;
+the existing experimental limitations still apply.

@@ -70,6 +70,8 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8, in
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* 1 when bbport.ini mouse_look is on (the launcher's Mouse camera): the arrow keys are the d-pad. */
+int bbgpu_mouse_look_enabled(void);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 /* Records a guest synchronization call in the Gnm check's call ring (runtime_sync_hook). */

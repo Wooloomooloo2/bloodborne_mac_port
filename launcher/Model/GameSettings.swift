@@ -134,6 +134,9 @@ struct GameSettings: Equatable {
     var sharpness = 0.3
     var showFPS = false
     var metalHUD = false
+    /// bbport.ini mouse_look (PR #20): the mouse turns the camera after a click in the window,
+    /// and the arrow keys are the d-pad.
+    var mouseLook = false
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
     var gameTiming = GameTiming.fixed
@@ -172,6 +175,7 @@ struct GameSettings: Equatable {
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
         if let v = flag("show_fps") { showFPS = v }
         if let v = flag("metal_hud") { metalHUD = v }
+        if let v = flag("mouse_look") { mouseLook = v }
         for effect in Self.effects {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
@@ -207,6 +211,7 @@ struct GameSettings: Equatable {
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
         ini["metal_hud"] = metalHUD ? "1" : "0"
+        ini["mouse_look"] = mouseLook ? "1" : "0"
         for effect in Self.effects {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }

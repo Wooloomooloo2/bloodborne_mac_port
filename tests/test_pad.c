@@ -5,6 +5,7 @@
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
+int bbgpu_mouse_look_enabled(void) { return 0; }
 const bool *bbgpu_split_keyboard(void) { return NULL; }
 uint32_t bbgpu_bench_frame_draws(void) { return 0; }
 uint64_t bbgpu_bench_host_flips(void) { return 0; }

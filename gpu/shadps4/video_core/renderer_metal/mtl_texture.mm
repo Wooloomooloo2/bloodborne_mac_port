@@ -193,9 +193,13 @@ Object CreateSampler(Device& device, const SamplerDesc& desc) {
     }
     d.normalizedCoordinates = desc.normalized;
     if (desc.lod_bias != 0.0f) {
+        // bbport: lodBias is declared by the macOS 26 SDK only (builds with older SDKs skip it).
+#if defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
         if (@available(macOS 26.0, *)) {
             d.lodBias = desc.lod_bias;
-        } else {
+        } else
+#endif
+        {
             static std::atomic<bool> logged{false};
             if (!logged.exchange(true, std::memory_order_relaxed)) {
                 LOG_WARNING(Render, "sampler LOD bias is not applied (Metal samplers have none "

@@ -114,6 +114,8 @@ void runtime_audio_report(void);
 uintptr_t runtime_pad_resolve(const char *name);
 extern volatile int runtime_bench_map_opened; /* runtime_file.c: a map file was opened */
 void runtime_pad_report(void);
+/* Mouse look reads the GPU process's shared block through this accessor (gpu_process_start). */
+void runtime_pad_set_shared(void *(*shared)(void));
 uintptr_t runtime_rtc_resolve(const char *name);
 const char *runtime_file_user_dir(void);
 void runtime_savedata_configure(const char *title);

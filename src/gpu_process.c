@@ -12,6 +12,7 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 #include "gpu_process.h"
+#include "runtime.h"
 #ifdef __APPLE__
 #include "gpu/bbgpu.h"
 #include "host/bbgpu_shared.h"
@@ -360,6 +361,7 @@ void gpu_process_rendering(void) {
 }
 
 void gpu_process_start(void) {
+    runtime_pad_set_shared(gpu_process_shared); /* mouse look (runtime_pad.c) */
     if (runtime_memory_create_pool() || runtime_memory_pool_entry() == MACH_PORT_NULL)
         start_failed("no shared memory entry for the game's memory");
     char path[PATH_MAX];

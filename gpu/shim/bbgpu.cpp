@@ -681,6 +681,10 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+extern "C" int bbgpu_mouse_look_enabled(void) {
+    return BbSettings::Get().mouse_look ? 1 : 0;
+}
+
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt, int password) {
     if (BbSplit::Remote()) {
         BbGpuTextBegin record{};
