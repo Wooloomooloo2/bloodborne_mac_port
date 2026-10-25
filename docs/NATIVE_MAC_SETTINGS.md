@@ -1,4 +1,4 @@
-# Native Mac Settings
+# Native Mac Settings and Exit Game
 
 Bloodborne's System menu has one **Mac Settings** command, before Exit Game when that
 command is present. It opens the game's native option widgets. Left/Right on Page or
@@ -16,6 +16,13 @@ The last group requires Confirm restart before Restart now. Startup settings are
 after restart, including configuration-derived frame caps, fullscreen, HUD, compression
 and vblank values; explicit caller overrides survive.
 
+The title menu also has **Exit Game** as its last command. It closes the runtime with
+status 0; the existing GPU-host parent watcher flushes the pipeline cache and closes
+the renderer, and a launcher-started session returns to the launcher. This command is
+only on the title screen, after the game has left the world. The in-world System menu's
+existing save-and-return-to-title command is unchanged. `BB_EXIT_GAME=0` disables the
+new title command independently of `BB_MAC_SETTINGS=0`.
+
 The native slider displays integers: sharpness 30 means 0.30, reactive scale 10 means
 1.0, threshold/maximum 20 means 0.20. Model detail 0..4 corresponds to the port's -2..2.
 Line help explains these units. Visiting a page never rounds or rewrites a saved value.
@@ -29,7 +36,16 @@ six-widget MacSettings section, with message IDs in 126xxx. It updates text/help
 committed or distributed. Generated assets live in a private, content-addressed cache
 outside the dump and are mounted after user mods through the existing link overlay.
 Changed user assets invalidate the cache. Invalid assets leave the native entry disabled.
-`BB_MAC_SETTINGS=0` disables generation and hooks.
+`BB_MAC_SETTINGS=0` disables the Mac Settings assets and hooks. With Exit Game enabled,
+the generator also grows all existing title movies (base, DLC and EU DLC) to six animated
+rows and replaces the unused Opinion Box's text/help (401307) in each language bundle.
+Both feature selections, title movies and captions participate in the cache identity.
+
+`src/runtime_exit_menu.c` checks the 1.09 title condition call and relocated Opinion Box
+callback before making either change. It shows that unused row and replaces its callback
+with a clean runtime exit. Hooks require successfully generated assets and refuse modified
+or unsupported code. No guest browser request, save hook or shared-protocol addition is
+needed for this title-only command.
 
 `src/runtime_mac_settings.c` validates the System-finalizer call, trampoline padding,
 section-table slots/bound and intercepted dialog vtable targets before changing anything.
@@ -55,6 +71,8 @@ Selected native widget/functor/System builders were adapted from
 The selected adapters retain GPL-3.0-or-later; the combined runtime containing them is
 GPL-3.0-or-later. The license text is retained in `LICENSES/GPL-3.0-or-later.txt` and the
 app package. Existing GPL-2.0-or-later sources retain their original grants.
+The title-entry offsets and animated sixth-row technique follow the same Mac source
+revision's `scripts/quit_menu.py` (GPL-2.0-or-later).
 
 Dialog lifecycle, string storage, slider bounds, widget visibility and popup-capture
 behavior were checked against the player's plaintext 1.09 binary with local LLVM
@@ -90,3 +108,16 @@ but upstream master now selects a 640x360 startup size for that preset on macOS;
 failure was reproduced with upstream master's unmodified `run.sh`. An earlier gameplay
 smoke ended in the existing GPU watchdog after the window became occluded; menu checks
 before it completed, and no renderer synchronization change is included here.
+
+## Exit Game validation, 25 October 2026
+
+- 22 menu-asset fixtures pass, including title-row spacing, scale/rotation, animated
+  updates/removal, all title variants, cache identity and independent feature disabling.
+- The exit-hook fixture passes natively and under Rosetta: every code/pointer mismatch
+  leaves the image untouched; missing assets, undersized images and disable flags refuse
+  installation; invoking the installed callback in a child exits with status 0.
+- Generation against the player's dump covers all three title movies and 22 language
+  bundles. All 26 source-file hashes remain unchanged; warm-cache generation is about 7 ms.
+- The complete x86-64 runtime compiles/links with `-Wall -Wextra -Werror`, reusing the
+  existing GPU library. The existing native Mac Settings hook fixture still passes.
+- The new title entry has not been exercised in a live game session or packaged app.
