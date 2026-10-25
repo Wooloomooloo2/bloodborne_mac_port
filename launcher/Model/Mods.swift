@@ -208,13 +208,20 @@ enum Cheats {
     }
 
     /// The main window's line next to its Mods & Cheats… button.
-    /// `online`: online play is on, so cheats and gameplay changes are off (patches.py ONLINE_OFF).
+    /// `online`: online play is on, so mods (mods.py) and cheats (patches.py ONLINE_OFF) are off.
     static func summary(mods: Int, cheats: Int, online: Bool = false) -> String {
         if mods == 0 && cheats == 0 { return "No mods or cheats" }
         var parts: [String] = []
         if mods > 0 { parts.append(mods == 1 ? "1 mod" : "\(mods) mods") }
         if cheats > 0 { parts.append(cheats == 1 ? "1 cheat" : "\(cheats) cheats") }
-        return parts.joined(separator: " · ") + " on" + (online && cheats > 0 ? " (cheats off online)" : "")
+        var off: String {
+            switch (mods > 0, cheats > 0) {
+            case (true, true): " (mods and cheats off online)"
+            case (true, false): " (mods off online)"
+            default: " (cheats off online)"
+            }
+        }
+        return parts.joined(separator: " · ") + " on" + (online ? off : "")
     }
 }
 

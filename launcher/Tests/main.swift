@@ -887,8 +887,9 @@ do {
     check(list?.external.count == 2 && list?.external[1].name == nil && list?.external[0].enabled == true, "external patches")
     check(Cheats.grouped(cheats).map(\.group) == ["Cheats", "Gameplay", "Camera"], "group order")
     check(cheats[2].onlineOff && !cheats[3].onlineOff, "online_off (absent: false)")
-    check(Cheats.summary(mods: 1, cheats: 2, online: true) == "1 mod · 2 cheats on (cheats off online)"
-          && Cheats.summary(mods: 1, cheats: 0, online: true) == "1 mod on", "summary during online play")
+    check(Cheats.summary(mods: 1, cheats: 2, online: true) == "1 mod · 2 cheats on (mods and cheats off online)"
+          && Cheats.summary(mods: 1, cheats: 0, online: true) == "1 mod on (mods off online)"
+          && Cheats.summary(mods: 0, cheats: 1, online: true) == "1 cheat on (cheats off online)", "summary during online play")
 
     // Exclusive groups: one of rally at a time; others untouched.
     var on = Cheats.toggle("No Rally Decay", on: true, in: ["Increased camera distance"], cheats: cheats)

@@ -97,6 +97,15 @@ class ModTests(unittest.TestCase):
                 capture_output=True, text=True, check=True)
             self.assertEqual((Path(result.stdout.strip()) / 'dvdroot_ps4/chr/a.dcx').read_bytes(), expected)
 
+    def test_online_play_turns_mods_off(self):
+        self.mod('A', b'mod')
+        for online, expected in [('0', b'mod'), ('1', b'original')]:
+            result = subprocess.run([sys.executable, str(ROOT / 'scripts/mods.py'), str(self.game),
+                '--out', str(self.root / f'out{online}'), '--mods-dir', str(self.moddir)],
+                capture_output=True, text=True, check=True, env={**os.environ, 'BB_ONLINE': online})
+            self.assertEqual((Path(result.stdout.strip()) / 'dvdroot_ps4/chr/a.dcx').read_bytes(), expected)
+            self.assertEqual('mods are off' in result.stderr, online == '1')
+
     def test_app0_wrapped_mod_discovered(self):
         self.moddir.mkdir()
         (self.moddir / 'Wrapped/app0/dvdroot_ps4').mkdir(parents=True)
