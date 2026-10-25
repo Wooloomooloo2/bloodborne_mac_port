@@ -208,7 +208,12 @@ def main():
     if not args.game or not args.out:
         parser.error('the game folder and --out are required')
     layers = []
-    if args.enabled == '1':
+    if args.enabled == '1' and os.environ.get('BB_ONLINE') == '1':
+        # Online play: everyone in a world plays the same game, and a mod can change game data
+        # (enemy or weapon stats) as a cheat would. The game folder is used as it is.
+        if args.mods_dir.is_dir() and selected(args.mods_dir, args.config):
+            print('Mods: online play: mods are off for this launch', file=sys.stderr)
+    elif args.enabled == '1':
         # shadPS4's loose overlay convention, beside the original game.
         legacy = Path(str(args.game.resolve()) + '-mods')
         if legacy.is_dir():
