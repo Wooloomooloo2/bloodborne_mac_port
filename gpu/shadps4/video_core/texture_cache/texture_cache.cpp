@@ -5,6 +5,7 @@
 #include <set>
 #include <xxhash.h>
 
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -122,7 +123,15 @@ void TextureCache::MarkAsMaybeDirty(ImageId image_id, Image& image) {
 }
 
 void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
-    std::scoped_lock lock{mutex};
+    // bbport: BB_FRAME_STATS times the wait for the lock on the fault thread (bbport_stutter.h).
+    std::unique_lock lock{mutex, std::try_to_lock};
+    if (!lock.owns_lock()) {
+        const u64 start = BbStats::enabled ? BbStutter::NowNs() : 0;
+        lock.lock();
+        if (start) {
+            BbStutter::tls_texture_lock_ns += BbStutter::NowNs() - start;
+        }
+    }
     const auto pages_start = PageManager::GetPageAddr(addr);
     const auto pages_end = PageManager::GetNextPageAddr(addr + size - 1);
     ForEachImageInRegion(pages_start, pages_end - pages_start, [&](ImageId image_id, Image& image) {

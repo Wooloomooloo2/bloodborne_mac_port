@@ -706,12 +706,25 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Area loads stall the renderer.** Entering new parts of Central Yharnam creates 400–700
   textures in one frame (130–230 MB) and waits on the host copy threads: 100–300 ms frames.
   Spread the creation and uploads over frames, or use worker threads.
+  *Partly fixed (2026-10-23):* past 8 MB of small copies per submission, the rest go to the copy
+  threads (the level entry 360 -> 290 ms; FINDINGS "Microstutters while moving"). Left in a
+  ~290 ms entry: ~75 ms of protect relays for ~900 texture tracks (batching them needs
+  `UpdateImage` split across the bind helper) and ~30 ms of Metal texture creation.
 - **Write faults cost the game ~19% of its time in the city.** That is 1,300–2,500 faults/s at
   ~150 µs each: four thread wake-ups across the processes per fault, while the renderer's own
   handling takes ~40 µs. Read-backs of GPU data wait ~10 ms each for the GPU thread. A game-side fast
   path (unprotect locally, apply the invalidation later) was tried and dropped: its 256 KB window
   also covered GPU-written images, whose texture invalidation re-uploaded stale guest memory over
   them. A correct one must leave texture-watched pages to the renderer.
+  *Partly fixed (2026-10-23), in the renderer:* read-backs whose writer completed are copied on
+  the fault thread (0.15 ms instead of ~10 ms), and a fault's state change and its window go out
+  as one relay (-44% relays). Left: ~20 µs of round trip per relay (thread wake-ups).
+- **GPU-late frames under memory pressure.** On an 18 GB Mac with other apps open, command
+  buffers take 37-112 ms when the GPU touches compressed or swapped memory (21k compressions/s
+  around them). The renderer's footprint is ~5.3 GB, about 45% compressed or swapped. The levers
+  left trade against streaming stutter: the staging pool's 512 MB (kept so streaming does not
+  re-populate blocks) and a lower texture-collector trigger (8 GB; textures re-created on
+  revisits).
 
 ## 3. Mac GUI
 

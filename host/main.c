@@ -185,6 +185,7 @@ static void *fault_thread(void *unused) {
     (void)unused;
     BbGpuShared *s = g_shared;
     for (;;) {
+        bbgpu_apply_qos(); /* user-interactive unless switched off (stutter plan phase 2) */
         const BbGpuRecord *r = bbgpu_ring_peek(s, &s->faults, UINT64_C(1000000000));
         if (!r) continue;
         const BbGpuFault fault = *(const BbGpuFault *)r;

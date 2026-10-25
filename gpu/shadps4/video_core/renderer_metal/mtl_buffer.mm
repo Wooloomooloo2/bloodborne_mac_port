@@ -154,9 +154,12 @@ BufferRef LowOffset(BufferRef ref) {
 }
 
 Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::string_view label,
-                    u64* gpu_address, u8** contents) {
+                    u64* gpu_address, u8** contents, u8** host_view) {
     *gpu_address = 0;
     *contents = nullptr;
+    if (host_view) {
+        *host_view = nullptr;
+    }
     id<MTLDevice> mtl_device = (__bridge id<MTLDevice>)device.NativeDevice();
     id<MTLBuffer> buffer = LazyArena(type, size)
                                ? NewLazyBuffer(mtl_device, device, size)
@@ -172,6 +175,8 @@ Object CreateBuffer(Device& device, u64 size, VideoCore::MemoryType type, std::s
     *gpu_address = buffer.gpuAddress;
     if (type != VideoCore::MemoryType::DeviceLocal) {
         *contents = static_cast<u8*>(buffer.contents);
+    } else if (host_view && LazyArena(type, size)) {
+        *host_view = static_cast<u8*>(buffer.contents);
     }
     return Object::Adopt((__bridge_retained void*)buffer);
 }

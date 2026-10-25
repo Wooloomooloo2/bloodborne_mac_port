@@ -17,6 +17,7 @@
 #endif
 #include <time.h>
 #include "bbport_copy.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include <algorithm>
 #include <atomic>
@@ -236,6 +237,7 @@ void Liverpool::Process(std::stop_token stoken) {
 #endif
 
     while (!stoken.stop_requested()) {
+        BbStutter::ApplyQos(); // user-interactive unless switched off (stutter plan phase 2)
         {
             const auto idle_start = std::chrono::steady_clock::now();
             std::unique_lock lk{submit_mutex};

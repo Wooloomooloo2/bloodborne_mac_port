@@ -34,12 +34,13 @@ void UniqueBuffer::Destroy() {
     buffer.Reset();
     gpu_address = 0;
     contents = nullptr;
+    host_view = nullptr;
 }
 
 void UniqueBuffer::Create(Metal::Device& device, u64 size, MemoryType type,
                           std::string_view label) {
     Destroy();
-    buffer = Metal::CreateBuffer(device, size, type, label, &gpu_address, &contents);
+    buffer = Metal::CreateBuffer(device, size, type, label, &gpu_address, &contents, &host_view);
     ASSERT_MSG(buffer, "Failed allocating buffer of {:#x} bytes", size);
 }
 

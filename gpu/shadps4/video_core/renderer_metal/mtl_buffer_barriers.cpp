@@ -4,8 +4,10 @@
 // (mtl_buffer_barriers.h).
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include "common/logging/log.h"
+#include "bbport_stutter.h"
 #include "video_core/renderer_metal/mtl_buffer_barriers.h"
 
 namespace Metal {
@@ -38,7 +40,9 @@ void BufferBarriers::Register(const void* buffer, u64 size) {
     zero(t.page_touch, pages);
     zero(t.chunk, chunks);
     zero(t.chunk_touch, chunks);
-    if (!t.blocks || !t.page || !t.summary || !t.page_touch || !t.chunk || !t.chunk_touch) {
+    zero(t.write_pages, (pages + 63) / 64);
+    if (!t.blocks || !t.page || !t.summary || !t.page_touch || !t.chunk || !t.chunk_touch ||
+        !t.write_pages) {
         LOG_ERROR(Render, "Buffer ordering: no memory for the access tags of a {:#x}-byte buffer; "
                           "every access to it waits for all work before it",
                   size);
@@ -204,6 +208,24 @@ OrderRequest BufferBarriers::Conflicts(const void* buffer, u64 offset, u64 size,
     }
     Collect(t.whole, write, r);
     const u64 first_page = offset >> PageBits, last_page = (end - 1) >> PageBits;
+    const auto collect_page = [&](u64 p) {
+        Collect(t.page[p], write, r);
+        const u64 page_begin = p << PageBits;
+        if (offset <= page_begin && end >= page_begin + PageSize) {
+            Collect(t.summary[p], write, r); // the whole page: its blocks together
+            return;
+        }
+        const u64 b0 = (std::max(offset, page_begin) - page_begin) >> BlockBits;
+        const u64 b1 = (std::min(end, page_begin + PageSize) - 1 - page_begin) >> BlockBits;
+        const Block* blocks = &t.blocks[p * BlocksPerPage];
+        for (u64 b = b0; b <= b1; ++b) {
+            Collect(blocks[b], write, r);
+        }
+    };
+    // bbport: a read waits only for writes (RAR orders nothing), and pages whose page and block
+    // marks hold no write add nothing for it: visit the pages with a write bit, and clear the
+    // bits of pages whose writes all retired. Exact; second toggle word bit 3 walks every page.
+    const bool reads_by_index = !write && !BbStutter::BarrierWriteIndexOff();
     for (u64 chunk = offset >> ChunkBits; chunk <= (end - 1) >> ChunkBits; ++chunk) {
         if (!Live(t.chunk_touch[chunk])) {
             continue;
@@ -211,21 +233,27 @@ OrderRequest BufferBarriers::Conflicts(const void* buffer, u64 offset, u64 size,
         Collect(t.chunk[chunk], write, r);
         const u64 lo = std::max(first_page, chunk << (ChunkBits - PageBits));
         const u64 hi = std::min(last_page, ((chunk + 1) << (ChunkBits - PageBits)) - 1);
+        if (reads_by_index) {
+            for (u64 word = lo / 64; word <= hi / 64; ++word) {
+                u64 bits = t.write_pages[word];
+                while (bits) {
+                    const u64 p = word * 64 + u64(std::countr_zero(bits));
+                    bits &= bits - 1;
+                    if (p < lo || p > hi) {
+                        continue;
+                    }
+                    if (!Live(t.page[p].write) && !Live(t.summary[p].write_hi)) {
+                        t.write_pages[word] &= ~(1ull << (p % 64)); // its writes retired
+                        continue;
+                    }
+                    collect_page(p);
+                }
+            }
+            continue;
+        }
         for (u64 p = lo; p <= hi; ++p) {
-            if (!Live(t.page_touch[p])) {
-                continue;
-            }
-            Collect(t.page[p], write, r);
-            const u64 page_begin = p << PageBits;
-            if (offset <= page_begin && end >= page_begin + PageSize) {
-                Collect(t.summary[p], write, r); // the whole page: its blocks together
-                continue;
-            }
-            const u64 b0 = (std::max(offset, page_begin) - page_begin) >> BlockBits;
-            const u64 b1 = (std::min(end, page_begin + PageSize) - 1 - page_begin) >> BlockBits;
-            const Block* blocks = &t.blocks[p * BlocksPerPage];
-            for (u64 b = b0; b <= b1; ++b) {
-                Collect(blocks[b], write, r);
+            if (Live(t.page_touch[p])) {
+                collect_page(p);
             }
         }
     }
@@ -261,6 +289,9 @@ void BufferBarriers::Mark(const void* buffer, u64 offset, u64 size, bool write, 
         const u64 hi = std::min(last_page, ((chunk + 1) << (ChunkBits - PageBits)) - 1);
         for (u64 p = lo; p <= hi; ++p) {
             t.page_touch[p] = tag;
+            if (write) {
+                t.write_pages[p / 64] |= 1ull << (p % 64); // Conflicts' read index
+            }
             const u64 page_begin = p << PageBits;
             if (offset <= page_begin && end >= page_begin + PageSize) {
                 MarkBlock(t.page[p], write, encoders, stage); // the whole page: one tag

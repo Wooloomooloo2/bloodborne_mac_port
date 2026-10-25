@@ -19,6 +19,8 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#include <pthread.h>
+#include <pthread/qos.h>
 #include "gpu_process.h"
 #endif
 /* sceKernelGetDirectMemorySize on retail PS4: 5056 MiB. BB_DMEM_MB raises it (the resolution
@@ -66,11 +68,35 @@ _Static_assert(sizeof(BatchEntry)==32,"PS4 batch map entry layout");
 static HostRwlock lock=HOST_RWLOCK_INIT;
 static __thread unsigned exclusive_depth, shared_depth;
 static uint64_t table_generation;
+/* BB_FRAME_STATS: how long the GPU protect relay waits for this lock and who holds it for writing
+ * (stutter plan phase 0, performance/experiments/stutter/PLAN.md). */
+static int lock_stats=-1;
+static int lock_stats_on(void) {
+    if (lock_stats<0) lock_stats=getenv("BB_FRAME_STATS")!=NULL;
+    return lock_stats;
+}
+static uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+static __thread uint64_t write_held_since;
+static uint64_t write_held_max_ns;
+static char write_held_max_name[32];
 static void write_lock(void) {
-    if (!exclusive_depth++) { host_write_lock(&lock); __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL); }
+    if (!exclusive_depth++) {
+        host_write_lock(&lock); __atomic_add_fetch(&table_generation,1,__ATOMIC_ACQ_REL);
+        if (lock_stats_on()) write_held_since=now_ns();
+    }
 }
 static void write_unlock(void) {
-    if (!--exclusive_depth) { __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE); host_write_unlock(&lock); }
+    if (!--exclusive_depth) {
+        if (lock_stats_on() && write_held_since) {
+            uint64_t held=now_ns()-write_held_since;
+            write_held_since=0;
+            if (held>__atomic_load_n(&write_held_max_ns,__ATOMIC_RELAXED)) {
+                __atomic_store_n(&write_held_max_ns,held,__ATOMIC_RELAXED);
+                pthread_getname_np(pthread_self(),write_held_max_name,sizeof write_held_max_name);
+            }
+        }
+        __atomic_add_fetch(&table_generation,1,__ATOMIC_RELEASE); host_write_unlock(&lock);
+    }
 }
 static void read_lock(void) { if (!exclusive_depth && !shared_depth++) host_read_lock(&lock); }
 static void read_unlock(void) { if (!exclusive_depth && !--shared_depth) host_read_unlock(&lock); }
@@ -986,8 +1012,62 @@ int runtime_memory_region(uintptr_t address, uintptr_t *start, uintptr_t *end, i
     return found;
 }
 /* GPU page tracking: restrict host access, never beyond the guest's own protection. */
+/* BB_FRAME_STATS: the relay's work in the game (bb:GpuProtect), printed every 5 s. */
+static struct { uint64_t calls, pages, lock_ns, lock_max_ns, slow_waits, mprotect_ns, mprotect_max_ns,
+                         window_start; } protect_stats;
+static void protect_stats_print(uint64_t now) {
+    if (!protect_stats.window_start) { protect_stats.window_start=now; return; }
+    if (now-protect_stats.window_start<5000000000ull) return;
+    struct timespec wall; clock_gettime(CLOCK_REALTIME,&wall);
+    uint64_t held=__atomic_exchange_n(&write_held_max_ns,0,__ATOMIC_RELAXED);
+    printf("Game protect (%.1f s): %llu calls, %llu pages; waiting for the memory table lock %.1f ms "
+           "(max %.2f, %llu waits over 2 ms), mprotect %.1f ms (max %.2f); table write lock held "
+           "at most %.2f ms (%s) | t=%.3f\n",
+           (now-protect_stats.window_start)/1e9,(unsigned long long)protect_stats.calls,
+           (unsigned long long)protect_stats.pages,protect_stats.lock_ns/1e6,protect_stats.lock_max_ns/1e6,
+           (unsigned long long)protect_stats.slow_waits,protect_stats.mprotect_ns/1e6,
+           protect_stats.mprotect_max_ns/1e6,held/1e6,held ? write_held_max_name : "-",
+           wall.tv_sec+wall.tv_nsec/1e9);
+    fflush(stdout);
+    memset(&protect_stats,0,sizeof protect_stats);
+    protect_stats.window_start=now;
+}
+/* Stutter plan phase 2: the GPU protect relay's consumer (bb:GpuProtect) runs at user-interactive
+ * QoS unless bit 16 of BB_TOGGLE_FILE's second number is set. The game's own toggle watcher runs
+ * only in single-process mode, so this one starts with the first relay. */
+static uint64_t toggles2_game;
+static void *toggles2_watcher(void *path) {
+    for (;;) {
+        FILE *f=fopen(path,"r");
+        unsigned long long first=0, second=0;
+        if (f) { if (fscanf(f,"%llu %llu",&first,&second)!=2) second=0; fclose(f); }
+        __atomic_store_n(&toggles2_game,(uint64_t)second,__ATOMIC_RELAXED);
+        struct timespec t={0,250000000}; nanosleep(&t,NULL);
+    }
+    return NULL;
+}
+static void protect_thread_qos(void) {
+    static int watcher_started;
+    static __thread int applied=-1;
+    if (!__atomic_exchange_n(&watcher_started,1,__ATOMIC_ACQ_REL)) {
+        const char *toggles=getenv("BB_TOGGLE_FILE");
+        pthread_t watcher;
+        if (toggles && pthread_create(&watcher,NULL,toggles2_watcher,(void *)toggles)==0) pthread_detach(watcher);
+    }
+    const int want=(__atomic_load_n(&toggles2_game,__ATOMIC_RELAXED) & 16) ? 0 : 1;
+    if (want!=applied) {
+#ifdef __APPLE__
+        pthread_set_qos_class_self_np(want ? QOS_CLASS_USER_INTERACTIVE : QOS_CLASS_DEFAULT,0);
+#endif
+        applied=want;
+    }
+}
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write) {
+    protect_thread_qos();
+    const int stats=lock_stats_on();
+    const uint64_t start=stats ? now_ns() : 0;
     read_lock();
+    const uint64_t locked=stats ? now_ns() : 0;
     for (size_t i=vma_index(address); i<vma_count && vmas[i].start<address+size; ++i) {
         if (vmas[i].kind==KIND_RESERVED) continue;
         uintptr_t a=vmas[i].start>address ? vmas[i].start : address;
@@ -997,6 +1077,19 @@ void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int 
         mprotect((void *)a,b-a,guest & want);
     }
     read_unlock();
+    if (stats) {
+        /* Single consumer (bb:GpuProtect in split mode); single-process callers may race on these
+         * diagnostics counters, which is harmless. */
+        const uint64_t end=now_ns(), wait=locked-start, work=end-locked;
+        protect_stats.calls++;
+        protect_stats.pages+=(size+4095)/4096;
+        protect_stats.lock_ns+=wait;
+        if (wait>protect_stats.lock_max_ns) protect_stats.lock_max_ns=wait;
+        if (wait>2000000) protect_stats.slow_waits++;
+        protect_stats.mprotect_ns+=work;
+        if (work>protect_stats.mprotect_max_ns) protect_stats.mprotect_max_ns=work;
+        protect_stats_print(end);
+    }
 }
 /* Host view of a guest range, for the GPU backend: the range must be mapped. */
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size) {

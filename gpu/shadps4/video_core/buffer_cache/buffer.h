@@ -46,11 +46,17 @@ public:
     [[nodiscard]] u8* Contents() const noexcept {
         return contents;
     }
+    /// bbport: the CPU pointer of the lazy guest arena (Metal::CreateBuffer's host_view), else
+    /// null. Only for reading GPU-written data whose command buffer has completed.
+    [[nodiscard]] u8* HostView() const noexcept {
+        return host_view;
+    }
 
 private:
     Metal::Object buffer;
     u64 gpu_address{};
     u8* contents{};
+    u8* host_view{};
 };
 
 struct Buffer {

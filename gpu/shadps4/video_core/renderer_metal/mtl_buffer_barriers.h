@@ -281,6 +281,10 @@ private:
         ZeroArray<u32> page_touch;  ///< the newest command that marked the page (or a block)
         ZeroArray<Block> chunk;     ///< accesses of a whole chunk
         ZeroArray<u32> chunk_touch; ///< the newest command that marked anything in the chunk
+        /// bbport: per page, a bit when a write marked the page or one of its blocks (cleared
+        /// lazily once those writes retired). A read waits only for writes, so a read covering
+        /// a chunk visits these pages instead of all 256 (Conflicts).
+        mutable ZeroArray<u64> write_pages;
         Block whole{};              ///< accesses of the whole buffer (direct memory access)
         u32 touch{};                ///< the newest command that marked anything
         u64 size{};

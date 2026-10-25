@@ -21,6 +21,7 @@
 #include "bbport_cpu.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
+#include "bbport_stutter.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "common/debug.h"
@@ -462,6 +463,7 @@ void Scheduler::SyncRecording() {
 void Scheduler::RecorderThread(std::stop_token stoken) {
     Common::SetCurrentThreadName("bb:MtlRecorder");
     while (true) {
+        BbStutter::ApplyQos(); // user-interactive unless switched off (stutter plan phase 2)
         // Spin briefly before sleeping: the next chunk usually follows within microseconds,
         // and a sleeping recorder costs the GPU thread a wake-up syscall per kick. With few
         // hardware threads (Steam Deck: 8) the spin would take time from guest threads.
@@ -586,7 +588,19 @@ u64 Scheduler::SubmitExecution() {
     // Through the draw runs: no patch draw is left waiting, and their scratch memory is
     // handed to this submission's tick.
     draw_run_open = false;
+    // A bound write not yet recorded lands in a later command buffer: its tick is marked split
+    // before the commit, so whoever sees this tick complete also sees the split (direct
+    // read-backs check again once a tick completed), and after it in case one was bound meanwhile.
+    const u64 next_tick = timeline.CurrentTick();
+    const bool split_before = gpu_write_unrecorded.load(std::memory_order_relaxed);
+    if (split_before) {
+        BbStutter::MarkSplit(next_tick);
+    }
     const u64 tick = timeline.Committed(draw_runs.Submit(encoder));
+    if (gpu_write_unrecorded.load(std::memory_order_relaxed) &&
+        !(split_before && tick == next_tick)) {
+        BbStutter::MarkSplit(tick);
+    }
     debug_groups = 0; // Encoder::Submit closed them
     draw_runs.ReportSkips(); // dropped draws by reason, every 5 s when there are any
     BbStats::queue_submit_ns.fetch_add(bbport::CyclesToNs(bbport::CpuCycles() - submit_start),

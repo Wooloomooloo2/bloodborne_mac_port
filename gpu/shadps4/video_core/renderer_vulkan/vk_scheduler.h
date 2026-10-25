@@ -883,6 +883,18 @@ public:
         return is_rendering && render_state == state;
     }
 
+    /// bbport: direct read-backs (bbport_stutter.h). A buffer range was bound for a GPU write
+    /// (BufferCache::SynchronizeMemory stamped its pages with CurrentTick()) and the command that
+    /// writes it is not recorded yet; a submission meanwhile marks its tick as split.
+    void NoteGpuWriteBound() noexcept {
+        gpu_write_unrecorded.store(true, std::memory_order_relaxed);
+    }
+    /// After a draw or dispatch was recorded (Rasterizer::ResetBindings). A missed call only
+    /// makes the next submission's tick split (more conservative), never the reverse.
+    void NoteCommandRecorded() noexcept {
+        gpu_write_unrecorded.store(false, std::memory_order_relaxed);
+    }
+
     /// Whether BeginRendering(state) would start a new render pass.
     [[nodiscard]] bool WillBeginRendering(const RenderState& state) const {
         return !(is_rendering && render_state == state);
@@ -900,6 +912,12 @@ public:
     /// Returns true when the GPU completed this scheduler's submissions up to `tick`.
     [[nodiscard]] bool IsFree(u64 tick) const {
         return timeline.IsFree(tick);
+    }
+
+    /// bbport: blocks any thread until `tick`, already committed, completed. Unlike Wait() it never
+    /// flushes (the fault thread's writer waits, BufferCache::WaitForWriter).
+    void WaitCommitted(u64 tick) {
+        timeline.Wait(tick);
     }
 
     /// The highest of this scheduler's ticks known complete.
@@ -986,6 +1004,7 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    std::atomic<bool> gpu_write_unrecorded{false}; ///< NoteGpuWriteBound
     PassEndHook pass_end_hook = nullptr;
     void* pass_end_context = nullptr;
     bool in_pass_end_hook = false;

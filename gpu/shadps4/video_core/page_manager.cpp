@@ -262,7 +262,34 @@ struct PageManager::Impl {
         release_pending();
     }
 
-    std::array<PageState, NUM_ADDRESS_PAGES> cached_pages{};
+    /// bbport: one byte per 4 KiB page of the 40-bit address space, 256 MiB. Held inline and
+    /// value-initialised, every byte was written at startup and stayed resident until macOS
+    /// compressed or swapped it (stutter plan phase 5, experiments/memory). Fresh anonymous memory
+    /// reads as zero (the initial state) and costs nothing until a page of it is written: the
+    /// guest's ~6 GB touch ~1.5 MB.
+    struct PageStates {
+        static constexpr size_t Bytes = NUM_ADDRESS_PAGES * sizeof(PageState);
+        PageState* data;
+        PageStates() {
+            void* memory =
+                mmap(nullptr, Bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+            ASSERT_MSG(memory != MAP_FAILED, "Page manager: no address space for the page states");
+            data = static_cast<PageState*>(memory);
+        }
+        ~PageStates() {
+            munmap(data, Bytes);
+        }
+        PageStates(const PageStates&) = delete;
+        PageStates& operator=(const PageStates&) = delete;
+        PageState& operator[](size_t page) noexcept {
+            return data[page];
+        }
+        const PageState& operator[](size_t page) const noexcept {
+            return data[page];
+        }
+    };
+    static_assert(sizeof(PageState) == 1);
+    PageStates cached_pages;
 #ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
     using LockType = Common::AdaptiveMutex;
 #else

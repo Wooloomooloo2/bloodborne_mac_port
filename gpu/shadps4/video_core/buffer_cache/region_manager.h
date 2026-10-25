@@ -126,6 +126,29 @@ public:
         UpdateProtection<false, false>();
     }
 
+    /// bbport: a guest write fault's CPU state change (ChangeRegionState<CPU, true>) and its
+    /// window (ExtendWriteFault) with one protection update: one protect relay to the game
+    /// instead of two when the window has protected pages (stutter plan phase 2).
+    void InvalidateWithWindow(VAddr fault_addr, u64 fault_size, VAddr window_addr,
+                              u64 window_size) {
+        const size_t offset = fault_addr - cpu_addr;
+        const size_t start_page = SanitizeAddress(offset) / TRACKER_BYTES_PER_PAGE;
+        const size_t end_page =
+            Common::DivCeil(SanitizeAddress(offset + fault_size), TRACKER_BYTES_PER_PAGE);
+        if (start_page < NUM_PAGES_PER_REGION && end_page > start_page) {
+            CountWriteFaults(start_page, end_page);
+            cpu.SetRange(start_page, end_page);
+        }
+        const size_t window_offset = window_addr - cpu_addr;
+        const size_t window_start = SanitizeAddress(window_offset) / TRACKER_BYTES_PER_PAGE;
+        const size_t window_end =
+            Common::DivCeil(SanitizeAddress(window_offset + window_size), TRACKER_BYTES_PER_PAGE);
+        if (window_start < NUM_PAGES_PER_REGION && window_end > window_start) {
+            cpu |= RegionBits(~(gpu | writeable), window_start, window_end);
+        }
+        UpdateProtection<false, false>();
+    }
+
     /**
      * Loop over each page in the given range, turn off those bits and notify the tracker if
      * needed. Call the given function on each turned off range.

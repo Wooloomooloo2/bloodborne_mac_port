@@ -177,6 +177,7 @@ if (APPLE)
         runtime_file_translate runtime_game_cpu_since_last runtime_memory_clamp
         runtime_memory_gpu_protect runtime_memory_read_backing runtime_memory_region
         runtime_memory_set_gpu_hooks runtime_memory_write_backing
+        runtime_memory_write_backing_locked
         runtime_process_time_counter runtime_process_time_us runtime_restart
         runtime_thread_attach_host runtime_thread_clear_blocked runtime_thread_cpu_ns
         runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip)
