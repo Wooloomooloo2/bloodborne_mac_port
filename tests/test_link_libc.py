@@ -35,6 +35,8 @@ class LinkTests(unittest.TestCase):
     def test_different_local_ids_bind_same_identity(self):
         data,report=self.run_link(*self.fixture())
         self.assertEqual(data[:8],b'BBPROBE4')
+        self.assertEqual(struct.unpack_from('<Q',data,48)[0],3)
+        self.assertEqual(struct.unpack_from('<Q',data,56)[0],report['gs_displacement'])
         self.assertEqual(report['symbol_bindings'],[
             dict(import_name='fixture#q#q',address='0x10010',kind=1)])
 
@@ -70,7 +72,7 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(image[10],0x65)
         self.assertEqual(report['fs_loads_patched'],2)
         self.assertEqual(report['main_tls'],dict(vaddr=2048,filesz=0,memsz=48,align=16))
-        self.assertEqual(struct.unpack_from('<4Q',data,56+64),(2048,0,48,16))
+        self.assertEqual(struct.unpack_from('<4Q',data,56+8+64),(2048,0,48,16))
 
     def test_fs_loads_outside_executable_segments_are_kept(self):
         main,libc=self.fixture()
