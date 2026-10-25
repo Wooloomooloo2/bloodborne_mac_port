@@ -752,11 +752,6 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
-- **Launcher: "Checking the game folder" never finishes (2026-10-25).** Seen with a checkout-built
-  app (make_app.sh) on the owner's real data; the released 0.5.7 is fine. `checkGame` only clears
-  `checkingGame` when `config.gameDir == folder` (URL equality), so a reload in between with a
-  differently formed URL drops the result. Compare standardized paths and always clear the flag
-  for the latest check (generation counter).
 - **Launcher: the Controls section pushes Locations off the bottom of the window** (0.5.7, the
   window is sized for a 13" Air). Move the bindings list to Advanced or make Controls one row.
 
