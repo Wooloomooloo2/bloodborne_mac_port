@@ -29,8 +29,31 @@ print(f"PASS: {baseline['passed']} limiter cases, {baseline['step_checks']} timi
 PY
 out/fps/install-test
 if [[ -n ${BB_TIMING_ELF:-} ]]; then
+    # Compile actual community sets, rather than relying only on synthetic
+    # one-byte conflicts. The native fixture passes them through the same
+    # whole-set validator the production loader calls before its first write.
+    "${PYTHON:-python3}" - <<'PY'
+import os, struct, sys
+from pathlib import Path
+sys.path.insert(0, 'scripts')
+from patches import EBOOT_BASE, compile_patches, eboot_segments
+out=Path('out/fps/patch-sets'); out.mkdir(exist_ok=True)
+segments=eboot_segments(Path(os.environ['BB_TIMING_ELF']).read_bytes())
+for key, name in [('60','60 FPS++'), ('90','90 FPS++'), ('uncap','Uncap FPS++'),
+                  ('enemy','Enemy Control'), ('ordinary','Player No Dead (Read note)')]:
+    writes=compile_patches(Path('patches/Bloodborne.xml'),[name],'01.09',segments)
+    blob=struct.pack('<8sQQ',b'BBPATCH2',EBOOT_BASE,len(writes))
+    blob+=b''.join(struct.pack('<QQ',offset,len(data))+data for offset,data in writes)
+    (out/(key+'.bin')).write_bytes(blob)
+PY
     for cap in 30 40 60 90 120 144 165 240 0; do
-        out/fps/install-test --elf "$BB_TIMING_ELF" --cap "$cap"
+        patch_args=(--allow-patch out/fps/patch-sets/ordinary.bin)
+        admission=--reject-patch
+        [[ $cap == 30 ]] && admission=--allow-patch
+        for name in 60 90 uncap enemy; do
+            patch_args+=("$admission" "out/fps/patch-sets/$name.bin")
+        done
+        out/fps/install-test --elf "$BB_TIMING_ELF" --cap "$cap" "${patch_args[@]}"
     done
     # Limiter, constants, task-step cave, physics, wind, play-time and cloth admission.
     for offset in 0x2034770 0x63fc3f 0x2018e3d 0x17f9b69 0x2314a60 0x19419d6 0x493bd00; do

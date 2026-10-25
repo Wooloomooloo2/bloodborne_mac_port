@@ -54,6 +54,13 @@ and uncapped, updates 1,001 variable frames per converted rate, executes the
 installed jump into the host replacement, checks patch conflicts and rejects
 deliberately corrupted timing sites without changing any image bytes.
 
+The image fixtures also check the retained timed-condition-wait body, original
+camera defaults/parameter stores and wind-load opcode. They compile the actual 60/90/Uncap FPS++
+and Enemy Control XML sets and require the installed Adaptive guard to reject
+them, while accepting an unrelated cheat. At 30 there is no installed timing
+adapter and these sets remain outside its guard. These are installation checks;
+they do not establish moving-lift collision or live camera-speed equivalence.
+
 Live gameplay checks on 2026-10-25 also passed with 60 and 120 FPS targets on an
 M4 Max, macOS 27.0, using the current rebuilt x86-64 runtime and native ARM64 GPU
 host. A fresh base-game character exercised walking, camera movement, attacks,
