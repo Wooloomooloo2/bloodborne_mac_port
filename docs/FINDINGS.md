@@ -2024,3 +2024,15 @@ Not reproduced on the M4 Max (48 GB, macOS 27) with an external 4K panel (GS27U,
   image, so it changes during loads (1080p loading screen vs 1440p scene); the overlay is drawn
   at the smaller size. *Next:* logs and benchmark reports from affected players (Mac, display,
   scaling, refresh rate, window vs full screen), and `BB_HIGH_DPI=0` as their quick test.
+- **Direct vs composited (Metal HUD), later the same evening.** Full screen with nothing over the
+  window is presented *Direct*; a window, or another app over it, is *Composited*. Without frame
+  generation Direct costs nothing here: 4K native, 120 cap, 74.9-75.8 FPS full screen (Direct,
+  sawtooth of one and two refreshes) vs 74.6 windowed. **With #64's frame generation it does:**
+  the owner measured 60 real / 120 displayed composited but 40 / 80 Direct (interpolator delta
+  23.67 vs 16.71 ms): a real + generated pair often takes three refreshes. Reported on #64.
+- **Game Mode:** the packaged master app's scripted benchmark (own save, 1080p, test data), window
+  vs `BB_FULLSCREEN=1` via launch.conf (gamepolicyd active for both, far more app-state changes in
+  full screen): route 60.0 / 60.0 FPS (1% low 37.8 vs 42.5), uncapped 108.4 vs 107.1, bb-probe
+  CPU 208% / 259% in both. No Game Mode penalty on this Mac.
+- Still untested: a scaled mode on the external panel ("looks like 2560x1440" = 5120x2880
+  surface), a 60 Hz external display, and slower Macs.
