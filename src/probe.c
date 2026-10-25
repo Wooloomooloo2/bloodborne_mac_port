@@ -912,6 +912,7 @@ int main(int argc, char **argv) {
         memcpy(image + relocs[i].target, &value, 8);
     }
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
+    runtime_install_mac_settings(image, size);
     runtime_install_context_lock(image, size);
     protect(thunks, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);
