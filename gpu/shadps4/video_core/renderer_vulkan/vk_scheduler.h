@@ -20,6 +20,7 @@
 #include <mutex>
 #include <thread>
 #include <queue>
+#include <pthread.h>
 
 #include <boost/container/static_vector.hpp>
 
@@ -994,13 +995,37 @@ private:
     /// The chunk being filled belongs to one thread at a time (the GPU command thread, or the
     /// draw recording thread while it runs). ChunkGuard reports overlapping users, e.g. a
     /// missing DrawPipe drain, which otherwise corrupt the chunk or crash on a null one.
-    std::atomic<void*> chunk_user{nullptr};
-    static void ReportChunkRace(void* other, void* caller);
+    /// Each thread has one ChunkUser (its guard's caller and the thread itself), so the report
+    /// names both sides: the thread that entered second, and the one it found inside, with
+    /// that thread's stack at report time (macOS: the thread is suspended and its frame chain
+    /// walked). The report reads the other thread's ChunkUser (a thread-local) and pthread_t:
+    /// fine for the long-lived GPU threads that record, undefined once that thread has exited.
+    /// The guard costs two stores and one exchange per Record.
+    struct ChunkUser {
+        void* caller;
+        void* thread; ///< pthread_t
+    };
+    std::atomic<ChunkUser*> chunk_user{nullptr};
+    [[nodiscard]] static ChunkUser& ThisChunkUser() noexcept {
+        static thread_local ChunkUser user{};
+        return user;
+    }
+    [[nodiscard]] static void* CurrentThreadHandle() noexcept {
+        return (void*)(uintptr_t)pthread_self(); // a pointer (macOS) or an integer (Linux)
+    }
+    /// `previous_caller`: the reporting thread's caller before this guard, which is the caller
+    /// found inside when the thread re-entered its own use (other == self).
+    static void ReportChunkRace(const ChunkUser* other, const ChunkUser* self,
+                                void* previous_caller);
     struct ChunkGuard {
         Scheduler& s;
         ChunkGuard(Scheduler& s_, void* caller) : s{s_} {
-            if (void* other = s.chunk_user.exchange(caller, std::memory_order_acquire)) {
-                ReportChunkRace(other, caller);
+            ChunkUser& user = ThisChunkUser();
+            void* const previous_caller = user.caller; // kept: a same-thread re-entry reports it
+            user.caller = caller;
+            user.thread = CurrentThreadHandle();
+            if (ChunkUser* other = s.chunk_user.exchange(&user, std::memory_order_acquire)) {
+                ReportChunkRace(other, &user, previous_caller);
             }
         }
         ~ChunkGuard() {

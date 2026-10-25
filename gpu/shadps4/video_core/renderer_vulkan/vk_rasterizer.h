@@ -93,7 +93,9 @@ public:
     void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
     u32 ReadDataFromGds(u32 gsd_offset);
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
-    /// GPU thread, before a write the guest can observe (see Scheduler::WaitHostCopies).
+    /// GPU thread, before a write the guest can observe (see Scheduler::WaitHostCopies). The
+    /// wait kicks the recorder (the recording chunk), so the draw recording thread is drained
+    /// first, as in WaitDeferredSignals.
     void WaitHostCopies() {
         DrainDrawPipe();
         scheduler.WaitHostCopies();

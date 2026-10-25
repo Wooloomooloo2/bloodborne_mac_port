@@ -14,7 +14,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <execinfo.h>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <fmt/format.h>
@@ -30,6 +32,38 @@ namespace {
 
 constexpr u32 MaxBuffers = 31, MaxTextures = 128, MaxSamplers = 16;
 constexpr u32 MaxInlineBytes = 4096;
+
+/// The calling thread's stack, symbolised, one frame per line (the caller's frame first).
+std::string CallerStack() {
+    void* frames[32];
+    const int count = backtrace(frames, 32);
+    char** symbols = backtrace_symbols(frames, count);
+    std::string out;
+    for (int i = 1; i < count; ++i) {
+        out += "\n    ";
+        out += symbols ? symbols[i] : "?";
+    }
+    std::free(symbols);
+    return out;
+}
+
+/// bbport: the encoder's pass state and the scheduler's have come apart: a pass the scheduler
+/// did not count is open at a submission or at the next BeginRenderPass, or none is open at
+/// EndRenderPass. Seen once in co-op (a summoned player loading in). A likely symptom of the
+/// recording-chunk race (docs/MACOS_BACKLOG.md): the scheduler ends its pass before every
+/// submission, so a pass can only be open there when another thread recorded its
+/// BeginRenderPass at the same time; that race is fixed in Liverpool::ProcessCommands. The
+/// mismatch is survived (see each caller) and the first eight are logged with the reporting
+/// thread's stack, which names the thread that submitted or recorded.
+void WarnPassMismatch(const char* what, const char* detail) {
+    static std::atomic<int> reported{0};
+    if (reported.fetch_add(1, std::memory_order_relaxed) >= 8) {
+        return;
+    }
+    LOG_WARNING(Render,
+                "{} ({}): likely the recording-chunk race (docs/MACOS_BACKLOG.md); stack:{}",
+                what, detail, CallerStack());
+}
 
 /// A bit per texture slot.
 struct TextureMask {
@@ -679,7 +713,19 @@ kernel void fill_u32(device uint* dst [[buffer(0)]], constant uint2& args [[buff
 
     /// Ends encoding and commits; `tracked` takes a tick. Returns 0 for an untracked commit.
     u64 Finish(bool tracked) {
-        ASSERT_MSG(!in_pass, "Submit inside a render pass");
+        if (in_pass) {
+            // bbport: a submission while a pass is open: the scheduler had already counted its
+            // pass as ended, so another thread's BeginRenderPass was recorded at the same time
+            // (WarnPassMismatch: likely the recording-chunk race). A Metal command buffer cannot
+            // commit with a render encoder open, but the pass survives it: the encoder is closed
+            // here and the next draw reopens the pass with load actions, as after compute or
+            // blit work inside a pass. Clears not yet recorded are kept for that reopening
+            // (pass_opened stays false); the pass ends at the scheduler's next EndRenderPass or
+            // BeginRenderPass.
+            WarnPassMismatch("Submit inside a render pass: the pass continues in the next "
+                             "command buffer",
+                             pass_opened ? "opened" : "not opened yet");
+        }
         EndRender();
         EndCompute();
         EndBlit();
@@ -1397,7 +1443,14 @@ void* Encoder::ComputeEncoder(Access buffers) {
 // ---- Render passes and draws (Task 5) ----
 
 void Encoder::BeginRenderPass(const RenderPassDesc& desc) {
-    ASSERT_MSG(!impl->in_pass, "BeginRenderPass inside a render pass");
+    if (impl->in_pass) {
+        // bbport: a pass the scheduler did not count is still open (the same mismatch Finish
+        // survives; nothing else closes it). It ends here as EndRenderPass would end it, clears
+        // and resolves included, and the new pass begins.
+        WarnPassMismatch("BeginRenderPass inside a render pass: the open pass ends first",
+                         impl->pass_opened ? "opened" : "not opened yet");
+        EndRenderPass();
+    }
     EndEncoding();
     MTLRenderPassDescriptor* first = [MTLRenderPassDescriptor renderPassDescriptor];
     bool clears = false, attachments = false, resolves = false;
@@ -1487,7 +1540,12 @@ void Encoder::BeginRenderPass(const RenderPassDesc& desc) {
 }
 
 void Encoder::EndRenderPass() {
-    ASSERT_MSG(impl->in_pass, "EndRenderPass outside a render pass");
+    if (!impl->in_pass) {
+        // bbport: the mirror of the mismatch above (a pass counted by the scheduler that the
+        // encoder never began): nothing to end.
+        WarnPassMismatch("EndRenderPass outside a render pass: nothing to end", "no pass");
+        return;
+    }
     if (!impl->pass_opened && (impl->pass_clears || impl->pass_resolves)) {
         impl->Render(); // a pass that only clears or resolves still has to do it
     }
