@@ -485,6 +485,13 @@ saves and settings as the Finder launcher.
 
 ### In the game
 
+- **System → Mac Settings:** one native game-menu entry for renderer, quality, effects and
+  launch settings. Use Left/Right on **Page**, or L1/R1 (keyboard 1/3), to change groups.
+  Changes save to the same `bbport.ini`; `*` marks changes requiring a restart. On the final
+  page, enable **Confirm restart**, then **Restart now**. Native ultrawide remains a launcher
+  setting. The menu uses English captions in every supported game language.
+  Its assets are generated privately from your game files after user mods; originals stay
+  untouched. Set `BB_MAC_SETTINGS=0` to disable it. Unsupported assets/code leave it disabled.
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.
@@ -527,6 +534,10 @@ This port stands entirely on the work of others:
   FSR 3.1 / FSR 4 runtime the port used until 0.5.0; FSR 3.1 is still built from its AMD
   FidelityFX SDK sources (MIT).
 - **Omar Cornut** — [Dear ImGui](https://github.com/ocornut/imgui), used for the in-game overlay (MIT).
+- **[evill33t/bloodborne_mac](https://github.com/evill33t/bloodborne_mac/tree/bbacb95c3338efcd627c0edaec05ff7534e555da)**
+  and **[droogie/bbhost](https://github.com/droogie/bbhost/tree/566184a74f071166299bb656c4af479e5bbe2771)** —
+  selected native menu builders and asset-generation techniques, adapted to this port's
+  existing settings and process bridge. [Provenance and validation](docs/NATIVE_MAC_SETTINGS.md).
 - **Alex Barney (Thealexbarney)** — [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9),
   AT9 audio decoding (MIT).
 - **sirit** — SPIR-V emitter used by the shader recompiler (BSD-3-Clause), with Khronos
@@ -547,4 +558,6 @@ Each third-party component keeps its own license file in its directory.
 ## License
 
 GNU General Public License v2.0 or later (GPL-2.0-or-later), because of the shadPS4
-components. See [LICENSE](LICENSE).
+components. See [LICENSE](LICENSE). The native-menu adapters retain GPL-3.0-or-later;
+the combined runtime containing them is GPL-3.0-or-later. See
+[the retained license](LICENSES/GPL-3.0-or-later.txt).
