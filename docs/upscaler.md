@@ -25,7 +25,10 @@ attempts two images per real frame; simulation, physics, input polling and guest
 completion signals keep their existing rates. A 120 Hz display can show a 60 FPS
 real-frame stream plus intermediates. Generating images adds GPU work and latency;
 it does not make the game simulate faster or guarantee a higher delivered rate.
-The FPS counter and settings footer show **Real** and **Displayed** rates separately.
+The FPS counter and settings footer show **Real** and **Displayed** rates separately
+only while frame generation is enabled for the running session on a supported path.
+With frame generation off or unavailable, they retain the single FPS and frame-time
+display. Pending changes to the frame-generation switch take effect after restart.
 Real FPS counts new game frames supplied to the presenter, excluding reused and
 blank frames. Displayed FPS counts distinct, positive Metal drawable presentation
 timestamps for real and generated images, rather than assuming a 2x multiplier or
@@ -96,9 +99,11 @@ controller gameplay test.
 
 The frame-rate fixture checks independent real/displayed rates, 2x delivery,
 real-only fallback, refresh limits, invalid/duplicate/out-of-order callbacks,
-pause/resume and concurrent updates. The overlay fixture changes displayed FPS
-without changing real FPS, checks identical replay over a generated/real pair, and
-checks stable counter bounds across changing digit counts and unavailable readings.
+pause/resume and concurrent updates. The overlay fixture verifies the single-rate
+counter and settings footer with frame generation off or unavailable, restart-dependent
+display changes, independent displayed FPS with frame generation on, identical replay over a
+generated/real pair, and stable counter bounds across changing digit counts and
+unavailable readings in both modes.
 
 The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
 through GPU completion, bounded-pool fallback, warmup/cut/gap resets and moving

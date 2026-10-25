@@ -1170,8 +1170,14 @@ void Menu() {
             ImGui::Unindent(r * 2.0f + 8.0f * base_scale);
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
-            ImGui::Text("Real %.0f / Displayed %.0f FPS   Saved to bbport.ini",
-                        frame_rates.real_fps, frame_rates.displayed_fps);
+            if (s.startup_framegen && s.framegen_supported) {
+                ImGui::Text("Real %.0f / Displayed %.0f FPS   Saved to bbport.ini",
+                            frame_rates.real_fps, frame_rates.displayed_fps);
+            } else {
+                ImGui::Text("%.0f FPS  (%.1f ms)   Saved to bbport.ini",
+                            frame_rates.real_fps,
+                            frame_rates.real_fps > 0 ? 1000.0 / frame_rates.real_fps : 0.0);
+            }
             ImGui::PopStyleColor();
         }
         const char* apply = "Apply and Restart Game";
@@ -1214,15 +1220,17 @@ void Menu() {
 void FpsCounter() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const auto& s = BbSettings::Get();
+    const bool framegen_active = s.startup_framegen && s.framegen_supported;
     const float pad = 14.0f * base_scale;
     const float gap = 8.0f * base_scale;
     const float fps_width = ImGui::CalcTextSize("9999 FPS").x;
     const float ms_width = ImGui::CalcTextSize("9999.9 ms").x;
-    const float row_width = ImGui::CalcTextSize("Displayed").x + fps_width + ms_width + gap * 2;
+    const float row_width = fps_width + ms_width + gap +
+                            (framegen_active ? ImGui::CalcTextSize("Displayed").x + gap : 0.0f);
     const float resolution_width =
         ImGui::CalcTextSize("9999x9999 -> 9999x9999  MetalFX").x * .82f;
     const float width = std::max(row_width, resolution_width) + 22.0f * base_scale +
-                        (s.startup_framegen ? 16.0f * base_scale : 0.0f);
+                        (framegen_active ? 16.0f * base_scale : 0.0f);
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - pad,
                                    viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
@@ -1240,10 +1248,17 @@ void FpsCounter() {
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
     const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
     const auto row = [&](const char* label, double fps) {
-        ImGui::TextUnformatted(label);
+        if (label) {
+            ImGui::TextUnformatted(label);
+        }
         char text[48];
         std::snprintf(text, sizeof(text), "%.0f FPS", fps);
-        ImGui::SameLine(right - ms_width - gap - ImGui::CalcTextSize(text).x);
+        const float fps_x = right - ms_width - gap - ImGui::CalcTextSize(text).x;
+        if (label) {
+            ImGui::SameLine(fps_x);
+        } else {
+            ImGui::SetCursorPosX(fps_x);
+        }
         ImGui::TextUnformatted(text);
         if (fps > 0) {
             std::snprintf(text, sizeof(text), "%.1f ms", 1000.0 / fps);
@@ -1251,8 +1266,12 @@ void FpsCounter() {
             ImGui::TextColored(kSecondary, "%s", text);
         }
     };
-    row("Real", frame_rates.real_fps);
-    row("Displayed", frame_rates.displayed_fps);
+    if (framegen_active) {
+        row("Real", frame_rates.real_fps);
+        row("Displayed", frame_rates.displayed_fps);
+    } else {
+        row(nullptr, frame_rates.real_fps);
+    }
     // Scene size from the upscaler or native G-buffer, and the output in effect: a
     // startup-patched session keeps its launch output until restart.
     const char* upscaler = s.upscaler == BbSettings::UpscalerFsr3      ? "FSR 3.1"
