@@ -4,6 +4,7 @@
 // bbport: glue between the C loader and the vendored shadPS4 video core.
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
+#include "bbport_mac_settings.h"
 #include <sys/resource.h>
 #include "bbport_toggles.h"
 #include <algorithm>
@@ -53,6 +54,7 @@ uint64_t runtime_process_time_us(void);
 uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 int32_t* runtime_errno(void);
+void runtime_restart(void);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
 }
 
@@ -239,6 +241,38 @@ static void StartProfileWriter() {
 
 static void OpenWindow(const BbGpuConfig* config);
 
+static void PublishMacSettings(BbGpuShared* shared) {
+    // Only KeyBridge publishes after the initial pre-readiness snapshot. A dispatch-side
+    // publisher could overwrite a newer snapshot with a value it read before an edit.
+    for (uint32_t field = 0; field < BBMAC_COUNT; ++field) {
+        __atomic_store_n(&shared->mac_settings[field], BbMacSettings::Get(field), __ATOMIC_RELEASE);
+    }
+}
+
+extern "C" int32_t bbgpu_mac_setting_get(uint32_t field) {
+    if (field >= BBMAC_COUNT) return -1;
+    if (BbSplit::Remote()) {
+        return __atomic_load_n(&BbSplit::Shared()->mac_settings[field], __ATOMIC_ACQUIRE);
+    }
+    return BbMacSettings::Get(field);
+}
+
+extern "C" void bbgpu_mac_setting_set(uint32_t field, int32_t value) {
+    if (field >= BBMAC_COUNT) return;
+    if (BbSplit::Remote()) {
+        const BbGpuMacSetting record{{BBGPU_REC_MAC_SETTING, sizeof(BbGpuMacSetting)}, field, value};
+        BbSplit::Push(&record);
+        return;
+    }
+    if (field == BBMAC_RESTART) {
+        if (value != 1) return;
+        BbSettings::Save();
+        runtime_restart(); // the normal single-process / host restart path, outside file locks
+    } else {
+        BbMacSettings::Set(field, value);
+    }
+}
+
 extern "C" int bbgpu_init(const BbGpuConfig* config) {
     BbSettings::Load();
 #ifdef BB_PGO_GENERATE
@@ -262,6 +296,7 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
         auto* s = static_cast<BbGpuShared*>(shared);
         s->label_address = Libraries::VideoOut::BbSplitLabelAddress();
         s->hdr_supported = presenter && presenter->IsHDRSupported() ? 1 : 0;
+        PublishMacSettings(s);
         BbSplit::ForwardInterrupts();
         // Keyboard for the game's pad emulation (input proper moves here in M5).
         std::thread([s] {
@@ -275,6 +310,7 @@ extern "C" int bbgpu_host_start(const BbGpuConfig* config, void* shared) {
                 }
                 __atomic_store_n(&s->overlay_captures, BbOverlay::CapturesInput() ? 1u : 0u,
                                  __ATOMIC_RELAXED);
+                PublishMacSettings(s);
                 // Text entry (IME dialog): publish the text and its state while it is open.
                 if (__atomic_load_n(&s->text_active, __ATOMIC_ACQUIRE) && g_window) {
                     std::string text;
@@ -317,6 +353,12 @@ extern "C" int bbgpu_host_fault(uint64_t address, int write) {
 extern "C" int bbgpu_host_dispatch(const void* record) {
     const auto* r = static_cast<const BbGpuRecord*>(record);
     BbArenaRuns::Refresh(); // the view events before this record (ring order)
+    if (r->type == BBGPU_REC_MAC_SETTING) {
+        if (r->bytes != sizeof(BbGpuMacSetting)) return 0;
+        const auto* setting = static_cast<const BbGpuMacSetting*>(record);
+        bbgpu_mac_setting_set(setting->field, setting->value);
+        return 1;
+    }
     if (r->type == BBGPU_REC_TEXT_BEGIN) {
         auto* t = static_cast<const BbGpuTextBegin*>(record);
         BbGpuShared* s = BbSplit::Shared();

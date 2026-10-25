@@ -5,6 +5,7 @@
 #define BBGPU_H
 #include <stdbool.h>
 #include <stdint.h>
+#include "bbmac_settings.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
