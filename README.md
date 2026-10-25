@@ -17,7 +17,7 @@ process.
 
 ## Status (2026-10-25)
 
-**Current version: [mac-v0.5.5](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.5)** (download the app, or build it as below).
+**Current version: [mac-v0.5.6](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.6)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -28,9 +28,11 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-### Coming in 0.6 (on master, not yet released)
+**Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
+@evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
+Fixes for 16 GB Macs come as 0.5.x updates. Online play (#9) is still in progress.
 
-These are in the repository now; build from source to try them, or wait for the next release.
+### New in 0.5.6: mod manager and cheats, benchmark, 16:10, better crash reports
 
 - **Mods & Cheats** (asked for in #16 by @noelmiller): a **Mods & Cheats…** button in the
   launcher opens its own window. See [Mods and cheats](#mods-and-cheats).
@@ -326,6 +328,9 @@ the log.
   (60/90/120) is not affected.
 - **Above 1080p, the selected item's icon in the HUD is missing** (an empty frame; #14). It is
   there at 1080p.
+- **At 16:10, full-screen menus keep their 16:9 artwork** (grey bars at the sides), and the first
+  moments of loading a level can glitch. The HUD itself is placed correctly. A UI mod such as
+  "16x10 and 4x3 UI Fixes" (Nexus Mods) fixes the menus and loads through **Mods & Cheats…**.
 
 ### What's next
 
@@ -333,7 +338,7 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- **0.6:** online co-op (from @noelmiller's #9), with the mod manager and benchmark above.
+- **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
 - Keyboard and mouse controls (mouse look, from #20).
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
@@ -560,8 +565,9 @@ Each run is kept in `~/Library/Logs/Bloodborne/Benchmarks/<date and time>/`:
 - `report.md` (the same text, ready to paste into an issue) and `summary.json`;
 - a per-frame CSV for each pass, `system.csv`, and each pass's game log.
 
-Please run it when you are reporting a performance problem. The benchmark save and route
-aren't in the repository yet: a build without them shows why the button is unavailable.
+Please run it when you are reporting a performance problem. The benchmark's own save (a character
+in Central Yharnam with the route cleared of enemies) and the recorded route are in `benchmark/`
+and inside the app; your own saves are never used.
 [docs/DESIGN_BENCHMARK.md](docs/DESIGN_BENCHMARK.md) has the details.
 
 ### Logs
@@ -702,7 +708,7 @@ Thank you to everyone who sent pull requests:
   - Touchpad gestures (#8).
   - Buffer arena sizing for Macs with less memory (#13).
   - The HUD item icon above 1080p (#17).
-  - Online play, coming in 0.6 (#9).
+  - Online play (#9, in progress).
 - **[Mojahed Abushawish](https://github.com/MojahedAbushawish)**
   - Lossless texture compression (#33).
   - The upscaler haze fix (#48).

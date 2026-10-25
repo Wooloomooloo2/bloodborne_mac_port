@@ -133,10 +133,10 @@ static void sample_host(PadData *d) {
         }
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_TAB]) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-        return;
     }
+    /* The keyboard works beside a controller: its buttons add to the pad's, and WASD / the arrow
+     * keys take over a stick only while held (with a controller connected the keyboard used to be
+     * ignored, so Enter could not press Play Offline). */
     if (!k) return;
     static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
         {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_RETURN,BTN_CROSS}, {SDL_SCANCODE_KP_ENTER,BTN_CROSS},
@@ -151,12 +151,16 @@ static void sample_host(PadData *d) {
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
     if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
     if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-    if (d->buttons & BTN_L2) d->l2=255;
-    if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
-    d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    if (k[SDL_SCANCODE_R]) d->l2=255;
+    if (k[SDL_SCANCODE_F]) d->r2=255;
+    if (k[SDL_SCANCODE_A] || k[SDL_SCANCODE_D])
+        d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
+    if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_S])
+        d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
+    if (k[SDL_SCANCODE_LEFT] || k[SDL_SCANCODE_RIGHT])
+        d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
+    if (k[SDL_SCANCODE_UP] || k[SDL_SCANCODE_DOWN])
+        d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -245,12 +249,17 @@ static void record_sample(const PadData *d) {
     fflush(record_file);
 }
 static PadSample *replay; static size_t replay_count, replay_next;
-/* Benchmark traversal: the replay's clock is the GPU host's presented frames at 60 per second
- * (the fixed timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. */
+/* Benchmark traversal: the replay's clock is the game's own frames at 60 per second (the fixed
+ * timestep), so a Mac below 60 FPS walks the recorded path more slowly, not elsewhere. The game
+ * reads the pad once per frame (7815 reads for 7815 frames shown on the route), so the read count
+ * is that clock. The GPU host's presented frames lag the game by a varying frame or two: as the
+ * clock they let an input land a frame early or late, and the route split into different paths
+ * after about a minute. */
 static int replay_by_frames;
 static uint64_t replay_start_flips;
+static size_t replay_start_reads;
 static uint32_t replay_ms(void) {
-    if (replay_by_frames) return (uint32_t)((bbgpu_bench_host_flips()-replay_start_flips)*1000/60);
+    if (replay_by_frames) return (uint32_t)((reads-replay_start_reads)*1000/60);
     return (uint32_t)((now_us()-replay_start)/1000);
 }
 static void replay_sample(PadData *d) {
@@ -272,13 +281,18 @@ static void replay_sample(PadData *d) {
         }
         replay_start=now_us();
         replay_start_flips=bbgpu_bench_host_flips();
+        replay_start_reads=reads;
         replay_next=0;
     }
     const uint32_t ms=replay_ms();
     while (replay_next<replay_count && replay[replay_next].ms<=ms) ++replay_next;
     if (!replay_next) return;
     if (replay_next==replay_count && ms>replay[replay_count-1].ms+500) {
-        if (replay_armed==1) { puts("Runtime: pad replay finished"); replay_armed=2; }
+        if (replay_armed==1) {
+            printf("Runtime: pad replay finished (%zu pad reads, %llu frames shown)\n",reads-replay_start_reads,
+                   (unsigned long long)(bbgpu_bench_host_flips()-replay_start_flips));
+            replay_armed=2;
+        }
         return;
     }
     const PadSample *s=&replay[replay_next-1];

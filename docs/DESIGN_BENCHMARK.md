@@ -26,7 +26,7 @@ effects at their defaults, windowed, texture compression on. The player's shader
 
 Assets (not in git: the save is a player-made test character, shipping it is the owner's call):
 `benchmark/savedata/...` (the save folder tree, `1/CUSA00207/SPRJ0005...`) and `benchmark/route.pad`.
-Packaged app: `Contents/Resources/benchmark/`; checkout: `<repo>/out/benchmark/`; `BB_BENCH_ASSETS`
+Packaged app: `Contents/Resources/benchmark/`; checkout: `<repo>/benchmark/` (in git since 0.5.6); `BB_BENCH_ASSETS`
 overrides. Without them the button explains why it is unavailable.
 
 ## Interface: launcher → game (environment, per pass)
@@ -115,3 +115,27 @@ frames with 100-120 MB of uploads, one GPU spike), GPU 55% busy. Throughput (108
 (6.8 ms, 83% busy); a GPU spike of 27-39 ms every 5 s standing (the known "one long command
 buffer" item, MACOS_BACKLOG Performance, FINDINGS 2026-10-18). A pass takes ~2.5 min (traversal)
 and ~1.5 min (throughput) from launch.
+
+## Route clock (2026-10-25)
+
+The traversal replay first stepped by the GPU host's presented frames. The host runs a varying
+frame or two behind the game, so an input sometimes landed a game frame early or late: runs
+matched for the first ~50 s, then split into two or three repeating paths (draw counts per 10 s
+block, 2026-10-24/25 runs). The game reads the pad exactly once per frame (7815 reads for 7815
+frames shown on the route), so the replay now counts the game's own pad reads.
+
+The route file still stores wall-clock milliseconds from the recording session. During recording
+the game ran fixed steps, so a slow frame advanced the game one 1/60 s step while wall time moved
+on further; replaying by game frames shifts inputs near those spots, and the character bumps
+walls and items (the same way every run, so results stay comparable).
+
+## Next: a benchmark suite (owner, 2026-10-25; after 0.5.6)
+
+- Recording stores game frame numbers (pad reads since the recording started) instead of wall
+  time, so a replay is exactly what was played. Re-record the Central Yharnam route with it.
+- Several tests instead of one route; the owner records them:
+  - traversal routes (capped at 60, the fixed timestep), including the current one;
+  - uncapped tests;
+  - "lantern" tests: load at another lantern and turn the camera a full 360° (GPU and streaming
+    load of a whole area without movement).
+- The launcher runs the set and reports each test separately.

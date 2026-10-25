@@ -244,6 +244,13 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   through SessionLogWriter (moved to `<pass>.log/.jsonl` next to the CSV). README has a "Coming in
   0.6" section and PR contributor credits.
 
+## Release lines (2026-10-25, owner decision)
+
+- **0.5.6 = everything on master as of 2026-10-25** (mod manager + cheats, benchmark, 16:10,
+  #40/#23/#66/#32, fixes #61/#71/F9). 0.5.x is the stable line; **0.5.7** = fixes for 16 GB Macs.
+- **0.6 = MetalFX frame generation (#64)**, pre-releases only until well tested. Online play (#9)
+  is still in progress, not tied to 0.6. PR #77 (adaptive timing) is not wanted for now.
+
 ## Next steps (in order)
 
 1. **Native arm64 GPU process** (docs/DESIGN_NATIVE_GPU_PROCESS.md): M0 spike passed (1.75× on
