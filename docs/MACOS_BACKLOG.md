@@ -483,6 +483,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 2. Performance
 
+- **16–18 GB Macs on macOS 27 run at 5–17 FPS (2026-10-25, top priority, the 0.5.x hotfix).**
+  Not GPU-bound: the GPU idles ~60% of each frame (FINDINGS "the slow Macs are 16–18 GB Macs on
+  macOS 27"). Needs a slow Mac to test: the kernel log for `required > max`, raising
+  `iogpu.wired_limit_mb`, then BB_GC_BUDGET_MB / BB_ARENA_GIB / BB_ARENA_LAZY / BB_FRAMES_AHEAD with
+  the benchmark. Likely fix if wiring: size the arena and its residency by RAM, or a growing arena.
+
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
   pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
   tessellated draws encodes its vertex and control kernels in a compute encoder, so the pass

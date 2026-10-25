@@ -1967,3 +1967,35 @@ SDL signal fix passed a restored-game stop with both guest and renderer confirme
 Split validation: both production-Process termination tests pass on macOS with x86 SDL,
 including removal of the merged view and unchanged synthetic source/mod files. Launcher
 build/model tests pass. No private save data is used by these regression tests.
+
+## 2026-10-25: the slow Macs are 16–18 GB Macs on macOS 27 (report survey)
+
+Every performance issue and attached log was surveyed (two read-only investigations). Persistently
+slow (5–17 FPS) reports after 0.5.0 all come from `bbgpu-host-macos27` on a 16–18 GB Mac:
+#19 M1 Pro 16 GB, #22 M5 16 GB, #53/#69 M3 Pro 18 GB, a Reddit M2 Pro. Not slow: the same M3 Pro
+18 GB model on macOS 15.7 (50–62 FPS at 1080p), 16 GB Airs on macOS 26 (#47, #25 after its fix),
+big Macs on 27 (M4 Max 48 GB −4%, M2 Max 64 GB, M5 Max 36 GB after the 0.5.0 arena fix).
+#22 is the cleanest A/B: the same M5 16 GB ran 0.4 (one MoltenVK process, the 27 host could not
+start) at 45–60 FPS; every split-mode 0.5.x build about 4x slower.
+
+The slow Macs are not GPU-bound. #69 (M3 Pro, 0.5.5, BB_FRAME_STATS): GPU busy 27–31 ms but
+only 37–44% of wall time, frames-ahead waits 57–67 ms, GPU ticks block the GPU thread 86–89%; on
+the title menu 6–14 draws, GPU busy 5–6 ms, still only 23–26 FPS. So a fixed delay per submission
+before the GPU starts, the signature of #6 (idle GPU, 1.2 s submit-to-start, constant wiring) and
+#42 (`IOGPUCommandDescriptor::prepare: required > max`). Wired 9.97 of 18 GB, swap 0.
+
+Suspects (unconfirmed): (1) the GPU driver's wired-memory limit on small Macs under macOS 27, so
+residency (the 6 GiB arena is in a queue residency set and declared on every encoder, the same
+size on every Mac) is re-wired per submission; (2) something specific to split mode on 27 (the
+mirrored guest memory, the exec-time reservation host). The arena is direct memory + 1 GiB
+(`buffer_cache.cpp`), only the texture budget scales with RAM (`texture_cache.cpp`).
+
+DiAvisoo's bbport-mac-optimized (the Reddit comparison) is KosmicKrisp (Vulkan on Metal) with a
+sparse arena, tested only on an M2 Max 64 GB, and has been marked obsolete in favour of this port
+since 2026-10-20; no M2 Pro result for it was found.
+
+To confirm on a slow Mac: `log show --last 2m --predicate 'eventMessage CONTAINS "required > max"'`
+while slow; `sysctl iogpu.wired_limit_mb`; then (diagnostic, resets at reboot)
+`sudo sysctl iogpu.wired_limit_mb=14000` on an 18 GB Mac; and one at a time BB_GC_BUDGET_MB=6000,
+BB_ARENA_GIB=5, BB_ARENA_LAZY=0, BB_FRAMES_AHEAD=2 with the benchmark. If (1) holds, the fix is an
+arena that grows with the game's mappings (backlog idea (d), placement heaps / sparse-like).
