@@ -64,7 +64,9 @@ if ninja -C out/gpu -t targets all 2>/dev/null | grep '^bbnet:' >/dev/null; then
         echo 'Online module: build failed (full log: out/gpu-net-build.log); the game plays offline without it' >&2
     fi
 else
-    echo 'Online module: not built (its libraries are missing: run bash scripts/macos/bootstrap_deps.sh)'
+    # BB_NET=OFF or missing dependencies must not leave a previously built module loadable.
+    rm -f out/gpu/libbbnet.dylib
+    echo 'Online module: not built (disabled or libraries missing; run bash scripts/macos/bootstrap_deps.sh)'
 fi
 if [[ ${1:-} == --gpu-only ]]; then echo "Built $PWD/out/gpu/libbbgpu.dylib"; exit 0; fi
 
@@ -118,8 +120,9 @@ if [[ ${1:-} == --test ]]; then
     out/online-test
     # The online module's P2P frames match shadPS4 v0.20.0's codec (skips without the module).
     if [[ -f out/gpu/libbbnet.dylib ]]; then
-        ninja -C out/gpu bbnet-codec-test > out/gpu-net-test-build.log 2>&1 || { tail -40 out/gpu-net-test-build.log >&2; exit 1; }
+        ninja -C out/gpu bbnet-codec-test bbnet-session-test > out/gpu-net-test-build.log 2>&1 || { tail -40 out/gpu-net-test-build.log >&2; exit 1; }
         out/gpu/bbnet-codec-test
+        out/gpu/bbnet-session-test
     fi
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test

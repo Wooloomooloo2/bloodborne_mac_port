@@ -80,3 +80,17 @@ target_include_directories(bbnet-codec-test PRIVATE shadps4 ../shadps4)
 target_link_libraries(bbnet-codec-test PRIVATE OpenSSL::Crypto)
 set_target_properties(bbnet-codec-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     INTERPROCEDURAL_OPTIMIZATION OFF)
+
+# Loopback HTTP regression coverage; no guest code or public service is contacted.
+add_executable(bbnet-session-test EXCLUDE_FROM_ALL ../../tests/test_thd_session.cpp
+    thd/thd_session.cpp)
+target_include_directories(bbnet-session-test PRIVATE . ../third_party/httplib ../shadps4)
+target_compile_options(bbnet-session-test PRIVATE -UNDEBUG)
+target_compile_definitions(bbnet-session-test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(bbnet-session-test PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL
+    OpenSSL::Crypto ZLIB::ZLIB)
+if (APPLE)
+    target_link_libraries(bbnet-session-test PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+set_target_properties(bbnet-session-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)

@@ -148,8 +148,12 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
         # The client field the server tells clients apart by (User-Agent on the backend's calls and
         # the game's, "name/version"). The operators ask every client for its own name and version
         # (2026-10-18): this port's, from its latest tag (mac-v0.5.0 -> "bbport-mac 0.5.0"; without
-        # git, "dev"). BB_CLIENT_VERSION overrides it.
-        mac_version=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --abbrev=0 --match 'mac-v*' 2>/dev/null | sed 's/^mac-v//' || true)
+        # a release version file or git, "dev"). BB_CLIENT_VERSION overrides it.
+        if [[ -r bbport-version ]]; then
+            mac_version=$(<bbport-version) # release bundle: no .git directory
+        else
+            mac_version=$(git -C "$(dirname "${BASH_SOURCE[0]}")" describe --tags --abbrev=0 --match 'mac-v*' 2>/dev/null | sed 's/^mac-v//' || true)
+        fi
         export BB_CLIENT_VERSION=${BB_CLIENT_VERSION:-"bbport-mac ${mac_version:-dev}"}
         unset BB_SHADNET_SERVER BB_SHADNET_WEBAPI BB_SHADNET_NPID BB_SHADNET_PASSWORD BB_SHADNET_TOKEN
         if [[ -z ${BB_THD_TOKEN:-} || -z ${BB_THD_ONLINE_ID:-} ]]; then

@@ -27,6 +27,10 @@ bash build_macos.sh                         # prints "Online module: .../libbbne
 ```
 
 Without those libraries the build still succeeds and the port plays offline.
+`BB_NET=OFF bash build_macos.sh` also removes an older module from the build output.
+Release packaging includes the built x86-64 module in `Contents/Frameworks`, together with
+its [source and license notices](ONLINE_PROVENANCE.md). A package built without it stays
+offline. The release version is carried into the online client identity without needing Git.
 
 ## 2. Turn online play on
 

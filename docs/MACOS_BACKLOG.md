@@ -854,7 +854,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   epoll-shim out of the bootstrap; the Discord device name no longer carries the hostname;
   README section on what is exposed. Not fixable here: shadNet's protocol is plain TCP (the
   server has only an "Unsecured" listener) and its WebAPI plain HTTP. For the maintainer: the
-  client identity strings, GPL-3 of `gpu/bbnet/thd`, `BB_NET` default and bundling the module.
+  client identity strings and the `BB_NET` default. Local PR #9 review, 2026-10-25: the packager
+  now bundles the built module, GPL-3 text, dependency licenses and source provenance
+  (`ONLINE_PROVENANCE.md`); the app records its version for the client identity. Live co-op
+  with that identity and the intermittent game HTTPS failure still need verification.
 - **Menu bugs on macOS.** "Subpixel jitter" ticks then unticks itself; upscaler/preset choices
   made in the menu were not what bbport.ini held afterwards (found upscaler=off, preset=0).
   *2026-10-15:* settings were only written when the menu closed, so closing the game window (or
