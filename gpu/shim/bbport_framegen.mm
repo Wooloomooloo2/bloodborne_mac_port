@@ -63,7 +63,8 @@ kernel void displayed_color(texture2d<float, access::read> source [[texture(0)]]
     if (p.x >= target.get_width() || p.y >= target.get_height()) return;
     // Read through the presenter's video-out view: preserve its sRGB decode,
     // component swizzle and alpha One, after the game's own gamma LUT.
-    target.write(source.read(p), p);
+    uint2 size = uint2(source.get_width(), source.get_height());
+    target.write(source.read(min(p, size - 1)), p);
 }
 kernel void restore_hud(texture2d<float, access::read> real [[texture(0)]],
                         texture2d<float, access::read> mask [[texture(1)]],
@@ -116,6 +117,16 @@ void Pin(Metal::Encoder& e, const FramePtr& frame) {
 
 bool Requested() {
     return BbSettings::Get().startup_framegen;
+}
+bool DisplaySupported(double refresh_hz, uint32_t real_cap) {
+    return real_cap > 0 && std::isfinite(refresh_hz) && refresh_hz >= 2.0 * real_cap;
+}
+bool DisplaySupported() {
+    const auto& s = BbSettings::Get();
+    return DisplaySupported(s.display_refresh_hz, s.framegen_real_cap);
+}
+bool Active() {
+    return Requested() && BbSettings::Get().framegen_supported && DisplaySupported();
 }
 bool Supported(Metal::Device& device) {
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
@@ -242,7 +253,7 @@ FramePtr Generator::Prepare(const Description& d) {
     }
     std::erase(s.pool, FramePtr{});
     if (!frame) {
-        if (s.pool.size() == 4)
+        if (s.pool.size() == MaxSnapshotSets)
             return {}; // no wait, no unbounded allocation
         frame = std::make_shared<Frame>();
         @autoreleasepool {
@@ -268,7 +279,14 @@ FramePtr Generator::Prepare(const Description& d) {
     }
     frame->description = d;
     frame->interpolated.store(false, std::memory_order_release);
-    return frame;
+    // Each use has its own lease control block. The pool owns the allocation,
+    // while weak references in unpresented display buffers observe only this
+    // use: they expire before the slot can be reused for another real frame.
+    // A plain weak_ptr to the pool's control block would never expire and could
+    // resurrect a reused slot. Explicitly release the allocation on lease expiry
+    // even if the standard library keeps the deleter alive for weak references.
+    auto* const leased = frame.get();
+    return FramePtr{leased, [owned = std::move(frame)](Frame*) mutable { owned.reset(); }};
 }
 
 void Generator::Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion,

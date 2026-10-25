@@ -17,6 +17,7 @@
 #include <cstring>
 #include <limits>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -48,6 +49,23 @@ void Policy() {
     Expect(BbFrameGen::Requested(), "saved launch setting enables generation");
     settings.framegen = false;
     Expect(BbFrameGen::Requested(), "menu changes keep in-flight frame ownership until restart");
+    settings.startup_framegen = false;
+    for (const auto [hz, cap, supported] : {
+             std::tuple{60.0, 30u, true}, {60.0, 60u, false}, {120.0, 60u, true},
+             {120.0, 120u, false}, {144.0, 60u, true}, {240.0, 120u, true},
+             {59.94, 30u, false}, {0.0, 30u, false}, {120.0, 0u, false},
+             {-1.0, 30u, false}, {std::numeric_limits<double>::quiet_NaN(), 30u, false}}) {
+        Expect(BbFrameGen::DisplaySupported(hz, cap) == supported,
+               "paired drawables require known refresh at least twice a finite real cap");
+    }
+    settings.startup_framegen = settings.framegen_supported = true;
+    settings.framegen_real_cap = 60;
+    settings.display_refresh_hz = 120;
+    Expect(BbFrameGen::Active(), "supported launch activates generation at 120 Hz / 60 FPS");
+    settings.display_refresh_hz = 60;
+    Expect(!BbFrameGen::Active(), "moving the window to 60 Hz suspends generation");
+    settings.display_refresh_hz = 120;
+    Expect(BbFrameGen::Active(), "moving back to a suitable display resumes generation");
     settings.startup_framegen = false;
     const auto previous = Description();
     auto next = previous;
@@ -190,12 +208,18 @@ void Gpu(Metal::Device& device) {
 
     Generator bounded{device};
     std::vector<FramePtr> held;
-    for (int i = 0; i < 4; i++)
+    for (size_t i = 0; i < MaxSnapshotSets; i++)
         held.push_back(bounded.Prepare(description));
-    Expect(held[0] && held[1] && held[2] && held[3] && !bounded.Prepare(description),
-           "four pinned slots fall back without allocating or blocking");
+    Expect(held[0] && held[1] && held[2] && !bounded.Prepare(description),
+           "three pinned slots fall back without allocating or blocking");
+    std::weak_ptr<Frame> unpresented = held.front();
+    const auto* old_slot = held.front().get();
     held.erase(held.begin());
-    Expect(bool(bounded.Prepare(description)), "released snapshot slot is reused");
+    Expect(unpresented.expired(), "an unpresented display reference cannot pin its snapshot");
+    auto reused = bounded.Prepare(description);
+    Expect(reused && reused.get() == old_slot, "released snapshot allocation is reused");
+    Expect(!unpresented.lock(), "an old display reference cannot acquire the reused slot");
+    reused.reset();
 
     // A frame without CPU owners still pins its slot while GPU commands use it.
     auto pending = bounded.Prepare(description);
@@ -271,14 +295,54 @@ void Gpu(Metal::Device& device) {
         ++description.sequence;
     }
 }
+
+void CroppedDisplay(Metal::Device& device) {
+    // Native aspect patches can leave video-out smaller than the scene output.
+    // Give the right/bottom edge a distinct color; every target pixel must use
+    // an in-bounds source coordinate, including the expanded margins.
+    for (const auto [w, h] : {std::pair{128u, 64u}, {96u, 72u}, {96u, 60u}}) {
+        BbFrameGen::Generator generator{device};
+        const auto description = Description();
+        auto frame = generator.Prepare(description);
+        Expect(bool(frame), "cropped display snapshot allocated");
+        if (!frame) return;
+        auto source = Texture(device, MTLPixelFormatRGBA8Unorm, w, h);
+        std::vector<uint8_t> image(w * h * 4, 0);
+        for (uint32_t y = 0; y < h; ++y) for (uint32_t x = 0; x < w; ++x) {
+            const auto p = (y * w + x) * 4;
+            image[p] = x == w - 1 ? 255 : 0;
+            image[p + 1] = y == h - 1 ? 255 : 0;
+            image[p + 3] = 255;
+        }
+        Metal::Encoder encoder{device};
+        Upload(device, encoder, source.Get(), image.data(), w, h, 4);
+        // Warmup only: observe the color snapshot, independently of interpolation.
+        generator.Interpolate(encoder, frame, source.Get());
+        auto readback = [Dev(device) newBufferWithLength:128 * 72 * 8
+                                                 options:MTLResourceStorageModeShared];
+        encoder.CopyTextureToBuffer(frame->color.Get(), 0, 0, {}, {128, 72, 1},
+                                    {(__bridge void*)readback, 0}, 128 * 8, 128 * 72 * 8);
+        device.Wait(encoder.Submit());
+        const auto* pixels = static_cast<const _Float16*>(readback.contents);
+        bool matches = true;
+        for (uint32_t y = 0; y < 72; ++y) for (uint32_t x = 0; x < 128; ++x) {
+            const auto p = (y * 128 + x) * 4;
+            matches &= float(pixels[p]) == (x >= w - 1 ? 1.f : 0.f) &&
+                       float(pixels[p + 1]) == (y >= h - 1 ? 1.f : 0.f) &&
+                       float(pixels[p + 3]) == 1.f;
+        }
+        Expect(matches, "display color clamps every pixel to the source width and height");
+    }
+}
 } // namespace
 int main() {
     Policy();
     @autoreleasepool {
         Metal::Device device;
-        if (BbFrameGen::Supported(device))
+        if (BbFrameGen::Supported(device)) {
             Gpu(device);
-        else
+            CroppedDisplay(device);
+        } else
             std::printf("SKIP: MetalFX frame interpolation unsupported\n");
     }
     std::printf("%s: frame generation\n", failures ? "FAIL" : "PASS");

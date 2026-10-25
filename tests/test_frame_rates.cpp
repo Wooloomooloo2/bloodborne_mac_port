@@ -11,6 +11,20 @@ using BbFrameRates::Tracker;
 static bool Near(double actual, double expected) { return std::abs(actual - expected) < .01; }
 
 int main() {
+    // Every present, including repeats and blanks, still contributes to the
+    // original off-path exponential mean. Generation's real-only window is
+    // deliberately separate.
+    BbFrameRates::PresentAverage original;
+    original.Frame(1);
+    assert(original.Read().real_fps == 0);
+    for (int i = 1; i <= 60; ++i) original.Frame(1 + i / 60.0);
+    assert(Near(original.Read().real_fps, 60));
+    original.Frame(2 + 1.0 / 30);
+    const double expected_ms = (1000.0 / 60) * .95 + (1000.0 / 30) * .05;
+    assert(Near(original.Read().real_fps, 1000 / expected_ms));
+    original.Frame(4); // long pause leaves the old average intact, as before
+    assert(Near(original.Read().real_fps, 1000 / expected_ms));
+
     Tracker rates;
     assert(rates.Read(1).real_fps == 0 && rates.Read(1).displayed_fps == 0);
     for (int i = 0; i <= 60; ++i) {

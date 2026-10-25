@@ -105,6 +105,10 @@ Frame* Presenter::FramePool::Take() {
 }
 
 void Presenter::FramePool::Free(Frame* frame) {
+    // Called after the real present completes (both images use the serial
+    // present queue), or immediately for a skipped frame. Render work pins its
+    // own snapshots. Reusing frame->texture needs no interpolation inputs.
+    frame->framegen.reset();
     {
         std::scoped_lock lock{mutex};
         free.push_back(frame);
@@ -252,7 +256,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     pp_settings.srgb_input =
         attribute.attrib.pixel_format == Libraries::VideoOut::PixelFormat::A2R10G10B10Srgb;
     if (auto* generator = rasterizer->GetUpscaler().FrameGenerator()) {
-        if (display.framegen && !pp_settings.srgb_input && !fsr_pass) {
+        if (BbFrameGen::Active() && display.framegen && !pp_settings.srgb_input && !fsr_pass) {
             // Read through the actual video-out view after the retail gamma LUT.
             frame->framegen = std::move(display.framegen);
             if (!frame->generated) {
@@ -410,9 +414,15 @@ double PacingSeconds() {
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame, u32) {
     last_present = {NowNs(), 0, 0, 0};
-    frame_rates->RealFrame(BbFrameRates::Now(), is_reusing_frame, is_game_frame);
+    const double now = BbFrameRates::Now();
+    present_average.Frame(now);
+    const bool framegen_active = BbFrameGen::Active();
+    if (framegen_active) frame_rates->RealFrame(now, is_reusing_frame, is_game_frame);
+    const auto readings = [&] {
+        return framegen_active ? frame_rates->Read(BbFrameRates::Now()) : present_average.Read();
+    };
     std::function<void(double)> on_displayed;
-    if (BbSettings::Get().show_fps || BbOverlay::CapturesInput()) {
+    if (framegen_active && (BbSettings::Get().show_fps || BbOverlay::CapturesInput())) {
         // Drawable callbacks can outlive the presenter. They own only the small
         // tracker, and never touch ImGui, the device, or a frame-pool slot.
         on_displayed = [rates = frame_rates](double timestamp) {
@@ -426,7 +436,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         // to the pool at once, so PrepareFrame's Take never waits on a skipped present.
         if (!Metal::ShouldAcquireDrawable(window.IsVisible(), window.GetWidth(),
                                           window.GetHeight(), SnapshotRequested())) {
-            BbOverlay::Render(nullptr, nullptr, 0, 0, frame_rates->Read(BbFrameRates::Now()));
+            BbOverlay::Render(nullptr, nullptr, 0, 0, readings());
             pool->Free(frame);
             return;
         }
@@ -443,7 +453,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             if (!logged.exchange(true)) {
                 LOG_WARNING(Render_Vulkan, "No drawable from the layer: skipping frame(s)");
             }
-            BbOverlay::Render(nullptr, nullptr, 0, 0, frame_rates->Read(BbFrameRates::Now()));
+            BbOverlay::Render(nullptr, nullptr, 0, 0, readings());
             pool->Free(frame);
             return;
         }
@@ -453,8 +463,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         // back to the real frame. Only the real completion frees the pool slot,
         // after all reads of the pair on this serial present queue.
         Metal::Drawable intermediate;
-        const bool pair = !is_reusing_frame && frame->framegen && frame->generated &&
-            frame->framegen->interpolated.load(std::memory_order_acquire);
+        const bool pair = framegen_active && !is_reusing_frame && frame->framegen &&
+            frame->generated && frame->framegen->interpolated.load(std::memory_order_acquire);
         if (pair) intermediate = Metal::NextDrawable(layer);
         const double duration = intermediate.drawable
             ? BbFrameGen::PresentDuration(frame->framegen->description.interval,
@@ -468,7 +478,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             pp_pass.Passes().Present(cb, frame->generated.Get(), frame->width, frame->height,
                 intermediate.texture, intermediate.width, intermediate.height);
             BbOverlay::Render(cb, intermediate.texture, intermediate.width, intermediate.height,
-                              frame_rates->Read(BbFrameRates::Now()));
+                              readings());
             present_queue->Commit(cb, intermediate.drawable.Get(), {}, duration, on_displayed);
         }
 
@@ -494,7 +504,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             BbOverlay::Replay(command_buffer, drawable.texture);
         } else {
             BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height,
-                              frame_rates->Read(BbFrameRates::Now()));
+                              readings());
         }
         std::string snapshot_path = TakeSnapshotRequest();
         std::shared_ptr<Metal::Object> snapshot;

@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <array>
+#include <cstdint>
 
 /// Keyboard shortcut that opens the in-game menu (log lines and the ini header; ASCII).
 /// Mac keyboards have no Insert key, so macOS uses the Settings convention Cmd+,.
@@ -79,8 +80,11 @@ struct Values {
     /// Experimental MetalFX interpolation; creates presentation resources at launch.
     std::atomic<bool> framegen{false};
     std::atomic<bool> framegen_supported{false}; ///< device and launch path can interpolate
+    std::atomic<float> display_refresh_hz{0}; ///< window's current display mode; 0 = unknown
+    uint32_t framegen_real_cap = 0; ///< launch cap; uncapped cannot guarantee two refreshes
     bool startup_framegen = false;
     bool framegen_forced = false; ///< BB_METAL_FRAMEGEN overrides the menu at launch
+    bool saved_framegen = false; ///< file preference before the session override
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity (0.1-10),
     /// mouse_vertical (vertical speed relative to horizontal, 0.25-4), mouse_invert_y.
     /// Off by default: on, the first left click in the window captures the cursor, for gamepad

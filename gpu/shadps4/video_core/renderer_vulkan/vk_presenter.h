@@ -180,6 +180,7 @@ private:
     std::unique_ptr<Metal::PresentQueue> present_queue;
     std::shared_ptr<FramePool> pool;
     std::shared_ptr<BbFrameRates::Tracker> frame_rates{std::make_shared<BbFrameRates::Tracker>()};
+    BbFrameRates::PresentAverage present_average;
     PresentTiming last_present{};
     std::vector<VAddr> vo_buffers_addr;
     // bbport: frame timeline (BB_FRAME_STATS): flips waiting for GPU completion. Last, so the

@@ -19,6 +19,22 @@ struct Sample {
     double displayed_fps{};
 };
 
+// Original single-rate readout: exponential mean of every present interval,
+// including reused/blank frames. Used only when frame generation is inactive.
+class PresentAverage {
+public:
+    void Frame(double now) {
+        const double ms = (now - last) * 1000;
+        last = now;
+        if (ms > 0 && ms < 1000)
+            average_ms = average_ms == 0 ? ms : average_ms * .95 + ms * .05;
+    }
+    Sample Read() const { return {average_ms > 0 ? 1000 / average_ms : 0, 0}; }
+
+private:
+    double last{}, average_ms{};
+};
+
 // A bounded one-second cadence window. Display timestamps have their own clock
 // domain; observed times use Now() only to expire stale readings. A display
 // callback need not arrive in timestamp order. No GPU waits or ImGui access.

@@ -135,6 +135,7 @@ TemporalUpscaler::TemporalUpscaler(Metal::Device& device_, Scheduler& scheduler_
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
+    BbSettings::Get().framegen_real_cap = EmulatorSettings.GetFrameLimit();
     BbSettings::Get().framegen_supported =
         enabled && !EmulatorSettings.IsFsrEnabled() && BbFrameGen::Supported(device);
     if (enabled && BbFrameGen::Requested()) {
@@ -921,7 +922,7 @@ bool TemporalUpscaler::Scaled() const {
     // Frame generation needs the finished tonemapped scene and an explicit HUD
     // boundary at native 1080p too. Reuse the established output-size UI path.
     return scaled_session || target_width != 1920 || target_height != 1080 ||
-           (frame_generator && Active());
+           (frame_generator && BbFrameGen::Active() && Active());
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1141,7 +1142,7 @@ void TemporalUpscaler::RunScaled() {
             scale->ScaleColor(e, output, ui, Metal::ScaleFilter::Nearest);
         });
         scheduler.GetDynamicState().Invalidate();
-        if (frame_generator) {
+        if (frame_generator && BbFrameGen::Active()) {
             const auto now = std::chrono::steady_clock::now();
             const float interval = framegen_last.time_since_epoch().count()
                 ? std::chrono::duration<float>(now - framegen_last).count()
@@ -1285,8 +1286,10 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
     if (it == displays.end() || !it->second.valid) {
         return false;
     }
+    auto framegen = it->second.framegen.lock();
+    it->second.framegen.reset();
     display = {it->second.image.Get(), it->second.format, it->second.width, it->second.height,
-               std::exchange(it->second.framegen, {})};
+               std::move(framegen)};
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // BB_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
     static const char* dump = std::getenv("BB_PRESENT_DUMP_TRIGGER");

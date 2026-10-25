@@ -14,6 +14,7 @@
 #include "sdl_window.h"
 #include "bbport_mouse.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
 
 namespace Frontend {
 
@@ -147,6 +148,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     width = w;
     height = h;
     UpdateVisible();
+    UpdateDisplayRefresh();
     LOG_INFO(Frontend, "Window {}x{} on {}", w, h, driver);
     std::printf("Window: %dx%d pixels, density %.1f\n", w, h, SDL_GetWindowPixelDensity(window));
 }
@@ -201,6 +203,14 @@ void WindowSDL::UpdateVisible() {
     }
 }
 
+void WindowSDL::UpdateDisplayRefresh() {
+    // SDL's display APIs are main-thread-only. Publish the current window's mode
+    // for the renderer; never substitute the primary screen or an assumed 60 Hz.
+    const auto display = SDL_GetDisplayForWindow(window);
+    const auto* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
+    BbSettings::Get().display_refresh_hz = mode ? mode->refresh_rate : 0;
+}
+
 bool WindowSDL::PollEvents() {
     {
         std::scoped_lock lock{text_mutex};
@@ -250,6 +260,11 @@ bool WindowSDL::PollEvents() {
             continue;
         }
         switch (event.type) {
+        case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+        case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+        case SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED:
+            UpdateDisplayRefresh();
+            break;
         case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
         case SDL_EVENT_WINDOW_RESIZED: {
             int w = 0, h = 0;
@@ -271,6 +286,7 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             UpdateVisible();
+            UpdateDisplayRefresh();
             break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             // bbport: Cmd+W. W is "move forward", so pressing Cmd while running (to free the
