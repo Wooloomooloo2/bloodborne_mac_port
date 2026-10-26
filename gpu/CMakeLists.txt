@@ -179,7 +179,8 @@ if (APPLE)
         runtime_memory_set_gpu_hooks runtime_memory_write_backing
         runtime_process_time_counter runtime_process_time_us runtime_restart
         runtime_thread_attach_host runtime_thread_clear_blocked runtime_thread_cpu_ns
-        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip)
+        runtime_thread_set_blocked runtime_tsc_frequency runtime_sampler_flip
+        runtime_context_lock_other)
     foreach(symbol IN LISTS BB_HOST_RUNTIME_SYMBOLS)
         target_link_options(bbgpu PRIVATE -Wl,-U,_${symbol})
     endforeach()

@@ -204,3 +204,74 @@ void runtime_sampler_flip(uint64_t main_cpu_ns) {
     const uint64_t now = now_ns();
     if (now - last_report_ns > 60000000000ull) { last_report_ns = now; if (long_samples) report(); }
 }
+
+/* The hang report (probe.c's watchdog): every live guest thread's name, what it is blocked on
+ * and since when, and its guest call chain. Each thread is suspended only while its registers
+ * and frame chain are read (no signals: CLAUDE.md), and nothing is printed while one is
+ * suspended (it may hold the allocator's or stdio's lock). */
+void runtime_thread_dump_all(void) {
+#if defined(__APPLE__) && defined(__x86_64__)
+    enum { Max = 128, Depth = 10 };
+    static struct { char name[32]; const char *blocked; uint64_t resource, since_ms;
+                    uint64_t pc[Depth]; int frames; } rows[Max];
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    const uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+    int n = 0;
+    host_lock((HostMutex *)runtime_thread_get_lock());
+    for (GuestThread *t = runtime_thread_get_all(); t && n < Max; t = t->next) {
+        if (t->finished || pthread_equal(t->host, pthread_self())) continue;
+        memcpy(rows[n].name, t->name, sizeof(rows[n].name));
+        rows[n].blocked = t->blocked_on;
+        rows[n].resource = t->blocked_resource;
+        rows[n].since_ms = t->blocked_tick ? now_ms - t->blocked_tick : 0;
+        rows[n].frames = 0;
+        const mach_port_t port = pthread_mach_thread_np(t->host);
+        if (port && thread_suspend(port) == KERN_SUCCESS) {
+            x86_thread_state64_t state;
+            mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
+            if (thread_get_state(port, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
+                rows[n].pc[rows[n].frames++] = state.__rip;
+                uintptr_t rbp = (uintptr_t)state.__rbp;
+                while (rows[n].frames < Depth && rbp && !(rbp & 7)) {
+                    uintptr_t frame[2];
+                    mach_vm_size_t got = 0;
+                    if (mach_vm_read_overwrite(mach_task_self(), rbp, sizeof(frame),
+                                               (mach_vm_address_t)(uintptr_t)frame, &got) != KERN_SUCCESS ||
+                        got != sizeof(frame) || frame[0] <= rbp) break;
+                    rows[n].pc[rows[n].frames++] = frame[1];
+                    rbp = frame[0];
+                }
+            }
+            thread_resume(port);
+        }
+        ++n;
+    }
+    host_unlock((HostMutex *)runtime_thread_get_lock());
+    printf("Hang report: %d guest threads (guest offsets; blocked = the runtime wait it is in)\n", n);
+    for (int i = 0; i < n; ++i) {
+        char chain[768] = "";
+        size_t used = 0;
+        for (int f = 0; f < rows[i].frames && used < sizeof(chain) - 96; ++f) {
+            const uint64_t pc = rows[i].pc[f];
+            Dl_info info;
+            if (pc >= 0x800000000ull && pc < 0x900000000ull)
+                used += (size_t)snprintf(chain + used, sizeof(chain) - used, "%s%llx", f ? "<" : "",
+                                         (unsigned long long)(pc - 0x800000000ull));
+            else if (dladdr((void *)(uintptr_t)pc, &info) && info.dli_sname)
+                used += (size_t)snprintf(chain + used, sizeof(chain) - used, "%s%s+0x%llx", f ? "<" : "",
+                                         info.dli_sname,
+                                         (unsigned long long)(pc - (uintptr_t)info.dli_saddr));
+            else
+                used += (size_t)snprintf(chain + used, sizeof(chain) - used, "%s%llx", f ? "<" : "",
+                                         (unsigned long long)pc);
+        }
+        if (rows[i].blocked)
+            printf("  %-24s blocked in %s (0x%llx) for %llu ms; %s\n", rows[i].name, rows[i].blocked,
+                   (unsigned long long)rows[i].resource, (unsigned long long)rows[i].since_ms, chain);
+        else
+            printf("  %-24s running; %s\n", rows[i].name, chain);
+    }
+    fflush(stdout);
+#endif
+}

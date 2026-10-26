@@ -21,6 +21,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Opening-movie freeze and crash on new games (#46, #50, #51, #24, #84): fixed 2026-10-26 on
+  branch `cutscene-race`, for the 0.5.x hotfix.** Two causes (FINDINGS 2026-10-26): the AvPlayer
+  stop request missed a decoder whose `jthread` the demuxer had taken to join (freeze in
+  `sceAvPlayerClose`), and the main thread recorded into GXRenderThread's immediate context from
+  `0x28fe7c0` outside the context lock (crash at `0x26c01c3`, GPU process crash in `SignalEop`).
+  *Watch:* new-game reports on 16-18 GB Macs after the update; the hang report and the "outside
+  the context lock" line name any remaining path.
 - **Life after Rosetta: evaluate bloodborne-recomp (2026-10-24, after 0.6.0).** The game side
   (bb-probe and the HLE runtime in `src/`) runs under Rosetta 2, which Apple supports fully only
   through macOS 27. github.com/bloodborne-native/bloodborne-recomp (GPL-2.0-or-later) recompiles

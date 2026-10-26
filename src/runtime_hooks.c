@@ -92,6 +92,18 @@ static Hook hooks[] = {
      {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x53, 0x41, 0x89, 0xf6, 0x49,
       0x89, 0xfc},
      17, 0, 0, 0, 0, NULL, NULL},
+    /* The main thread's frame work on GXRenderThread's immediate context: (rdi, rsi, rdx), no
+     * stack arguments. During the opening movie of a new game the main thread records into that
+     * context from here (directly at 0x28feb09 / 0x28feb40, and through 0x21696c0 -> 0x26bc2e0
+     * -> 0x26bc320, the draw list), outside 0xebb960, while GXRenderThread's frame job uses it.
+     * Slowed down (16 busy processes on an M4 Max, 2026-10-25) that froze the game (#46: no new
+     * frame for 30 s) or crashed the draw list on a null item (#84, #24: signal 11 at 0x26c01c3,
+     * address 0xd2); 16-18 GB Macs hit it without help. Locking 0x21696c0 alone still crashed.
+     * push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; and rsp,-0x20 */
+    {NULL, "main thread's frame on the render context", 0x28fe7c0,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81,
+      0xe4, 0xe0, 0xff, 0xff, 0xff},
+     20, 0, 0, 0, 0, NULL, NULL},
     /* The render frame flip: (R), no stack arguments. Before it runs, R->0x360[R->0x380] is the
      * list this frame filled.
      * push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; sub rsp,0x3088 */
@@ -449,6 +461,10 @@ void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
     if (lock_off) printf("Context lock: off (BB_CONTEXT_LOCK=0)\n");
     env = getenv("BB_FRAME_POOL");
     const int pool_off = env && env[0] == '0';
+    /* BB_MOVIE_LOCK=0: leave the main thread's frame (0x28fe7c0) unlocked (A/B, fallback). */
+    env = getenv("BB_MOVIE_LOCK");
+    const int movie_off = env && env[0] == '0';
+    if (movie_off && !lock_off) printf("Context lock: main thread's frame not hooked (BB_MOVIE_LOCK=0)\n");
     env = getenv("BB_FRAME_POOL_TEST");
     if (env && !pool_off) {
         pool_test_limit = strtoull(env, NULL, 10) << 10;
@@ -458,6 +474,7 @@ void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
     for (size_t i = 0; i < HOOK_COUNT; ++i) {
         Hook *h = &hooks[i];
         if (h->before ? pool_off : lock_off) continue;
+        if (h->offset == 0x28fe7c0 && movie_off) continue;
         const char *what = h->before ? "Frame pool" : "Context lock";
         if (h->offset + 14 > image_size || h->offset + h->prologue_size > image_size ||
             memcmp(image + h->offset, h->prologue, h->prologue_size)) {
@@ -500,6 +517,16 @@ void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
 
 void runtime_context_lock_stats(void) { print_stats(); }
 
+/* Diagnostics for gnmdriver's context check: the hook holding the context lock when that is
+ * another thread, else NULL. Read without the mutex (a snapshot for a log line). */
+const char *runtime_context_lock_other(void) {
+    if (!__atomic_load_n(&lock_held, __ATOMIC_RELAXED)) return NULL;
+    pthread_t holder = __atomic_load_n(&lock_holder, __ATOMIC_RELAXED);
+    if (pthread_equal(holder, pthread_self())) return NULL;
+    const Hook *hook = __atomic_load_n(&lock_holder_hook, __ATOMIC_RELAXED);
+    return hook ? hook->name : "?";
+}
+
 #else
 
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
@@ -507,5 +534,6 @@ void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
     (void)image_size;
 }
 void runtime_context_lock_stats(void) {}
+const char *runtime_context_lock_other(void) { return NULL; }
 
 #endif

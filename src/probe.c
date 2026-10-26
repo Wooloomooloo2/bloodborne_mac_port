@@ -160,6 +160,7 @@ static void *hang_watchdog(void *arg) {
             char why[160];
             snprintf(why, sizeof why, "the game stopped responding (no new frame for %u seconds, %" PRIu64
                      " frames before; BB_HANG_SECONDS)", limit, flips);
+            runtime_thread_dump_all(); /* where each guest thread is stuck (#46) */
             crash_exit(why, GPU_PROCESS_EXIT_HANG);
         }
     }

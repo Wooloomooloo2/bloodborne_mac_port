@@ -2036,3 +2036,45 @@ Not reproduced on the M4 Max (48 GB, macOS 27) with an external 4K panel (GS27U,
   CPU 208% / 259% in both. No Game Mode penalty on this Mac.
 - Still untested: a scaled mode on the external panel ("looks like 2560x1440" = 5120x2880
   surface), a 60 Hz external display, and slower Macs.
+
+## 2026-10-26: the opening-movie freeze and crash on new games (#46, #50, #51, #24, #84)
+
+Reported only on 16-18 GB Macs (macOS 27), never reproduced on the M4 Max until now: the opening
+movie of a new game (and, per Reddit, the movie after signing the contract) freezes (`no new frame
+for 30 seconds`) or crashes (`signal 11 at guest offset 0x26c01c3`, address 0xd2).
+
+**Reproduction without a slow Mac.** A new game driven through `BB_PAD_FILE` (title → Play
+Offline → New Game → brightness → controls → movie; scratch scripts `ng/start.sh`,
+`ng/to-movie.sh`, `ng/stress-run.sh`) on an empty test save, with 16 busy-loop processes started
+when the movie begins. Unstressed it reaches the Contract screen at ~150 s at 60 FPS; stressed
+(movie at ~32 FPS) it failed 5 of 5 runs: 4 freezes at the movie's end (3101-3155 frames) and one
+`0x26c01c3` crash.
+
+**Two causes:**
+
+1. **Freeze: AvPlayer stop request lost.** New hang report (`runtime_thread_dump_all`, printed by
+   the hang watchdog: every guest thread's runtime wait and call chain, read with the thread
+   suspended, host frames named with `dladdr`) showed main in `sceAvPlayerClose →
+   ~AvPlayerSource → Stop → Thread::Join`, GXRenderThread waiting for main. At EOF the demuxer
+   joins the decoders, and `Libraries::Kernel::Thread::Join` *moves the jthread out*; the owner's
+   `Stop()` then called `RequestStop()` on the empty object, so the video decoder, waiting for a
+   frame buffer the closing game never returns, was never told to stop. Fix: `Thread` keeps the
+   jthread's `stop_source`, and `RequestStop`/`Stop` go through it.
+2. **Crash: an unlocked path on GXRenderThread's immediate context.** During the movie the main
+   thread records into GXRenderThread's context from `0x28fe7c0` (directly at `0x28feb09` /
+   `0x28feb40`, and via `0x21696c0 → 0x26bc2e0 → 0x26bc320`, the draw list that faults on a null
+   item), outside `0xebb960`. gnmdriver now also logs a write to an owned context *while another
+   thread holds the context lock* ("outside the context lock"), with the call chain, and the
+   handover line prints the previous user's chain too. Locking only `0x21696c0` still crashed
+   (the direct writes); `0x28fe7c0` is now hooked (20-byte prologue incl. `and rsp,-32`, no stack
+   arguments). `BB_MOVIE_LOCK=0` leaves it unhooked (A/B, fallback).
+
+| stressed runs (16 busy) | froze | crashed | overlaps/run | reached Contract |
+|---|---|---|---|---|
+| before | 4 of 5 | 1 of 5 | 22 | 0 of 5 |
+| player fix only (`BB_MOVIE_LOCK=0`) | 0 of 3 | 1 of 3 (GPU process, `SignalEop`) | 12-32 | 2 of 3 |
+| both fixes | 0 of 4 | 0 of 4 | 0 | 4 of 4 |
+
+Gameplay cost: benchmark route 60.0 FPS, 11 frames over 33 ms (master 2-10); the new hook never
+waited during the route (no wait lines), so that is run-to-run noise.
+
