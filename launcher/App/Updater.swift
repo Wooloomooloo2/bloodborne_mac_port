@@ -84,8 +84,22 @@ final class Updater: ObservableObject {
             status = .failed("The update was not installed: \(error.localizedDescription)")
             return
         }
-        // The new copy shows its launcher window (--updated) rather than going straight to the game.
-        GameRunner.run(["/usr/bin/open", "-n", bundle.path, "--args", "--updated"])
+        // The new copy opens once this one has exited (Updates.relaunchCommand), showing its
+        // launcher window (--updated) rather than going straight to the game.
+        let command = Updates.relaunchCommand(pid: getpid(), bundle: bundle)
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: command[0])
+        relaunch.arguments = Array(command.dropFirst())
+        relaunch.standardInput = FileHandle.nullDevice
+        relaunch.standardOutput = FileHandle.nullDevice
+        relaunch.standardError = FileHandle.nullDevice
+        do {
+            try relaunch.run() // (outlives this process: launchd adopts it)
+        } catch {
+            status = .failed("The update is installed; open Bloodborne again to use it (\(error.localizedDescription)).")
+            return
+        }
+        for window in NSApp.windows { window.orderOut(nil) } // nothing left on screen while quitting
         NSApp.terminate(nil)
     }
 

@@ -833,6 +833,44 @@ do {
     check(env["BB_GAME_DIR"] == nil && env["BB_UPDATE_CHECKED"] == nil && env["OTHER"] == nil && env["bb_lower"] == nil, "launcher keys and others stay out")
 }
 
+// The relaunch after an update: the new copy opens only once the old one has exited.
+do {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("launcher-relaunch-\(getpid())")
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    let marker = dir.appendingPathComponent("opened.txt")
+    let opener = dir.appendingPathComponent("fake-open.sh")
+    try? "#!/bin/sh\necho \"$*\" > '\(marker.path)'\n".write(to: opener, atomically: true, encoding: .utf8)
+    try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: opener.path)
+    let app = URL(fileURLWithPath: "/Applications/My Games/Bloodborne.app")
+    func run(oldCopyLives seconds: Double, wait: TimeInterval) -> (opened: String?, oldExited: Bool, took: Double) {
+        try? fm.removeItem(at: marker)
+        let old = Process() // stands in for the old copy
+        old.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        old.arguments = [String(seconds)]
+        try? old.run()
+        let command = Updates.relaunchCommand(pid: old.processIdentifier, bundle: app, opener: opener.path, wait: wait)
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: command[0])
+        helper.arguments = Array(command.dropFirst())
+        let start = Date()
+        try? helper.run()
+        // (the old copy's exit is reaped by Process; kill -0 then fails)
+        helper.waitUntilExit()
+        let took = Date().timeIntervalSince(start)
+        let opened = try? String(contentsOf: marker, encoding: .utf8)
+        let exited = !old.isRunning
+        old.terminate()
+        return (opened?.trimmingCharacters(in: .newlines), exited, took)
+    }
+    let normal = run(oldCopyLives: 0.6, wait: 10)
+    check(normal.opened == "\(app.path) --args --updated", "opens the new copy with --updated: \(normal.opened ?? "nothing")")
+    check(normal.oldExited && normal.took >= 0.5 && normal.took < 3, "only after the old copy exited (\(normal.took) s)")
+    let stuck = run(oldCopyLives: 30, wait: 0.5)
+    check(stuck.opened != nil && !stuck.oldExited && stuck.took < 3, "a stuck old copy: opens anyway after the wait (\(stuck.took) s)")
+    try? fm.removeItem(at: dir)
+}
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
