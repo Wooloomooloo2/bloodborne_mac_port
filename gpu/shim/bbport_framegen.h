@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
+#include "video_core/renderer_metal/mtl_draw.h"
 
 namespace Metal {
 class Device;
@@ -39,6 +41,8 @@ struct Description {
 struct Frame {
     Description description;
     Metal::Object depth, motion, before_ui, ui_change, ui_mask, color, generated;
+    Metal::Object source_ui, scene_display, real;
+    bool scene_ready = false; // recorder thread, reset for every lease
     std::atomic<bool> interpolated{false};
 };
 using FramePtr = std::shared_ptr<Frame>;
@@ -65,6 +69,10 @@ class Generator {
     // display copy.
     void Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion, void* ui);
     void FinishUi(Metal::Encoder& e, const FramePtr& frame, void* ui);
+    // Verified retail gamma pass only. Replay its exact scene view/LUT/sampler
+    // against the pre-HUD snapshot, into the real display target's pixel format.
+    bool CaptureDisplay(Metal::Encoder& e, const FramePtr& frame, void* display,
+                        std::span<const Metal::Draw::Bound> bindings);
     // Recorder thread, after the game's display/gamma pass: final video-out view
     // -> generated. The first frame after any reset only seeds history;
     // interpolated stays false.

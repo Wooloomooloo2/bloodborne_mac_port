@@ -140,6 +140,9 @@ public:
     };
     bool DisplayOverride(VAddr address, Display& display);
     BbFrameGen::Generator* FrameGenerator() const { return frame_generator.get(); }
+    BbFrameGen::FramePtr FrameForDisplay() const {
+        return display_redirect ? display_framegen : BbFrameGen::FramePtr{};
+    }
 
     /// One frame of the resolve step (all textures id<MTLTexture>, unretained, alive until the
     /// GPU has run the frame). Render size: `reactive`; output size: `output`.

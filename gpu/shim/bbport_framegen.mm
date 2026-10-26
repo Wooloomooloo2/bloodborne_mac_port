@@ -67,6 +67,19 @@ kernel void displayed_color(texture2d<float, access::read> source [[texture(0)]]
     uint2 size = uint2(source.get_width(), source.get_height());
     target.write(source.read(min(p, size - 1)), p);
 }
+struct DisplayVertex { float4 position [[position]]; };
+vertex DisplayVertex scene_vertex(uint id [[vertex_id]]) {
+    return {float4(id == 1 ? 3.f : -1.f, id == 2 ? 3.f : -1.f, 0.f, 1.f)};
+}
+fragment half4 scene_gamma(DisplayVertex in [[stage_in]],
+    texture2d<float, access::read> scene [[texture(0)]],
+    texture2d_array<float> lut [[texture(1)]], sampler smp [[sampler(0)]]) {
+    float4 c = scene.read(uint2(in.position.xy));
+    c.rgb = float3(lut.sample(smp, float2(c.r, 0), 0).r,
+                   lut.sample(smp, float2(c.g, 1), 0).r,
+                   lut.sample(smp, float2(c.b, 2), 0).r);
+    return half4(c);
+}
 kernel void restore_hud(texture2d<float, access::read> real [[texture(0)]],
                         texture2d<float, access::read> mask [[texture(1)]],
                         texture2d<float, access::read_write> generated [[texture(2)]],
@@ -195,6 +208,8 @@ struct Generator::Impl {
     std::vector<FramePtr> pool; // producer thread only; shared reference counts are atomic
     Metal::Object depth, change, mask, color, hud;
     Metal::Object effect;
+    Metal::Object display_vertex, display_fragment, display_pipeline;
+    uint32_t display_format = 0;
     Description config{};
     FramePtr previous; // recorder thread only
     bool ready = false;
@@ -215,6 +230,8 @@ struct Generator::Impl {
                                                   error:&error]);
             };
             if (library) {
+                display_vertex = Own([library newFunctionWithName:@"scene_vertex"]);
+                display_fragment = Own([library newFunctionWithName:@"scene_gamma"]);
                 depth = kernel(@"capture_inputs");
                 change = kernel(@"hud_change");
                 mask = kernel(@"hud_mask");
@@ -296,7 +313,7 @@ FramePtr Generator::Prepare(const Description& d) {
             const auto make = [&](MTLPixelFormat f, uint32_t w, uint32_t h, bool write) {
                 return Own(
                     Texture(s.device, f, w, h,
-                            MTLTextureUsageShaderRead |
+                            MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView |
                                 (write ? MTLTextureUsageShaderWrite : MTLTextureUsageUnknown) |
                                 (write ? MTLTextureUsageRenderTarget : MTLTextureUsageUnknown)));
             };
@@ -307,13 +324,16 @@ FramePtr Generator::Prepare(const Description& d) {
             frame->ui_change = make(MTLPixelFormatR8Unorm, d.out_width, d.out_height, true);
             frame->color = make(MTLPixelFormatRGBA16Float, d.out_width, d.out_height, true);
             frame->generated = make(MTLPixelFormatRGBA16Float, d.out_width, d.out_height, true);
+            frame->real = make(MTLPixelFormatRGBA16Float, d.out_width, d.out_height, true);
         }
         if (!frame->depth || !frame->motion || !frame->before_ui || !frame->ui_change ||
-            !frame->ui_mask || !frame->color || !frame->generated)
+            !frame->ui_mask || !frame->color || !frame->generated || !frame->real)
             return {};
         s.pool.push_back(frame);
     }
     frame->description = d;
+    frame->scene_ready = false;
+    frame->source_ui.Reset();
     frame->interpolated.store(false, std::memory_order_release);
     // Each use has its own lease control block. The pool owns the allocation,
     // while weak references in unpresented display buffers observe only this
@@ -328,6 +348,7 @@ FramePtr Generator::Prepare(const Description& d) {
 void Generator::Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion,
                         void* ui) {
     const auto& d = frame->description;
+    frame->source_ui = Metal::Object::Retain(ui);
     impl->Dispatch(e, impl->depth, {depth, motion, frame->depth.Get(), frame->motion.Get()},
                    d.width, d.height);
     e.CopyTexture(ui, 0, 0, {}, frame->before_ui.Get(), 0, 0, {}, {d.out_width, d.out_height, 1});
@@ -341,10 +362,97 @@ void Generator::FinishUi(Metal::Encoder& e, const FramePtr& frame, void* ui) {
                    d.out_height);
     Pin(e, frame);
 }
+bool Generator::CaptureDisplay(Metal::Encoder& e, const FramePtr& frame, void* display,
+                               std::span<const Metal::Draw::Bound> bindings) {
+    auto& s = *impl;
+    if (!frame || !frame->source_ui || frame->scene_ready) return false;
+    id<MTLTexture> source = nil, lut = nil;
+    id<MTLSamplerState> sampler = nil;
+    auto ui = (__bridge id<MTLTexture>)frame->source_ui.Get();
+    for (const auto& binding : bindings) {
+        auto texture = (__bridge id<MTLTexture>)binding.texture;
+        if (texture && (texture.parentTexture ?: texture) == (ui.parentTexture ?: ui)) {
+            if (source) return false;
+            source = texture;
+        } else if (texture) {
+            if (lut) return false;
+            lut = texture;
+        }
+        if (binding.sampler) {
+            if (sampler) return false;
+            sampler = (__bridge id<MTLSamplerState>)binding.sampler;
+        }
+    }
+    auto target = (__bridge id<MTLTexture>)display;
+    const auto& d = frame->description;
+    if (!source || !lut || !sampler || !target ||
+        source.textureType != MTLTextureType2D || lut.textureType != MTLTextureType2DArray ||
+        target.width != d.out_width || target.height != d.out_height ||
+        source.width != d.out_width || source.height != d.out_height) return false;
+    auto before = (__bridge id<MTLTexture>)frame->before_ui.Get();
+    auto view = [before newTextureViewWithPixelFormat:source.pixelFormat
+        textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)
+        swizzle:source.swizzle];
+    if (!view) return false;
+    if (!s.display_pipeline || s.display_format != target.pixelFormat) {
+        auto descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction = (__bridge id<MTLFunction>)s.display_vertex.Get();
+        descriptor.fragmentFunction = (__bridge id<MTLFunction>)s.display_fragment.Get();
+        descriptor.colorAttachments[0].pixelFormat = target.pixelFormat;
+        NSError* error = nil;
+        s.display_pipeline = Own([(__bridge id<MTLDevice>)s.device.NativeDevice()
+            newRenderPipelineStateWithDescriptor:descriptor error:&error]);
+        s.display_format = target.pixelFormat;
+        if (!s.display_pipeline) return false;
+    }
+    auto scene = (__bridge id<MTLTexture>)frame->scene_display.Get();
+    if (!scene || scene.pixelFormat != target.pixelFormat) {
+        frame->scene_display = Own(Texture(s.device, target.pixelFormat, d.out_width, d.out_height,
+            MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView));
+        scene = (__bridge id<MTLTexture>)frame->scene_display.Get();
+    }
+    if (!scene) return false;
+    e.EndEncoding();
+    auto pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = scene;
+    pass.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    auto encoder = [(__bridge id<MTLCommandBuffer>)e.CommandBuffer() renderCommandEncoderWithDescriptor:pass];
+    if (!encoder) return false;
+    [encoder setRenderPipelineState:(__bridge id<MTLRenderPipelineState>)s.display_pipeline.Get()];
+    [encoder setFragmentTexture:view atIndex:0];
+    [encoder setFragmentTexture:lut atIndex:1];
+    [encoder setFragmentSamplerState:sampler atIndex:0];
+    [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [encoder endEncoding];
+    e.KeepAlive(Metal::Object::Retain(s.display_pipeline.Get()));
+    e.KeepAlive(Own(view));
+    e.KeepAlive(Metal::Object::Retain((__bridge void*)lut));
+    e.KeepAlive(Metal::Object::Retain((__bridge void*)sampler));
+    Pin(e, frame);
+    frame->scene_ready = true;
+    return true;
+}
 void Generator::Interpolate(Metal::Encoder& e, const FramePtr& frame, void* displayed) {
     auto& s = *impl;
     const auto& d = frame->description;
-    s.Dispatch(e, s.color, {displayed, frame->color.Get()}, d.out_width, d.out_height);
+    s.Dispatch(e, s.color, {displayed, frame->real.Get()}, d.out_width, d.out_height);
+    auto output = (__bridge id<MTLTexture>)displayed;
+    auto scene = (__bridge id<MTLTexture>)frame->scene_display.Get();
+    auto view = frame->scene_ready && scene ? [scene newTextureViewWithPixelFormat:output.pixelFormat
+        textureType:MTLTextureType2D levels:NSMakeRange(0, 1) slices:NSMakeRange(0, 1)
+        swizzle:output.swizzle] : nil;
+    if (!view) {
+        s.previous.reset();
+        e.CopyTexture(frame->real.Get(), 0, 0, {}, frame->color.Get(), 0, 0, {},
+                      {d.out_width, d.out_height, 1});
+        e.CopyTexture(frame->real.Get(), 0, 0, {}, frame->generated.Get(), 0, 0, {},
+                      {d.out_width, d.out_height, 1});
+        Pin(e, frame);
+        return;
+    }
+    s.Dispatch(e, s.color, {(__bridge void*)view, frame->color.Get()}, d.out_width, d.out_height);
+    e.KeepAlive(Own(view));
     Pin(e, frame);
     if (!s.EnsureEffect(d)) {
         s.previous.reset();
@@ -378,7 +486,7 @@ void Generator::Interpolate(Metal::Encoder& e, const FramePtr& frame, void* disp
         e.KeepAlive(Metal::Object::Retain(s.effect.Get()));
         if (s.previous)
             Pin(e, s.previous);
-        s.Dispatch(e, s.hud, {frame->color.Get(), frame->ui_mask.Get(), frame->generated.Get()},
+        s.Dispatch(e, s.hud, {frame->real.Get(), frame->ui_mask.Get(), frame->generated.Get()},
                    d.out_width, d.out_height);
         frame->interpolated.store(!reset, std::memory_order_release);
         if (!reset && (++s.generated == 1 || s.generated % 300 == 0)) {
