@@ -6,6 +6,7 @@
 
 #include <atomic>
 
+#include "bbport_arena_runs.h"
 #include "bbport_copy.h"
 
 #include <deque>
@@ -71,6 +72,7 @@ public:
     }
 
     /// Retrieves the device local DBA page table buffer.
+    /// bbport: null unless BB_DIRECT_MEMORY_ACCESS=1 (no shader reads it otherwise).
     [[nodiscard]] Buffer* GetBdaPageTableBuffer() noexcept {
         return bda_pagetable_buffer.get();
     }
@@ -81,8 +83,9 @@ public:
     }
 
     /// Retrieves the fault buffer.
+    /// bbport: null unless BB_DIRECT_MEMORY_ACCESS=1, like the page table.
     [[nodiscard]] Buffer* GetFaultBuffer() noexcept {
-        return fault_manager->GetFaultBuffer();
+        return fault_manager ? fault_manager->GetFaultBuffer() : nullptr;
     }
 
     /// Retrieves the stream buffer.
@@ -106,17 +109,23 @@ public:
 
     /// Finds a buffer for the specified region.
     /// bbport: `note_use` = false leaves marking the range used in this submission (upload
-    /// hoisting) to the caller, which may first want to hoist a copy of it.
-    [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
-                                                             bool is_written,
-                                                             bool is_texel_buffer = false,
-                                                             bool note_use = true);
+    /// hoisting) to the caller, which may first want to hoist a copy of it. `caller`: who asks,
+    /// for the GPU runs telemetry (bbport_arena_runs.h).
+    [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(
+        VAddr device_addr, u32 size, bool is_written, bool is_texel_buffer = false,
+        bool note_use = true, BbArenaRuns::Caller caller = BbArenaRuns::Caller::Bind);
 
     /// Metal's indexed draw path truncates offsets above 4 GiB on M2 (observed).
     /// Rebase those ranges into fence-managed staging; preserve GPU-written indices.
     /// bbport: only for an arena without CPU contents; otherwise the encoder draws through a
     /// window of the arena (Metal::LowOffset) and the arena range is returned.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainIndexBuffer(VAddr device_addr, u32 size);
+
+    /// bbport: indirect draw and dispatch arguments for Metal's indirectBufferOffset, 32-bit like
+    /// the index offset (the same copies as ObtainIndexBuffer past 4 GiB). Only for arguments
+    /// Metal reads at that offset: records behind a GPU count are read by a kernel at any offset.
+    [[nodiscard]] std::pair<const Buffer*, u64> ObtainDrawArgumentBuffer(VAddr device_addr,
+                                                                         u32 size);
 
     /// Attempts to obtain a buffer without modifying the cache contents.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBufferForImage(VAddr device_addr, u32 size);
@@ -135,6 +144,15 @@ public:
 
 private:
     const Buffer* GetArena(u64 first_block, u64 last_block);
+
+    /// bbport: the arena covering [device_addr, device_addr + size), or null (GetArena stops the
+    /// game instead). For paths that can decline: read-backs, size-0 requests.
+    const Buffer* FindArena(VAddr device_addr, u64 size) const;
+
+    /// bbport: a range for Metal's 32-bit index and indirect offsets: the arena's when it ends
+    /// within the limit, else a copy (`caller`: Index or Indirect, for the counters).
+    std::pair<const Buffer*, u64> LowOffsetRange(VAddr device_addr, u32 size,
+                                                 BbArenaRuns::Caller caller);
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
@@ -174,6 +192,9 @@ private:
 
     std::unique_ptr<FaultManager> fault_manager;
     std::unique_ptr<Buffer> bda_pagetable_buffer;
+    /// bbport: bound for size-0 requests the arena does not cover (they stopped the game in
+    /// GetArena); nothing reads it.
+    Buffer write_sink;
 
     std::array<const Buffer*, NUM_ARENA_PAGES> address_space{};
     std::deque<Buffer> arenas;

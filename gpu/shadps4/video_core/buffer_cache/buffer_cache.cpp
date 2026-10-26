@@ -13,9 +13,11 @@
 #ifdef __APPLE__
 #include <sys/sysctl.h>
 #endif
+#include "bbport_arena_runs.h"
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
 #include "common/alignment.h"
+#include "core/emulator_settings.h"
 #include "core/memory.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
@@ -41,7 +43,8 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
       memory{Core::Memory::Instance()}, texture_cache{texture_cache_},
       memory_tracker{std::make_unique<MemoryTracker>(tracker)},
       stream_buffer{device, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
-      gds_buffer{device, MemoryType::Stream, 0, GDS_BUFFER_SIZE, "GDS Buffer"} {
+      gds_buffer{device, MemoryType::Stream, 0, GDS_BUFFER_SIZE, "GDS Buffer"},
+      write_sink{device, MemoryType::DeviceLocal, 0, 64_KB, "Write Sink"} {
     // bbport: one fully backed arena, so the page table granularity is a free choice; 16 KiB is
     // what MoltenVK's sparse alignment gave (the recompiler and the fault shader read it).
     block_size = MIN_BLOCK_SIZE;
@@ -49,16 +52,27 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
     blocks_per_arena_page = ARENA_PAGE_SIZE / block_size;
     blocks_per_arena_page_shift = ARENA_PAGE_BITS - block_shift;
 
+    // bbport: the page table and the fault buffer serve direct memory access only
+    // (BB_DIRECT_MEMORY_ACCESS=1: shaders reach guest memory by address). Without it no shader
+    // reads them (CollectShaderInfoPass clears uses_dma, and LoadShaderMeta rejects a cache entry
+    // compiled with it on), yet they held 520 MiB of resident memory on every Mac, the page
+    // table private and committed in full. They exist only with the flag now; the texture
+    // budget keeps counting them (TextureCache::GarbageCollectImages, BbStats::legacy_resident).
     const u64 bda_pagetable_size = (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(u64);
-    fault_manager = std::make_unique<FaultManager>(device, scheduler, *this, block_shift,
-                                                   blocks_per_arena_page * NUM_ARENA_PAGES);
-    bda_pagetable_buffer = std::make_unique<Buffer>(device, MemoryType::DeviceLocal, 0,
-                                                    bda_pagetable_size, "BDA Page Table Buffer");
-    // Its updates and the shaders' reads (direct memory access) are ordered by the Runtime.
-    runtime.RegisterOrdered(bda_pagetable_buffer.get(), bda_pagetable_size);
-    runtime.FillBuffer(*bda_pagetable_buffer, 0u, bda_pagetable_size, 0u);
-    // Shaders reach the page table by address.
-    device.MakeResident(bda_pagetable_buffer->Handle());
+    const u64 fault_buffer_size = FaultManager::BufferSize(blocks_per_arena_page * NUM_ARENA_PAGES);
+    u64 dma_bytes = 0;
+    if (EmulatorSettings.IsDirectMemoryAccessEnabled()) {
+        fault_manager = std::make_unique<FaultManager>(device, scheduler, *this, block_shift,
+                                                       blocks_per_arena_page * NUM_ARENA_PAGES);
+        bda_pagetable_buffer = std::make_unique<Buffer>(device, MemoryType::DeviceLocal, 0,
+                                                        bda_pagetable_size, "BDA Page Table Buffer");
+        // Its updates and the shaders' reads (direct memory access) are ordered by the Runtime.
+        runtime.RegisterOrdered(bda_pagetable_buffer.get(), bda_pagetable_size);
+        runtime.FillBuffer(*bda_pagetable_buffer, 0u, bda_pagetable_size, 0u);
+        // Shaders reach the page table by address.
+        device.MakeResident(bda_pagetable_buffer->Handle());
+        dma_bytes = bda_pagetable_size + fault_buffer_size;
+    }
 
     // bbport: Metal has no sparse buffers. One ordinary arena covers the start of the guest
     // GPU range instead (runtime_memory.c places guest memory from USER_MIN = 0x7000000000 on
@@ -120,7 +134,19 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
                 "is %.1f GiB)\n",
                 double(arena_bytes) / double(1_GB), reason, double(memsize) / 1e9,
                 double(max_buffer) / double(1_GB));
+    // bbport: what this layout makes resident (the driver wires it by its length) and Metal's
+    // working set, for the logs of 16 and 24 GB Macs.
+    std::printf("GPU memory at start: %.0f MiB resident (arena %.0f MiB, direct memory access "
+                "tables %.0f MiB%s); Metal working set %.0f MiB\n",
+                double(arena_bytes + dma_bytes) / double(1_MB), double(arena_bytes) / double(1_MB),
+                double(dma_bytes) / double(1_MB),
+                dma_bytes ? "" : ", not created: BB_DIRECT_MEMORY_ACCESS is off",
+                double(device.GetLimits().recommended_working_set) / double(1_MB));
+    BbStats::layout_resident_bytes.store(arena_bytes + dma_bytes, std::memory_order_relaxed);
+    BbStats::legacy_resident_bytes.store(arena_bytes + bda_pagetable_size + fault_buffer_size,
+                                         std::memory_order_relaxed);
     mac_arena_end = MacArenaBase + arena_bytes;
+    BbArenaRuns::SetArena(MacArenaBase, mac_arena_end);
     const auto* arena = &arenas.emplace_back(device, MemoryType::DeviceLocal, MacArenaBase,
                                              arena_bytes, "Guest Arena");
     // Every 4 GiB page the arena touches points at it; GetArena checks the end within the last.
@@ -129,9 +155,19 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
     }
     runtime.RegisterHoistTarget(arena, arena_bytes);
     // Shaders reach the arena by address (page table): resident, and declared on every encoder
-    // (the declaration survives Submit).
+    // (the declaration survives Submit). BB_ARENA_DECLARE=0 leaves the declaration out (an A/B
+    // of its CPU cost per encoder; residency alone may be enough without direct memory access).
     device.MakeResident(arena->Handle());
-    scheduler.Record([buffer = arena->Handle()](Metal::Encoder& e) { e.DeclareIndirect(buffer); });
+    static const bool declare = [] {
+        const char* env = std::getenv("BB_ARENA_DECLARE");
+        return !env || env[0] != '0';
+    }();
+    if (declare) {
+        scheduler.Record(
+            [buffer = arena->Handle()](Metal::Encoder& e) { e.DeclareIndirect(buffer); });
+    } else {
+        std::printf("GPU arena: not declared on encoders (BB_ARENA_DECLARE=0)\n");
+    }
 }
 
 BufferCache::~BufferCache() = default;
@@ -177,10 +213,22 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
 }
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
+    // bbport: guest memory the arena does not cover holds no GPU data of this cache (every
+    // GPU-modified range was bound through the arena): nothing to read back. A fault there
+    // stopped the game in GetArena before (texture watchers protect pages anywhere).
+    if (!FindArena(device_addr, std::max<u64>(size, 1))) {
+        if (is_write) {
+            memory_tracker->MarkRegionAsCpuModified(device_addr, size);
+        }
+        BbStats::uncovered_readbacks.fetch_add(1, std::memory_order_relaxed);
+        BbArenaRuns::Note(BbArenaRuns::Caller::ReadBack, device_addr, size);
+        return;
+    }
     const auto flush_request = [this, device_addr, size, is_write] {
         const u32 first_block = device_addr >> block_shift;
         const u32 last_block = (device_addr + size - 1) >> block_shift;
         const auto* arena = GetArena(first_block, last_block);
+        BbArenaRuns::Note(BbArenaRuns::Caller::ReadBack, device_addr, size);
 
         // GPU-modified ranges come as many small scattered islands,
         // so the download is widened to a window around the request
@@ -335,7 +383,7 @@ void PrintBufferStats() {
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer,
-                                                        bool note_use) {
+                                                        bool note_use, BbArenaRuns::Caller caller) {
     const bool stats = BufferStatsEnabled();
     if (stats) {
         PrintBufferStats();
@@ -369,6 +417,13 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
         stream_buffer.Commit();
         return {&stream_buffer, offset};
     }
+    BbArenaRuns::Note(caller, device_addr, size);
+    // bbport: a size-0 request outside the arena, or at its 4 GiB page boundary (an empty range
+    // ending before it starts), stopped the game in GetArena. It reaches no memory: a sink.
+    if (size == 0 && (!FindArena(device_addr, 1) || (device_addr & (ARENA_PAGE_SIZE - 1)) == 0)) {
+        BbStats::size0_sinks.fetch_add(1, std::memory_order_relaxed);
+        return {&write_sink, 0};
+    }
     const u64 first_block = device_addr >> block_shift;
     const u64 last_block = (device_addr + size - 1) >> block_shift;
     const auto* arena = GetArena(first_block, last_block);
@@ -393,9 +448,26 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, u32 size) {
-    const auto [buffer, offset] = ObtainBuffer(device_addr, size, false);
-    constexpr u64 IndexOffsetLimit = u64{1} << 32;
-    if (offset < IndexOffsetLimit && size <= IndexOffsetLimit - offset) {
+    return LowOffsetRange(device_addr, size, BbArenaRuns::Caller::Index);
+}
+
+std::pair<const Buffer*, u64> BufferCache::ObtainDrawArgumentBuffer(VAddr device_addr, u32 size) {
+    return LowOffsetRange(device_addr, size, BbArenaRuns::Caller::Indirect);
+}
+
+std::pair<const Buffer*, u64> BufferCache::LowOffsetRange(VAddr device_addr, u32 size,
+                                                          BbArenaRuns::Caller caller) {
+    const auto [buffer, offset] = ObtainBuffer(device_addr, size, false, false, true, caller);
+    // BB_DRAW_OFFSET_LIMIT_MB (tests): a lower limit, so that the copies below run for the
+    // retail game's index and argument ranges (all of them below 4.8 GiB).
+    static const u64 limit = [] {
+        const char* env = std::getenv("BB_DRAW_OFFSET_LIMIT_MB");
+        const u64 mb = env ? std::strtoull(env, nullptr, 10) : 0;
+        return mb ? std::min<u64>(mb << 20, u64{1} << 32) : u64{1} << 32;
+    }();
+    const bool in_arena =
+        std::any_of(arenas.begin(), arenas.end(), [buffer](const Buffer& a) { return &a == buffer; });
+    if (!in_arena || (offset < limit && size <= limit - offset)) {
         return {buffer, offset};
     }
     // bbport: with BB_ARENA_WINDOWS=1 the encoder draws through a window of the arena at a low
@@ -403,14 +475,20 @@ std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, 
     if (Metal::CanLowerOffsets(buffer->Ref().buffer)) {
         return {buffer, offset};
     }
+    const bool index = caller == BbArenaRuns::Caller::Index;
     // The bytes in the arena are correct, but drawIndexedPrimitives fetches from the
     // wrapped offset (reproduced on M2). Small indices already use the stream buffer;
     // this is why a prop's details can draw while its larger body disappears.
+    // bbport: indirectBufferOffset wraps the same way (32 bits).
     if (!IsRegionGpuModified(device_addr, size)) {
+        (index ? BbStats::index_copies_cpu : BbStats::indirect_copies_cpu)
+            .fetch_add(1, std::memory_order_relaxed);
         return ObtainBufferForImage(device_addr, size);
     }
     // A CPU copy would discard GPU-produced indices. Copy in command order instead,
     // using the staging pool's retirement ticks to keep the range alive through the draw.
+    (index ? BbStats::index_copies_gpu : BbStats::indirect_copies_gpu)
+        .fetch_add(1, std::memory_order_relaxed);
     const auto staging = staging_pool.Request(size, MemoryType::DeviceLocal, 16);
     const BufferCopy copy{offset, staging.offset, size};
     runtime.CopyBuffer(*buffer, *staging.buffer, std::span{&copy, 1});
@@ -419,7 +497,7 @@ std::pair<const Buffer*, u64> BufferCache::ObtainIndexBuffer(VAddr device_addr, 
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_addr, u32 size) {
     if (IsRegionGpuModified(device_addr, size)) {
-        return ObtainBuffer(device_addr, size, false);
+        return ObtainBuffer(device_addr, size, false, false, true, BbArenaRuns::Caller::Image);
     }
     const auto staging = staging_pool.Request(size, VideoCore::MemoryType::HostUncached,
                                               device.GetLimits().storage_alignment);
@@ -457,10 +535,15 @@ bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
 }
 
 void BufferCache::ProcessFaultBuffer() {
-    fault_manager->ProcessFaultBuffer();
+    if (fault_manager) {
+        fault_manager->ProcessFaultBuffer();
+    }
 }
 
 void BufferCache::SynchronizeDmaBuffers() {
+    if (!bda_pagetable_buffer) {
+        return; // BB_DIRECT_MEMORY_ACCESS is off: no shader reaches memory by address
+    }
     for (const auto& range : resident_ranges) {
         const u64 page = range.start >> (ARENA_PAGE_BITS - block_shift);
         const VAddr device_addr = range.start << block_shift;
@@ -474,6 +557,9 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     const u64 last_page = last_block >> blocks_per_arena_page_shift;
     ASSERT_MSG(last_page - first_page <= 1,
                "Buffer request cannot span more than two VA arena pages");
+    // bbport: an address past the 40-bit table (a garbage address) read out of its bounds.
+    ASSERT_MSG(last_page < NUM_ARENA_PAGES, "GPU buffer {:#x} outside the guest address space",
+               first_block << block_shift);
 
     const auto* first_arena = address_space[first_page];
     const auto* last_arena = address_space[last_page];
@@ -497,7 +583,26 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
     return first_arena;
 }
 
+const Buffer* BufferCache::FindArena(VAddr device_addr, u64 size) const {
+    if (size == 0 || device_addr + size < device_addr) {
+        return nullptr;
+    }
+    const u64 first_page = device_addr >> ARENA_PAGE_BITS;
+    const u64 last_page = (device_addr + size - 1) >> ARENA_PAGE_BITS;
+    if (last_page >= NUM_ARENA_PAGES) {
+        return nullptr;
+    }
+    const auto* arena = address_space[first_page];
+    if (!arena || address_space[last_page] != arena || !arena->IsInBounds(device_addr, size)) {
+        return nullptr;
+    }
+    return arena;
+}
+
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+    if (!bda_pagetable_buffer) {
+        return; // the arena is fully backed; only the page table (direct memory access) is filled
+    }
     u32 resident_blocks{};
     IntervalList bind_ranges;
     resident_ranges.ForEachGap(first_block, last_block + 1, [&](u64 start, u64 end) {
@@ -527,6 +632,7 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         offset += copy_size;
     }
     runtime.CopyBuffer(*staging.buffer, *bda_pagetable_buffer, copies);
+    BbStats::dma_first_touches.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 size,

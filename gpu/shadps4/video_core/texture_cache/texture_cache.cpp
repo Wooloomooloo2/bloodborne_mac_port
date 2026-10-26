@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <set>
+#include <string_view>
 #include <xxhash.h>
 
 #include "bbport_toggles.h"
@@ -1082,7 +1083,21 @@ void TextureCache::GarbageCollectImages() {
             // images could grow to ~8 GB beside an 8 GiB arena on a 16 GB Mac and the GPU
             // process sat at Metal's limit (11.53 of 11.55 GB, issue #19). BB_GC_BUDGET_MB
             // stands for the working set (BB_GC_BUDGET_MB=11015: a 16 GB Mac's).
-            base_mem = base_mem > resident + (2ULL << 30) ? base_mem - resident : 2ULL << 30;
+            // The guest memory buffers count as the previous layout made them (the arena and the
+            // direct memory access tables): memory a leaner layout frees goes to the rest of the
+            // Mac, not to images. Other resident buffers (object motion) count as they are.
+            // BB_GC_RESIDENT_REF=live: the resident bytes as they are (the marks then rise by
+            // 70-88% of what the layout frees).
+            static const bool live_reference = [] {
+                const char* e = std::getenv("BB_GC_RESIDENT_REF");
+                return e && std::string_view{e} == "live";
+            }();
+            const u64 layout = BbStats::layout_resident_bytes.load(std::memory_order_relaxed);
+            const u64 legacy = BbStats::legacy_resident_bytes.load(std::memory_order_relaxed);
+            const u64 charged =
+                live_reference || resident < layout ? resident : resident - layout + legacy;
+            static bool marks_logged = false;
+            base_mem = base_mem > charged + (2ULL << 30) ? base_mem - charged : 2ULL << 30;
             static const u64 trig_pct = [is_low_vram] {
                 const char* e = std::getenv("BB_GC_TRIGGER");
                 return e ? std::strtoull(e, nullptr, 10) : (is_low_vram ? 70 : 70);
@@ -1098,6 +1113,16 @@ void TextureCache::GarbageCollectImages() {
             trigger_gc_memory = base_mem / 100 * trig_pct;
             pressure_gc_memory = base_mem / 100 * pres_pct;
             critical_gc_memory = base_mem / 100 * crit_pct;
+            if (!marks_logged && layout != 0) {
+                marks_logged = true;
+                std::printf("Texture budget: resident buffers charged as %.0f MiB (%.0f resident, "
+                            "%s); marks %.0f / %.0f / %.0f MiB\n",
+                            charged / 1048576.0, resident / 1048576.0,
+                            live_reference ? "BB_GC_RESIDENT_REF=live"
+                                           : "the guest memory buffers as the previous layout",
+                            trigger_gc_memory / 1048576.0, pressure_gc_memory / 1048576.0,
+                            critical_gc_memory / 1048576.0);
+            }
         }
     }
     BbStats::gc_used_bytes.store(total_used_memory, std::memory_order_relaxed);

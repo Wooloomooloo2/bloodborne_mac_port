@@ -509,7 +509,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Metal-native (M5): `BB_GPU_CAPTURE` crashes with the default 16 GiB arena.** Apple's
   GPUToolsCapture segfaults in `stopCapture` (`GTTraceDump_writeUnsortedCapture`) while writing
   the `.gputrace` (bbgpu-host dies). Workaround: `BB_ARENA_GIB=4` (884 MB capture in the city,
-  FINDINGS 2026-10-17 Task 10). Proper fix: capture with a smaller arena automatically, or a
+  FINDINGS 2026-10-17 Task 10); since the arena is sized to the game (0.5.2) it must hold the
+  game's 4.8 GiB, so 4 stops at startup: `BB_ARENA_GIB=5` (6 with the native ultrawide pool).
+  Proper fix: capture with a smaller arena automatically, or a
   `MTLCaptureScope` that leaves the arena out if Apple's tool allows it.
 
 - ~~**The game process grows ~80 MB/min during play (both renderers, 2026-10-18).**~~ Fixed

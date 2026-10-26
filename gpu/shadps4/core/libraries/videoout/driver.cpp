@@ -18,6 +18,7 @@
 #include <sys/resource.h>
 #endif
 #include "common/assert.h"
+#include "bbport_arena_runs.h"
 #include "bbport_toggles.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
@@ -891,6 +892,31 @@ void VideoOutDriver::Flip(const Request& req) {
                         static_cast<unsigned long long>(BbStats::gc_freed_images.load()),
                         static_cast<unsigned long long>(archive_hits),
                         static_cast<unsigned long long>(compiled));
+            // bbport: the rest of the GPU process's memory and the 32-bit offset copies (the
+            // counts since the last line), and requests that stopped the game before.
+            {
+                const auto mib = [](std::atomic<u64>& v) { return v.load() / 1048576.0; };
+                const auto take = [](std::atomic<u64>& v) {
+                    return static_cast<unsigned long long>(v.exchange(0));
+                };
+                std::printf("GPU memory detail: staging %.0f/%.0f/%.0f MiB (peak %.0f/%.0f/%.0f; "
+                            "device-local/host-uncached/host-cached); copies past 4 GiB: index "
+                            "%llu CPU + %llu GPU, indirect %llu CPU + %llu GPU (%llu counted draws "
+                            "read in place); page table fills %llu; size-0 sinks %llu, "
+                            "uncovered read-backs %llu; Metal errors %llu\n",
+                            mib(BbStats::staging_bytes[0]), mib(BbStats::staging_bytes[1]),
+                            mib(BbStats::staging_bytes[2]), mib(BbStats::staging_peak[0]),
+                            mib(BbStats::staging_peak[1]), mib(BbStats::staging_peak[2]),
+                            take(BbStats::index_copies_cpu), take(BbStats::index_copies_gpu),
+                            take(BbStats::indirect_copies_cpu), take(BbStats::indirect_copies_gpu),
+                            take(BbStats::indirect_counted_high),
+                            take(BbStats::dma_first_touches),
+                            static_cast<unsigned long long>(BbStats::size0_sinks.load()),
+                            static_cast<unsigned long long>(BbStats::uncovered_readbacks.load()),
+                            static_cast<unsigned long long>(
+                                presenter ? presenter->GetDevice().ErrorCount() : 0));
+                BbArenaRuns::PrintStats();
+            }
             // bbport: lazy texture usages (VideoCore::Image::allowed_shader_write).
             if (const u64 upgrades = BbStats::texture_upgrades.exchange(0)) {
                 std::printf("Texture usage upgrades: %llu (%.1f MB copied)\n",
