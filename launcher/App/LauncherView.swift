@@ -159,6 +159,13 @@ struct LauncherView: View {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
                     .disabled(model.settings.ultrawide)
+                    if model.settings.upscaler == .metalfx_spatial {
+                        Text("Spatial: lighter on the GPU, shimmers more in motion.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if model.settings.upscaler == .metalfx {
+                        Text("MetalFX temporal: recommended for a steadier image in motion.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }
