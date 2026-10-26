@@ -211,15 +211,16 @@ int main() {
           "low indirect arguments keep the arena range");
 
     // Requests that stopped the game in GetArena: a size-0 range at the arena's 4 GiB page
-    // boundary (it ends before it starts) and past the arena; a read-back past the arena.
+    // boundary (it ended before it started there) and past the arena; a read-back past the arena.
     const auto [boundary, boundary_offset] = cache.ObtainBuffer(HighBase, 0, true);
-    Check(boundary != nullptr && BbStats::size0_sinks.load() == 1,
-          "a size-0 write at the arena's 4 GiB boundary goes to the sink");
+    Check(boundary == low_args && boundary_offset == (u64{1} << 32) &&
+              BbStats::size0_sinks.load() == 0,
+          "a size-0 write at the arena's 4 GiB boundary keeps the arena");
     const auto [past, past_offset] = cache.ObtainBuffer(Base + (u64{7} << 30), 0, true);
-    Check(past != nullptr && BbStats::size0_sinks.load() == 2,
+    Check(past != nullptr && past != low_args && BbStats::size0_sinks.load() == 1,
           "a size-0 write past the arena goes to the sink");
     const auto [inside, inside_offset] = cache.ObtainBuffer(Base + 20 * Size, 0, true);
-    Check(inside == low_args && BbStats::size0_sinks.load() == 2,
+    Check(inside == low_args && BbStats::size0_sinks.load() == 1,
           "a size-0 write inside the arena keeps the arena");
     cache.ReadMemory(Base + (u64{7} << 30), 8, false, true);
     Check(BbStats::uncovered_readbacks.load() == 1, "a read-back past the arena is declined");

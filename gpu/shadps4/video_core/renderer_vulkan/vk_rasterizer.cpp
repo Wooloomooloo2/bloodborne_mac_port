@@ -2252,8 +2252,8 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                                                ? Metal::ReadStage::Late
                                                : Metal::ReadStage::Vertex;
                 NoteRead(bda_buffer, 0, bda_buffer->SizeBytes(), stage_of_read);
-                for (const auto& arena : buffer_cache.GetArenas()) {
-                    NoteRead(&arena, 0, arena.SizeBytes(), stage_of_read);
+                for (const auto& chunk : buffer_cache.GetChunks()) {
+                    NoteRead(chunk.buffer, 0, chunk.buffer->SizeBytes(), stage_of_read);
                 }
                 element = {.buffer = bda_buffer->Ref(), .size = bda_buffer->SizeBytes()};
             } else if (desc.buffer_type == Shader::BufferType::FaultBuffer) {

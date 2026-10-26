@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 // bbport: the GPU-visible runs of guest memory, read from the protection the game maps with
 // (the view table's prot, GPU read 0x10 / write 0x20). The arena mirrors guest memory one to
@@ -61,5 +62,17 @@ Class Note(Caller caller, std::uint64_t address, std::uint64_t size);
 
 /// BB_FRAME_STATS: one line of cumulative counts (driver.cpp, every 5 s).
 void PrintStats();
+
+/// A GPU run: guest memory [start, end) mapped with a GPU protection.
+struct Range {
+    std::uint64_t start, end;
+};
+
+/// The current runs, sorted (empty before the first table).
+std::vector<Range> Runs();
+
+/// Called on the ring thread (from Refresh) after the runs changed, before the record that
+/// follows the view events is dispatched (the buffer cache creates its chunks from it). Null clears.
+void SetListener(void (*listener)(void* context), void* context);
 
 } // namespace BbArenaRuns

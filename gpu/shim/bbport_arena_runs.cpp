@@ -54,6 +54,8 @@ std::uint32_t table_prints = 0;
 std::atomic<std::uint64_t> late_events{0};
 std::uint64_t arena_base = 0, arena_end = 0;
 bool past_arena_warned = false;
+std::atomic<void (*)(void*)> listener{nullptr};
+std::atomic<void*> listener_context{nullptr};
 
 std::array<std::array<std::atomic<std::uint64_t>, std::size_t(Class::Count)>,
            std::size_t(Caller::Count)>
@@ -204,6 +206,9 @@ void Rebuild() {
     }
     current.store(table.get(), std::memory_order_release);
     tables.push_back(std::move(table));
+    if (auto* fn = listener.load(std::memory_order_acquire)) {
+        fn(listener_context.load(std::memory_order_acquire));
+    }
 }
 
 void NoteViewEvent(const char* what, std::uint64_t address, std::uint64_t size, int prot) {
@@ -293,6 +298,21 @@ Class Note(Caller caller, std::uint64_t address, std::uint64_t size) {
                     static_cast<unsigned long long>(size), Now());
     }
     return c;
+}
+
+std::vector<Range> Runs() {
+    std::vector<Range> runs;
+    if (const Table* t = current.load(std::memory_order_acquire)) {
+        for (const Run& r : t->runs) {
+            runs.push_back({r.start, r.end});
+        }
+    }
+    return runs;
+}
+
+void SetListener(void (*fn)(void*), void* context) {
+    listener_context.store(context, std::memory_order_release);
+    listener.store(fn, std::memory_order_release);
 }
 
 void PrintStats() {

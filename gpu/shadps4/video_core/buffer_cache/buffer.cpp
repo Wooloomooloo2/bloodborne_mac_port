@@ -37,17 +37,18 @@ void UniqueBuffer::Destroy() {
 }
 
 void UniqueBuffer::Create(Metal::Device& device, u64 size, MemoryType type,
-                          std::string_view label) {
+                          std::string_view label, bool guest_memory) {
     Destroy();
-    buffer = Metal::CreateBuffer(device, size, type, label, &gpu_address, &contents);
+    buffer = Metal::CreateBuffer(device, size, type, label, &gpu_address, &contents, &host_view,
+                                 guest_memory);
     ASSERT_MSG(buffer, "Failed allocating buffer of {:#x} bytes", size);
 }
 
 Buffer::Buffer(Metal::Device& device, MemoryType mem_type_, VAddr cpu_addr_, u64 size_bytes_,
-               std::string_view debug_name)
+               std::string_view debug_name, bool guest_memory)
     : cpu_addr{cpu_addr_}, size_bytes{size_bytes_}, mem_type{mem_type_} {
     if (!debug_name.empty()) {
-        buffer.Create(device, size_bytes, mem_type, debug_name);
+        buffer.Create(device, size_bytes, mem_type, debug_name, guest_memory);
     } else {
         buffer.Create(device, size_bytes, mem_type,
                       fmt::format("Buffer {:#x}:{:#x}", cpu_addr, size_bytes));

@@ -397,6 +397,16 @@ target_compile_options(upscaler-support-test PRIVATE -UNDEBUG)
 
 
 # Opt-in synthetic regression: no game files or runtime diagnostics required.
+# bbport: the guest memory buffers' lookup (header-only; also run with -fsanitize=thread).
+add_executable(chunk-table-test EXCLUDE_FROM_ALL ../tests/test_chunk_table.cpp)
+target_include_directories(chunk-table-test PRIVATE shadps4)
+target_compile_options(chunk-table-test PRIVATE -UNDEBUG)
+# bbport: BB_ARENA_LAYOUT=runs with real Metal (guest memory buffers per GPU run).
+add_executable(arena-layout-test EXCLUDE_FROM_ALL ../tests/test_arena_layout.cpp)
+target_include_directories(arena-layout-test PRIVATE shim shadps4 third_party/gcn/include)
+target_compile_options(arena-layout-test PRIVATE -UNDEBUG)
+target_link_libraries(arena-layout-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+target_link_options(arena-layout-test PRIVATE -Wl,-export_dynamic)
 add_executable(index-offset-test EXCLUDE_FROM_ALL
     ../tests/test_index_offset.cpp ../tests/test_index_triangle.mm)
 set_source_files_properties(../tests/test_index_triangle.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

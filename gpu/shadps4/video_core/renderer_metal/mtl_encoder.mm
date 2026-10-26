@@ -636,14 +636,45 @@ struct Encoder::Impl {
         [e useResource:(__bridge id<MTLBuffer>)i.buffer
                  usage:MTLResourceUsageRead | MTLResourceUsageWrite];
     }
+    // bbport: the read-only ones in one call (guest memory can be several buffers: the buffer
+    // cache's chunks); one useResources call of three costs about what one useResource does
+    // (tests/test_arena_accounting.mm declare).
+    static constexpr size_t MaxBatched = 16;
     void DeclareOn(id<MTLRenderCommandEncoder> e) {
+        __unsafe_unretained id<MTLResource> reads[MaxBatched];
+        NSUInteger count = 0;
         for (const auto& i : indirect) {
-            Declare(e, i);
+            if (i.use == IndirectUse::Read && count < MaxBatched) {
+                reads[count++] = (__bridge id<MTLBuffer>)i.buffer;
+            } else {
+                Declare(e, i);
+            }
+        }
+        if (count == 1) {
+            [e useResource:reads[0]
+                     usage:MTLResourceUsageRead
+                    stages:MTLRenderStageVertex | MTLRenderStageFragment];
+        } else if (count > 1) {
+            [e useResources:reads
+                      count:count
+                      usage:MTLResourceUsageRead
+                     stages:MTLRenderStageVertex | MTLRenderStageFragment];
         }
     }
     void DeclareOn(id<MTLComputeCommandEncoder> e) {
+        __unsafe_unretained id<MTLResource> all[MaxBatched];
+        NSUInteger count = 0;
         for (const auto& i : indirect) {
-            Declare(e, i);
+            if (count < MaxBatched) {
+                all[count++] = (__bridge id<MTLBuffer>)i.buffer;
+            } else {
+                Declare(e, i);
+            }
+        }
+        if (count == 1) {
+            [e useResource:all[0] usage:MTLResourceUsageRead | MTLResourceUsageWrite];
+        } else if (count > 1) {
+            [e useResources:all count:count usage:MTLResourceUsageRead | MTLResourceUsageWrite];
         }
     }
 
