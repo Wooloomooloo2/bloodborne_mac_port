@@ -141,8 +141,13 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 ## State as of 2026-10-16 (mac-v0.4.0)
 
 - **Launcher** (`launcher/App`, `launcher/Model`, Swift; `scripts/macos/build_launcher.sh --test`):
-  the main executable of both apps; two-column window sized for a 13" Air. Writes `bbport.ini` and
-  `launch.conf` (`BB_SHOW_LAUNCHER`, `BB_SAVE_DIR`); ⌥ at open shows it when hidden. Test runs:
+  the main executable of both apps; two tabs sized for a 13" Air: Settings (two columns) and
+  Online. Writes `bbport.ini` and `launch.conf` (`BB_SHOW_LAUNCHER`, `BB_SAVE_DIR`); ⌥ at open
+  shows it when hidden. The Online tab (`OnlineSettings`, `HuntersDream` in Model; `Keychain.swift`,
+  `SignIn.swift` in App) writes the keys `scripts/launch_settings.sh` reads (`online`,
+  `online_pool`, `shadnet_*`, `thd_*`, `upnp`, `p2p_port`); secrets go through `security` into the
+  login keychain (the ini says `keychain`), never read back; the Discord device sign-in polls the
+  community server's `/auth/device/*` as `scripts/online.py signin` does. Test runs:
   `open -n --env BB_DATA_DIR=$PWD/out/macdata --env BB_LAUNCH_CONF=$PWD/out/macdata/launch.conf Bloodborne.app`.
 - **About + updates (2026-10-20):** app menu *About Bloodborne* (standard panel; Info.plist
   `CFBundleVersion` from `git describe`, `BBCommit`) and *Check for Updates…*; daily automatic
@@ -272,6 +277,64 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 3. Rendering: half-rendered character after reloading a save; ghosting in character creation;
    null image stand-ins (Option A).
 4. Launcher / `.app` bundle.
+
+## Online play (2026-10-17, branch online-shadnet)
+
+Upstream bbport's online module (`gpu/bbnet` → `out/gpu/libbbnet.dylib`, `src/runtime_net.c`,
+`scripts/online.py`) is in, loaded only with `BB_ONLINE=1` (or `online=1` in bbport.ini; keys in
+`scripts/launch_settings.sh`). macOS specifics: x86-64 static protobuf 21.12 / OpenSSL 3.5 /
+miniupnpc / nlohmann_json from `bootstrap_deps.sh`; `deps/host/bin/protoc` is the arm64 protoc.
+ld64 has no `-Bsymbolic`:
+`gpu/bbnet/bbnet.exports` lists the two exported symbols, hidden visibility hides the rest,
+two-level namespace binds the module's own symbols to itself. httplib takes HTTPS anchors from the
+keychain (Security.framework). `tests/test_online.c` checks the import routing.
+**Verified 2026-10-17 with the user's shadNet account:** sign-in, The Hunter's Dream login, messages,
+bloodstains, ghosts (all HTTP 200). Two fixes were needed beyond upstream bbport: the server
+(shadps4-emu/shadNet) signs out clients that report no version or a fork-style one, so the client
+sends `SetClientVersion` ("shadPS4 v0.20.0", `BB_SHADNET_CLIENT_VERSION`) and logs notification 19
+(ClientRejected); and a refused first login (the server's post-rejection cooldown → LoginError 5)
+is retried with backoff (NpHandler::Initialize).
+
+**2026-10-17, P2P framing:** co-op with a Windows-port player failed (bell offers sent every
+500 ms for 30 s, never answered: `SIGNALING_ERROR_TIMEOUT`). Upstream bbport's module is the
+shadp2p tree, whose UDP frame is `[src vport][dst vport] + payload`; mainline shadPS4 v0.20.0 and
+the Windows port (Supermedo/bloodborne_pc vendors it) use `core/net/p2p_codec.cpp`'s FramingCodec:
+`[0xFF][0x80|kind][src vport][dst vport][optional 4-byte communication id] + payload`, with P2P
+crypto, so neither side could parse the other. `gpu/bbnet/shadps4` is now mainline v0.20.0's
+`src/core/libraries/{net,network,np}`, `src/core/net` and `src/shadnet` (529ceb32), LF line
+endings, unchanged except where marked `bbport` (the version string, RecvN's EINTR retry, the
+login retry); its host networking has a native kqueue/pipe path, so epoll-shim is gone.
+`BbNetHost` ABI 2 adds `thread_exit` (sceNetThreadExit) and `memory_is_mapped`. The module must
+call `Libraries::Net::InstallKernelIntegration()` itself (mainline does it from libkernel) or no
+socket can be created. `BB_P2P_PORT` / `p2p_port=` picks the UDP port (3658 by default, mainline's).
+`tests/test_p2p_codec.cpp` (`out/gpu/bbnet-codec-test`) pins the frame layout. Co-op itself is
+still untested from this port (needs a second player).
+
+**2026-10-17, first co-op try on the new tree:** 631 offers out, nothing in. Cause on this side:
+the user's router gives every outbound UDP flow a random external port and only lets the host we
+sent to answer on it (symmetric NAT, checked with STUN change requests: `scratchpad`
+`stun_probe.py` / `nat_filter.py` of session 2f782701). shadNet's signaling server reports the
+port it observed (51566) to peers, while UPnP forwarded only the bound port 3658, which nobody is
+told. Fix (`bbport` marks in `signaling_handler.cpp` HandleStunEcho, `net_upnp.{h,cpp}`
+MapExternalPortAsync): when the STUN echo's port differs from the bound port, the module also
+forwards that router port to the bound port by UPnP. Log: `the router maps our UDP port 3658 to
+N: asking it to forward port N too` then `UPNP: mapped router UDP port N to our port 3658`
+(or a `failed to map` warning if the router refuses a port its NAT table already uses). The
+router accepted it, but the friend's router randomizes too, so nothing arrived either way.
+
+**2026-10-17, The Hunter's Dream pool (what works for the user on Windows, same router):**
+`gpu/bbnet/thd` is Supermedo's backend for it (droogie/bbhost's protocol: session service over
+HTTPS at thehuntersdream.com:18671, STUN + relay through its STUN port, hole punching, bbhost's
+P2P framing), copied unchanged (CRLF) and selected by `BB_NET_BACKEND=thd`
+(`online_pool=huntersdream`). Glue: `runtime_thread_spawn` and `BbEngine::host_read_safe`
+defined in bbnet_glue.cpp on the host callbacks; `bbnet_set_image` (probe.c, before the patches:
+the backend checks the 1.09 code and reads FrpgNetMan for the host's position) and `bbnet_start`
+(probe.c, right before entering the game: `BbThd::Initialize`); with thd only Http/Http2/Ssl/Ssl2
+are registered beside `BbThd::Register`. http.cpp carries the Windows port's two hooks
+(`bbthd_enabled`, `bbthd_add_game_headers`, `*.host` override keys). Account: `scripts/online.py
+signin` (Discord device code, from the Windows launcher) → bbport.ini `thd_online_id` /
+`thd_token`; run.sh's thd branch writes the overrides (`*.scej-network.jp` → the game server,
+play logs → :18671) and sets `BB_THD_SERVER` / `BB_THD_AUTH` / `BB_THD_RULESET`.
 
 ## Gotchas learned
 

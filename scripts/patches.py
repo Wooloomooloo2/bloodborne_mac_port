@@ -124,6 +124,22 @@ CHEATS={
 }
 
 
+# Online play (BB_ONLINE=1) runs without cheats, gameplay changes, debug patches or patch files:
+# other players share the world, so a launch with any of them on drops them and says so.
+ONLINE_OFF_GROUPS=('Cheats','Gameplay')
+ONLINE_OFF=({name for name,(group,_,_) in CHEATS.items() if group in ONLINE_OFF_GROUPS}
+            | {'Enemy Control','Restore Debug Camera','Restore Debug Menu (READ NOTES)'})
+
+
+def online_play():
+    return os.environ.get('BB_ONLINE')=='1'
+
+
+def online_filter(names):
+    """Online play: (names kept, names dropped)."""
+    return [n for n in names if n not in ONLINE_OFF],[n for n in names if n in ONLINE_OFF]
+
+
 def cheat_patches(settings):
     """The cheats= patches (unknown names are ignored, two of one exclusive group refused)."""
     names=[n.strip() for n in settings.get('cheats','').split(';') if n.strip() in CHEATS]
@@ -139,7 +155,8 @@ def list_json(xml,app_version,patches_dir,patches_config):
     """--list: the cheats and the external patch files for the launcher, as JSON."""
     notes={m.get('Name'):(m.get('Note') or '').replace('\\n','\n')
            for m in ET.parse(xml).getroot().iter('Metadata') if m.get('AppVer')==app_version}
-    cheats=[{'name':name,'group':group,'label':label,'exclusive':exclusive,'note':notes.get(name,'')}
+    cheats=[{'name':name,'group':group,'label':label,'exclusive':exclusive,'note':notes.get(name,''),
+             'online_off':name in ONLINE_OFF}
             for name,(group,label,exclusive) in CHEATS.items() if name in notes]
     external=[]
     if patches_dir:
@@ -451,6 +468,10 @@ def main():
     for n in raw_names:
         if n not in names:
             names.append(n)
+    if online_play():
+        names,dropped=online_filter(names)
+        if dropped:
+            print(f'Patches: online play: off for this launch: {dropped}')
     validate_patch_requirements(names,a.game_dir)
     segments=eboot_segments((a.out/'eboot.elf').read_bytes())
     wide = ultrawide_patch(read_settings(a.settings))
@@ -473,7 +494,10 @@ def main():
             writes+=compile_patches(a.xml,[heap],a.app_version,segments)
             names.append(heap)
         print(f'Patches: scene {size[0]}x{size[1]}; UI {ui[0]}x{ui[1]}')
-    if a.patches_dir:
+    if a.patches_dir and online_play():
+        if external_selection(external_patches(a.patches_dir,a.app_version,a.xml),a.patches_config):
+            print('Patches: online play: patch files are off for this launch')
+    elif a.patches_dir:
         # After the built-in ones: an external patch of the same bytes wins.
         writes+=compile_external(external_selection(external_patches(a.patches_dir,a.app_version,a.xml),
                                                     a.patches_config),segments)

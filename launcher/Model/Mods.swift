@@ -126,7 +126,28 @@ struct CheatInfo: Codable, Equatable, Identifiable {
     /// Two cheats with the same exclusive group cannot be on together.
     var exclusive: String?
     var note: String
+    /// Off during online play (patches.py ONLINE_OFF): cheats, gameplay changes.
+    var onlineOff = false
     var id: String { name }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, group, label, exclusive, note
+        case onlineOff = "online_off"
+    }
+
+    init(name: String, group: String, label: String, exclusive: String? = nil, note: String, onlineOff: Bool = false) {
+        (self.name, self.group, self.label, self.exclusive, self.note, self.onlineOff) = (name, group, label, exclusive, note, onlineOff)
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        group = try c.decode(String.self, forKey: .group)
+        label = try c.decode(String.self, forKey: .label)
+        exclusive = try c.decodeIfPresent(String.self, forKey: .exclusive)
+        note = try c.decode(String.self, forKey: .note)
+        onlineOff = try c.decodeIfPresent(Bool.self, forKey: .onlineOff) ?? false
+    }
 }
 
 struct ExternalPatch: Codable, Equatable, Identifiable {
@@ -187,12 +208,20 @@ enum Cheats {
     }
 
     /// The main window's line next to its Mods & Cheats… button.
-    static func summary(mods: Int, cheats: Int) -> String {
+    /// `online`: online play is on, so mods (mods.py) and cheats (patches.py ONLINE_OFF) are off.
+    static func summary(mods: Int, cheats: Int, online: Bool = false) -> String {
         if mods == 0 && cheats == 0 { return "No mods or cheats" }
         var parts: [String] = []
         if mods > 0 { parts.append(mods == 1 ? "1 mod" : "\(mods) mods") }
         if cheats > 0 { parts.append(cheats == 1 ? "1 cheat" : "\(cheats) cheats") }
-        return parts.joined(separator: " · ") + " on"
+        var off: String {
+            switch (mods > 0, cheats > 0) {
+            case (true, true): " (mods and cheats off online)"
+            case (true, false): " (mods off online)"
+            default: " (cheats off online)"
+            }
+        }
+        return parts.joined(separator: " · ") + " on" + (online ? off : "")
     }
 }
 

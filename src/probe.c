@@ -713,6 +713,11 @@ int main(int argc, char **argv) {
         snprintf(sfo,sizeof(sfo),"%s/sce_sys/param.sfo",app0);
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
             runtime_savedata_configure(id);
+        char serial[16]="", title[128]="", version[16]="";
+        sfo_value(sfo,"TITLE_ID",serial,sizeof(serial),NULL);
+        sfo_value(sfo,"TITLE",title,sizeof(title),NULL);
+        sfo_value(sfo,"APP_VER",version,sizeof(version),NULL);
+        runtime_net_configure(app0,serial,title,version);
     }
     bbgpu_register_kernel();
     page_size = (size_t)sysconf(_SC_PAGESIZE);
@@ -929,6 +934,7 @@ int main(int argc, char **argv) {
         }
         memcpy(image + relocs[i].target, &value, 8);
     }
+    runtime_net_set_image(image, size); /* the online module reads the game's code before the patches change it */
     if (patch_file) apply_patches(patch_file, segments, ns, relocs, nr);
     runtime_install_context_lock(image, size);
     protect(thunks, round_page((import_count + 1) * 32), 5);
@@ -962,6 +968,7 @@ int main(int argc, char **argv) {
             if (result) fail("module initializer failed");
         }
     }
+    runtime_net_start(); /* the online session starts with the game */
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
     entered_game=1;
     struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};

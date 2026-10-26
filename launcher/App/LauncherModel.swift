@@ -4,10 +4,18 @@ import AppKit
 import Combine
 import Foundation
 
+/// The Discord sign-in to The Hunter's Dream, as the Online tab shows it.
+enum SignInState: Equatable {
+    case idle, starting
+    case waiting(page: URL, code: String)
+    case failed(String)
+}
+
 /// The launcher window's state and actions.
 @MainActor
 final class LauncherModel: ObservableObject {
     let layout: Layout
+    let secrets: SecretStore
     let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
     let benchmark = BenchmarkRunner()
     private let env = ProcessInfo.processInfo.environment
@@ -19,6 +27,16 @@ final class LauncherModel: ObservableObject {
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
+    @Published var online = OnlineSettings()
+    /// A shadNet password typed in the window: it goes to the keychain at the next save and is
+    /// never shown, kept or logged otherwise.
+    @Published var newShadnetPassword = ""
+    @Published var p2pPortText = String(OnlineSettings.defaultP2PPort)
+    @Published private(set) var shadnetPasswordStored = false
+    @Published private(set) var signedIn = false
+    @Published private(set) var signIn = SignInState.idle
+    @Published private(set) var onlineProblem: String?
+    private var signInTask: Task<Void, Never>?
     @Published private(set) var dataDir: URL
     @Published private(set) var gameProblem: String?
     @Published private(set) var checkingGame = false
@@ -43,8 +61,9 @@ final class LauncherModel: ObservableObject {
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
 
-    init(layout: Layout) {
+    init(layout: Layout, secrets: SecretStore = LoginKeychain()) {
         self.layout = layout
+        self.secrets = secrets
         dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -63,7 +82,7 @@ final class LauncherModel: ObservableObject {
     var saveDir: URL { config.saveDir ?? SaveFolder.defaultURL(dataDir: dataDir) }
     var modFiles: ModFiles { ModFiles(dataDir: dataDir, env: env) }
     /// "2 mods · 1 cheat on" next to the Mods & Cheats… button.
-    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count) }
+    var modsSummary: String { Cheats.summary(mods: enabledMods.count, cheats: settings.cheats.count, online: online.online) }
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }
@@ -89,6 +108,10 @@ final class LauncherModel: ObservableObject {
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
         settings = GameSettings(ini: settingsFile)
+        online = OnlineSettings(ini: settingsFile)
+        p2pPortText = String(online.p2pPort)
+        newShadnetPassword = ""
+        refreshSecretState()
         benchmarkProblem = Benchmark.assetsProblem(layout.benchmarkAssets(env: env))
         refreshEnabledMods()
         checkGame()
@@ -110,12 +133,97 @@ final class LauncherModel: ObservableObject {
     func save() {
         config.apply(to: &confFile)
         settings.apply(to: &settingsFile)
+        if let port = OnlineSettings.port(from: p2pPortText) {
+            online.p2pPort = port
+        } else {
+            p2pPortText = String(online.p2pPort)
+        }
+        if !newShadnetPassword.isEmpty && !online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty {
+            do {
+                try online.storeShadnetPassword(newShadnetPassword, secrets: secrets)
+                newShadnetPassword = ""
+                onlineProblem = nil
+            } catch {
+                onlineProblem = "The shadNet password could not be stored in the keychain: \(error)"
+            }
+        }
+        online.apply(to: &settingsFile)
         do {
             try confFile.write(to: confURL)
             try settingsFile.write(to: settingsURL)
+            if online.hasSecretInFile {
+                // As scripts/online.py does: a secret in clear makes the file the owner's alone.
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: settingsURL.path)
+            }
         } catch {
             exitMessage = "Could not save the settings: \(error.localizedDescription)"
         }
+        refreshSecretState()
+    }
+
+    /// What the keychain holds for the accounts in the window (after a load, a save, or a
+    /// change of the shadNet account name).
+    func refreshSecretState() {
+        shadnetPasswordStored = online.shadnetPasswordStored(secrets: secrets)
+        signedIn = online.signedIn(secrets: secrets)
+    }
+
+    /// The community game server (also the account service): BB_COMMUNITY_SERVER from the
+    /// environment or launch.conf, else bbport.ini's community_server, else The Hunter's Dream.
+    private var communitySetting: String? {
+        env["BB_COMMUNITY_SERVER"] ?? confFile["BB_COMMUNITY_SERVER"].map(Shell.unquote) ?? settingsFile["community_server"]
+    }
+
+    /// The community server as shown; an address the sign-in refuses (not https) as written.
+    var communityServer: String {
+        (try? HuntersDream.communityAddress(communitySetting)) ?? communitySetting ?? HuntersDream.defaultCommunityServer
+    }
+
+    /// Links a Discord account: the window shows the page and the code until the service
+    /// reports the approval; the token then goes to the keychain and the account into bbport.ini.
+    func startSignIn() {
+        signInTask?.cancel()
+        onlineProblem = nil
+        let community: String
+        do {
+            community = try HuntersDream.communityAddress(communitySetting)
+        } catch {
+            signIn = .failed((error as? HuntersDream.Failure)?.description ?? error.localizedDescription)
+            return
+        }
+        signIn = .starting
+        signInTask = Task { [weak self] in
+            do {
+                let account = try await HuntersDreamClient.signIn(community: community) { [weak self] start in
+                    self?.signIn = .waiting(page: start.page, code: start.userCode)
+                }
+                guard let self, !Task.isCancelled else { return }
+                try online.signIn(onlineId: account.onlineId, token: account.token, secrets: secrets)
+                signIn = .idle
+                save()
+            } catch is CancellationError {
+                self?.signIn = .idle
+            } catch {
+                self?.signIn = .failed((error as? HuntersDream.Failure)?.description ?? error.localizedDescription)
+            }
+        }
+    }
+
+    func cancelSignIn() {
+        signInTask?.cancel()
+        signInTask = nil
+        signIn = .idle
+    }
+
+    func signOut() {
+        cancelSignIn()
+        online.signOut(secrets: secrets)
+        save()
+    }
+
+    func copyToPasteboard(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     func checkGame() {

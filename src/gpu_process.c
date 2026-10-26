@@ -297,14 +297,21 @@ static int spawn(const char *path, mach_port_t port) {
     posix_spawnattr_setbinpref_np(&attr, 1, &arm64, &set);
     char *argv[] = {(char *)path, NULL};
     /* BBGPU_HANDSHAKE tells the host the registered port is ours (registrations are inherited,
-     * so a host started by hand could otherwise find a stranger's port there). */
+     * so a host started by hand could otherwise find a stranger's port there). The online
+     * secrets stay in this process: the host never talks to the network. */
+    static const char *const withheld[] = {"BBGPU_HANDSHAKE=", "BB_THD_TOKEN=", "BB_SHADNET_PASSWORD=",
+                                           "BB_SHADNET_TOKEN="};
     size_t count = 0;
     while (environ[count]) ++count;
     char **envp = calloc(count + 2, sizeof *envp), marker[64];
     snprintf(marker, sizeof marker, "BBGPU_HANDSHAKE=%d", (int)getpid());
     size_t used = 0;
-    for (size_t i = 0; envp && i < count; ++i)
-        if (strncmp(environ[i], "BBGPU_HANDSHAKE=", 16)) envp[used++] = environ[i];
+    for (size_t i = 0; envp && i < count; ++i) {
+        int keep = 1;
+        for (size_t w = 0; w < sizeof withheld / sizeof *withheld; ++w)
+            if (!strncmp(environ[i], withheld[w], strlen(withheld[w]))) keep = 0;
+        if (keep) envp[used++] = environ[i];
+    }
     if (envp) envp[used] = marker;
     int rc = ENOMEM;
     kern_return_t kr = mach_ports_register(mach_task_self(), &port, 1);

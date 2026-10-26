@@ -15,7 +15,7 @@
 #   MacOS/bb-probe                game process (x86-64, Rosetta 2)
 #   MacOS/bbgpu-host              GPU process (arm64; owns the window, so the Dock shows the app)
 #   MacOS/bbgpu-host-macos27      the same with the guest range as an exec-time segment (macOS 27+)
-#   Frameworks/*.dylib            universal: libbbgpu, SDL3, FFmpeg
+#   Frameworks/*.dylib            universal: libbbgpu, SDL3, FFmpeg; optional x86-64 libbbnet
 #   Resources/port/               run.sh, scripts/*.py, patches/
 #   Resources/python/             standalone CPython (arm64) for the scripts
 #   Resources/licenses/           GPL text and third-party notices
@@ -61,6 +61,17 @@ universal() { # name x86_64-file arm64-file
 }
 universal libbbgpu.dylib out/gpu/libbbgpu.dylib out/gpu-arm64/libbbgpu.dylib
 set_rpath "$contents/Frameworks/libbbgpu.dylib" @loader_path
+# The online module runs in the x86-64 game process only. Its dependencies are static except
+# libbbgpu and system libraries; the validation below checks the actual dependency list.
+online_module=0
+if [[ -f out/gpu/libbbnet.dylib ]]; then
+    lipo out/gpu/libbbnet.dylib -verify_arch x86_64
+    install -m755 out/gpu/libbbnet.dylib "$contents/Frameworks/"
+    set_rpath "$contents/Frameworks/libbbnet.dylib" @loader_path
+    online_module=1
+else
+    echo 'No libbbnet.dylib: packaging an offline-only app.'
+fi
 for lib in libSDL3.0 libavformat.61 libavcodec.61 libswscale.8 libswresample.5 libavutil.59; do
     universal "$lib.dylib" "deps/x86_64/lib/$lib.dylib" "deps/arm64/lib/$lib.dylib"
 done
@@ -83,6 +94,8 @@ done
 
 # Launch scripts and patches (run.sh runs them; BB_PREBUILT=1 skips building).
 install -m755 run.sh "$contents/Resources/port/"
+# run.sh uses this when no Git checkout exists, so the online User-Agent names the release.
+printf '%s\n' "$version" > "$contents/Resources/port/bbport-version"
 install -m644 scripts/*.py "$contents/Resources/port/scripts/"
 install -m644 scripts/launch_settings.sh "$contents/Resources/port/scripts/"
 cp -R patches "$contents/Resources/port/patches"
@@ -153,12 +166,22 @@ FOR ANY DAMAGES OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE,
 ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 EOF
+if (( online_module )); then
+    cp LICENSES/GPL-3.0-or-later.txt "$lic/LICENSE-online-backend.txt"
+    cp docs/ONLINE_PROVENANCE.md "$lic/online-provenance.txt"
+    cp gpu/third_party/httplib/LICENSE "$lic/LICENSE-cpp-httplib.txt"
+    for pair in protobuf:LICENSE openssl:LICENSE.txt miniupnp:miniupnpc/LICENSE json:LICENSE.MIT; do
+        cp "deps/src/${pair%%:*}/${pair#*:}" "$lic/LICENSE-online-${pair%%:*}.txt"
+    done
+fi
 commit=$(git rev-parse --short HEAD)
 cat > "$lic/README.txt" <<EOF
 Bloodborne macOS port $version (commit $commit)
 Source code: https://github.com/Wooloomooloo2/bloodborne_mac_port/tree/$commit
-The port is licensed GPL-2.0-or-later (LICENSE-bloodborne-mac-port.txt); the other files are
-the licences of the libraries and code it bundles or compiles in. No game files are included.
+Existing port sources are GPL-2.0-or-later (LICENSE-bloodborne-mac-port.txt).
+Online module bundled: $online_module (1 = yes). When present, it includes GPL-3.0-or-later
+code; see online-provenance.txt and LICENSE-online-backend.txt.
+The other files are the notices for bundled libraries. No game files are included.
 EOF
 
 cat > "$contents/Info.plist" <<EOF

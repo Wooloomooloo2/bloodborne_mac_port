@@ -1,8 +1,8 @@
 # Mod manager for 0.6 (proposal, 2026-10-24)
 
 Status: built (2026-10-25), merged into master for 0.6, owner-approved with cheats, in its own launcher
-window ("Mods & Cheats…"). Requested in #16. Not yet: the online-play rule (with 0.6's online
-branch), drag and drop onto the window, showing a mod's readme. Enemy Control is not offered (it
+window ("Mods & Cheats…"). Requested in #16. Online play (branch `online-0.6`): mods (scripts/mods.py), cheats, gameplay changes, debug patches and
+patch files are off (scripts/patches.py `ONLINE_OFF`; greyed out in the window); camera and interface tweaks stay. Not yet: drag and drop onto the window, showing a mod's readme. Enemy Control is not offered (it
 rewrites code the frame rate patches change). The benchmark runs without mods, patch files and
 cheats.
 

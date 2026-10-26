@@ -72,9 +72,15 @@ struct IniFile: Equatable {
         }.joined(separator: "\n") + "\n"
     }
 
+    /// An atomic write makes a new file: the old one's permissions are kept (an owner-only
+    /// bbport.ini holding a password stays owner-only).
     func write(to url: URL) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
+        let fm = FileManager.default
+        try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let permissions = (try? fm.attributesOfItem(atPath: url.path))?[.posixPermissions]
         try text.write(to: url, atomically: true, encoding: .utf8)
+        if let permissions {
+            try fm.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+        }
     }
 }

@@ -231,6 +231,23 @@ class CheatTests(unittest.TestCase):
         self.assertTrue(all(c['group'] and c['label'] for c in listed['cheats']))
         self.assertEqual(listed['external'], [])
 
+    def test_online_play_drops_cheats_gameplay_and_debug_patches(self):
+        from patches import CHEATS, ONLINE_OFF, online_filter, online_play, list_json
+        import json, os
+        kept, dropped = online_filter(['60 FPS++', 'Player No Dead (Read note)', 'No Rally Decay',
+                                       'Increased camera distance', 'Enemy Control',
+                                       'Restore Debug Menu (READ NOTES)', 'Disable DoF'])
+        self.assertEqual(kept, ['60 FPS++', 'Increased camera distance', 'Disable DoF'])
+        self.assertEqual(dropped, ['Player No Dead (Read note)', 'No Rally Decay', 'Enemy Control',
+                                   'Restore Debug Menu (READ NOTES)'])
+        self.assertTrue(all(CHEATS[n][0] in ('Camera', 'Interface') for n in CHEATS if n not in ONLINE_OFF))
+        listed = {c['name']: c['online_off'] for c in json.loads(list_json(XML, '01.09', None, None))['cheats']}
+        self.assertTrue(listed['Player Stealth (Read note)'] and not listed['50% Text scale'])
+        with mock.patch.dict(os.environ, {'BB_ONLINE': '1'}):
+            self.assertTrue(online_play())
+        with mock.patch.dict(os.environ, {'BB_ONLINE': '0'}):
+            self.assertFalse(online_play())
+
 
 if __name__ == '__main__':
     unittest.main()

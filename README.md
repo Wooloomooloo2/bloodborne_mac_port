@@ -310,7 +310,8 @@ geometry corruption at 1440p (scenes above 1080p now use live resolution changes
 ### New in 0.4.0: the launcher
 
 `Bloodborne.app` now opens a launcher window (native SwiftUI) before the game, like a Steam
-launcher, with every setting on one screen (no scrolling, even on a 13" MacBook Air):
+launcher, with the game's settings on one screen and online play on a second tab (no
+scrolling, even on a 13" MacBook Air):
 
 - **Display:** output resolution, windowed or full screen, frame rate cap (30, 40, 60, 90, 120).
 - **Upscaler:** off, MetalFX or FSR 3.1, its quality level, and the resolution the game
@@ -320,6 +321,11 @@ launcher, with every setting on one screen (no scrolling, even on a 13" MacBook 
   and **skip intro videos** (straight to the title screen, no Sony and FromSoftware logos).
 - **Locations:** the game folder (checked before Play is enabled) and the save folder (it
   offers to copy your saves to a new folder; the originals stay where they were).
+- **Online** (second tab): play online on or off; the co-op pool, either **The Hunter's Dream**
+  with **Sign in with Discord** (the window shows the page and the code, then who you are
+  signed in as, with **Sign Out**) or a **shadNet server** with its address, account name and
+  password; UPnP port mapping and the co-op UDP port. Passwords and tokens go to your login
+  keychain, never into a file or the log. Setup guide: [docs/ONLINE.md](docs/ONLINE.md).
 - **Show launcher every time:** untick it to start the game directly next time; hold **⌥
   (Option)** while opening the app to get the window back.
 
@@ -665,6 +671,109 @@ password), Backspace deletes, Enter confirms, Esc cancels and leaves the field a
 field gets exactly what was typed; the game's own length limit applies (the log line
 `ImeDialog opened (..., up to N chars)` shows it).
 
+### Online play (shadNet)
+
+Step-by-step setup, both pools and a troubleshooting table: [docs/ONLINE.md](docs/ONLINE.md).
+The Hunter's Dream is the default co-op pool (bbhost and Windows-port players, works through
+any router); shadNet is the alternative described below.
+
+Messages, bloodstains and ghosts come from the community game server (The Hunter's Dream);
+bells and summons go through a shadNet server (`srv.shadps4.net:31313` by default) with a
+shadNet account. The network and PSN libraries are a separate module, `out/gpu/libbbnet.dylib`
+(`gpu/bbnet`: shadPS4 v0.20.0's network, NP and shadNet code with its P2P transport, the same
+code mainline shadPS4 and the Windows port run, so bells reach their players), built by
+`build_macos.sh` once `scripts/macos/bootstrap_deps.sh` has added its libraries (protobuf,
+OpenSSL, miniupnpc, nlohmann_json) to `deps/x86_64`. Offline the module is never loaded, and a
+build without it plays offline exactly as before.
+
+Turn it on in the launcher's **Online** tab (**Play online**, the pool, the account; it writes
+the keys below), or by hand in `bbport.ini` (`~/Library/Application Support/Bloodborne/bbport.ini`):
+
+```ini
+online=1
+shadnet_npid=YourOnlineId
+shadnet_password=YourPassword
+```
+
+or with the same settings as environment variables in `launch.conf` (`BB_ONLINE=1`,
+`BB_SHADNET_NPID`, `BB_SHADNET_PASSWORD`). Optional: `shadnet_server=host:port`,
+`shadnet_webapi=http://host:31315`, `community_server=https://...`, `upnp=0` (no UPnP port
+mapping), `p2p_port=3658` (the UDP port co-op traffic uses; the PS4's 3658 by default, `0` for
+any free port), `online_pool=shadnet` or `huntersdream` (The Hunter's Dream by default; see below). An account is needed to sign in: without one the module loads but no shadNet user
+connects, and the game stays offline. `run.sh` writes `user/host_overrides.json` for each launch (the game's server
+`ss4.scej-network.jp` → the community server; summon signs → the shadNet WebAPI when it has the
+Bloodborne summon service), and the log starts with `Online: module ...` when the module is in
+use. `BB_GPU_LOG=info` shows the network libraries' own log.
+
+shadNet servers check the client version reported after signing in and sign out builds they
+do not accept (the log then says `the shadNet server rejected this client: ...`, and the
+account's logins are refused for a few minutes). The module reports the shadPS4 release its
+network libraries come from (`shadPS4 v0.20.0`); `BB_SHADNET_CLIENT_VERSION` overrides it. A
+refused first sign-in is retried in the background; the title screen's *Play Online* works once
+the log shows `Logged in npid=...`.
+
+Co-op (bells, summons) needs UDP to reach the other player. On the shadNet pool the module
+asks the router to forward its port through UPnP (`upnp=0` turns that off; forward `p2p_port`
+by hand then) and also the port the signaling server observed, but a router that gives every
+flow a random external port and answers only the host it was sent to (a symmetric NAT) still
+leaves the players unable to reach each other, on either side. `BB_GPU_LOG=debug` logs the
+signaling exchange (`NpSignaling`, `Lib_Net`) if a bell is not answered.
+
+**The Hunter's Dream pool** gets through that: its session service relays and punches through
+NATs, with bbhost and Windows-port players on the same pool. Sign in once with Discord: in the
+launcher's **Online** tab, **Sign in with Discord** (the token goes to your keychain), or from
+Terminal, as the Windows port's launcher does:
+
+```bash
+python3 scripts/online.py signin --ini ~/Library/Application\ Support/Bloodborne/bbport.ini
+```
+
+which writes `online_pool=huntersdream`, `thd_online_id=` and `thd_token=` (keep the token to
+yourself) and leaves the rest of the file alone. The Hunter's Dream is the default pool: a file
+that names no pool uses it, unless it holds only a shadNet account; `online_pool=shadnet` picks
+the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
+That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
+The server tells clients apart by their name and version and asks each port for its own:
+`run.sh` presents this build as `bbport-mac <version>` (the repository's latest `mac-v` tag)
+unless `BB_CLIENT_VERSION` says otherwise. The backend polls the server's event queue the way
+its operators ask (long polling: one request held open up to 25 s on one kept-alive
+connection, backing off on errors), and the game's play log goes out at the game's own pace.
+
+### What online play exposes, and what protects it
+
+- **Credentials.** The shadNet password and The Hunter's Dream token can stay out of `bbport.ini`:
+  the launcher's **Online** tab always keeps them in the login keychain (it never reads them
+  back, only stores, checks for and removes them), and from Terminal
+  `python3 scripts/online.py keychain shadnet --npid NAME --ini <bbport.ini>` puts the password
+  in the login keychain (item `bbport-shadnet`) and writes `shadnet_password=keychain`;
+  `scripts/online.py signin --keychain` does the same for the token (`bbport-huntersdream`,
+  `thd_token=keychain`). Neither passes the secret on a command line (the launcher uses the
+  Security framework, `online.py` feeds `security -i` on its standard input). `run.sh` reads
+  them with `security find-generic-password` at launch, and only for online play (a keychain
+  prompt may appear once), so the items' access list trusts `/usr/bin/security`: any program
+  that runs it as you can read them, as with any item `security` makes. Offline launches never
+  look them up, and the GPU process never gets them. A secret written in clear makes the file owner-only
+  (`chmod 600`); `run.sh` warns when one is readable by other users. Neither is ever logged
+  (the game's `X-BB-Token` header is filtered from the HTTP log).
+- **In transit.** The game's own traffic and The Hunter's Dream backend go over HTTPS and the
+  server certificate is checked against the system roots, also where the game loaded Sony's
+  CAs (upstream shadPS4 turned verification off there; `BB_DISABLE_HTTPS=1` is the explicit
+  opt-out). **The shadNet protocol itself is plain TCP** (its server offers no TLS listener: the
+  password goes to `srv.shadps4.net:31313` unencrypted) and its WebAPI is plain HTTP, so use a
+  password that is only for shadNet. The Hunter's Dream pool has no such exposure.
+- **The network.** Co-op opens one UDP port (`p2p_port`, 3658) and, on the shadNet pool, asks the
+  router to forward it through UPnP (on by default) while the game runs: an hour's lease renewed
+  every half hour and removed on exit, so a game that crashed leaves the port forwarded for an
+  hour at most (routers that take only permanent mappings get one, removed on exit). Peers reach
+  it directly or through the server's relay. What arrives is parsed by the game's own network code, as on a PS4. `upnp=0`
+  keeps the router untouched.
+- **Identity.** The module reports itself to shadNet as `shadPS4 v0.20.0` (the server signs out
+  other names) and to The Hunter's Dream as `bbport-mac <version>` (`BB_CLIENT_VERSION`); the Discord
+  device sign-in names the device "bbport on macOS", not the Mac's hostname. Your online id,
+  position and play log go to the community server as the game sends them.
+- **Dependencies** are fetched by tag and checked against a pinned commit (or SHA-256 for the
+  MoltenVK tarball) by `bootstrap_deps.sh`; nothing downloaded is executed.
+
 ### From Terminal
 
 ```sh
@@ -700,7 +809,7 @@ saves and settings as the Finder launcher.
 | `scripts/macos/make_app.sh` | Builds `Bloodborne.app`, a launcher without a Terminal window (local, not committed) |
 | `scripts/macos/package_app.sh` | Builds the self-contained `dist/Bloodborne.app` and its zip for releases (CI: `.github/workflows/macos-release.yml`) |
 | `Saves` | Shortcut to the save folder (created on first launch, not committed) |
-| `launcher/` | The macOS launcher window (Swift: `Model/` with tests, `App/`; built by `scripts/macos/build_launcher.sh`) |
+| `launcher/` | The macOS launcher window (Swift: `Model/` with tests, `App/`; built by `scripts/macos/build_launcher.sh`; the Online tab writes the keys `scripts/launch_settings.sh` reads), plus the Linux port's GTK launcher (reference) |
 | `tools/` | Developer utilities, including `pkg_extract` (fpkg unpacker) |
 | `docs/` | macOS plan and backlog, plus technical notes inherited from upstream |
 
