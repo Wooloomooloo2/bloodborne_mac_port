@@ -654,14 +654,16 @@ void DisplayTab(BbSettings::Values& s) {
     ImGui::BeginDisabled(native_wide);
     // The menu's choices (FSR 4 is removed from the Mac build; an ini naming it still loads).
     static constexpr int choices[] = {BbSettings::UpscalerOff, BbSettings::UpscalerFsr3,
-                                      BbSettings::UpscalerTaa, BbSettings::UpscalerMetalFx};
+                                      BbSettings::UpscalerTaa, BbSettings::UpscalerMetalFx,
+                                      BbSettings::UpscalerSpatial};
     static constexpr int choice_count = int(sizeof(choices) / sizeof(choices[0]));
-    static const char* labels[choice_count] = {"Off", "FSR 3.1", "TAA", "MetalFX"};
+    static const char* labels[choice_count] = {"Off", "FSR 3.1", "TAA", "MetalFX", "Spatial"};
     static const char* about[choice_count] = {
         "No temporal upscaling: the game's own image.",
         "AMD FSR 3.1. Light on the GPU.",
         "Anti-aliasing at output resolution, without upscaling.",
         "Apple MetalFX temporal upscaling, on the Mac's GPU.",
+        "MetalFX Spatial scaling of the current frame, without temporal history.",
     };
     bool available[choice_count];
     const char* tips[choice_count] = {};
@@ -1208,6 +1210,7 @@ void FpsCounter() {
     // startup-patched session keeps its launch output until restart.
     const char* upscaler = s.upscaler == BbSettings::UpscalerFsr3      ? "FSR 3.1"
                            : s.upscaler == BbSettings::UpscalerTaa     ? "TAA"
+                           : s.upscaler == BbSettings::UpscalerSpatial ? "MetalFX Spatial"
                            : s.upscaler == BbSettings::UpscalerMetalFx ? "MetalFX"
                                                                        : "";
     const auto [out_w, out_h] = BbSettings::OutputSize();

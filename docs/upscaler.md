@@ -314,3 +314,44 @@ path; it has not been tried on macOS, where FSR 4 is not expected to work.)
 **Correction to the A/B above ("the frame is CPU-bound").** Those measurements ran while 12
 hung shadPS4 processes each occupied a core. On an idle system: "host copies" 1.6%, GPU wait
 ~41% — the frame is GPU-bound, so async compute for FSR makes sense again.
+
+## 2026-10-26: native velocity inputs and MetalFX Spatial
+
+Ports selected direct-Metal features from `evill33t/bloodborne_mac`
+(`bbacb95c3338efcd627c0edaec05ff7534e555da`). No game shader binaries or
+captures are distributed with this change.
+
+- **MetalFX Spatial** is available in the launcher and the in-game upscaler
+  selector (`upscaler=metalfx_spatial`, or `BB_UPSCALER=metalfx_spatial`). It
+  scales the current scene without temporal history, jitter, or motion-vector
+  generation. HDR and tonemapped inputs use the corresponding MetalFX color
+  mode; scene alpha is preserved by the existing merge and HUD composition stays
+  at output resolution. The saved jitter setting remains available when
+  returning to a temporal provider. GPU support is queried independently from
+  temporal MetalFX. Aligned guest targets are cropped into a cached input
+  texture because the spatial API requires exact descriptor dimensions.
+- **Native object velocity** is experimental and opt-in with
+  `BB_METAL_NATIVE_MOTION=1`. Recognized original rigid/skinned vertex producers
+  and both native fragment producers can supply the shared motion texture.
+  Admission requires this frame's canonical clear, consecutive current/previous
+  camera matrices, matching signed velocity scale, format and half-resolution
+  extent, and successful recording of every admitted producer draw. Other
+  attachment/storage writes and CPU refreshes invalidate provenance.
+  The shader requires full coverage alpha, compatible encoded view depth,
+  nonsaturated finite motion and a residual exceeding one quantization step.
+  Rejected texels retain the existing camera/recompiler object motion.
+  Unknown dilation/filter passes are not trusted by this first adapter.
+
+Fingerprints are FNV-1a over original instruction words through `s_endpgm`,
+independent of the retail shader-header IDs and of fetch-shader inlining.
+The production motion shader's native input is tested for signed translation,
+coverage, depth mismatch, saturation and quantization fallback. Policy tests
+check clears, scale validation and fingerprints. Spatial GPU checks cover HDR
+and padded tonemapped inputs, normally and with `MTL_DEBUG_LAYER=1`; existing
+camera/temporal MetalFX checks also pass. Launcher/settings round trips pass.
+The full arm64 GPU library and launcher build. These are fixture/build results;
+in-game coverage, image quality and performance of these ports remain unverified.
+Native velocity defaults off pending that comparison.
+
+Focused CMake targets: `native-motion-test`, `camera-motion-test`,
+`metalfx-test` and `upscaler-support-test`.

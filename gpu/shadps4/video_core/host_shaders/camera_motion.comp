@@ -14,6 +14,7 @@ layout(binding = 3, std430) writeonly buffer NextFrame { uint next_frame[]; };
 #else
 layout(binding = 1, rg16f) uniform writeonly image2D motion_img; // pixels, previous - current
 // Object motion from the G-buffer: rg pixels, b = valid, a = written depth.
+layout(binding = 3) uniform texture2D native_tex;
 layout(binding = 2) uniform texture2D object_tex;
 #endif
 
@@ -26,6 +27,8 @@ layout(push_constant) uniform Constants {
     vec2 previous_jitter;
     uint mode;         // motion: 1 = object motion vectors available; debug: 0 motion, 1 raw
                        // depth, 2 view z / 50, 3 reprojected previous frame, 4 |difference|
+    vec2 native_scale;
+    uint native_enabled;
 };
 
 void main() {
@@ -102,6 +105,15 @@ void main() {
             !any(isinf(object_motion.rg))) {
             result = object_motion.rg;
         }
+    }
+    if (native_enabled != 0 && !sky && z > 0.0 && !isinf(z) && !isnan(z)) {
+        vec4 value = texelFetch(native_tex, pixel / 2, 0);
+        vec2 decoded = (value.rg - 0.5) * native_scale * size;
+        if (!any(isnan(value)) && !any(isinf(value)) && value.a == 1.0 &&
+            all(greaterThan(value.rg, vec2(0))) && all(lessThan(value.rg, vec2(1))) &&
+            abs(value.b - z/(z+10.0)) <= 1.5/255.0 + 1e-6 &&
+            any(greaterThan(abs(decoded-motion), abs(native_scale)*size/255.0)))
+            result = decoded;
     }
     imageStore(motion_img, pixel, vec4(result, 0.0, 0.0));
 #endif

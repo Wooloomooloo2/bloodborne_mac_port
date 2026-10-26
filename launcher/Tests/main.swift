@@ -833,6 +833,9 @@ do {
     check(env["BB_GAME_DIR"] == nil && env["BB_UPDATE_CHECKED"] == nil && env["OTHER"] == nil && env["bb_lower"] == nil, "launcher keys and others stay out")
 }
 
+let spatialSettings = GameSettings(ini: IniFile(text: "upscaler=metalfx_spatial\npreset=1\n"))
+check(spatialSettings.upscaler == .metalfx_spatial, "spatial choice survives launcher load")
+
 if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)

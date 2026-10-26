@@ -414,3 +414,17 @@ target_include_directories(index-offset-test PRIVATE shim shadps4 third_party/gc
 target_compile_options(index-offset-test PRIVATE -UNDEBUG)
 target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
 target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)
+
+add_executable(native-motion-test EXCLUDE_FROM_ALL ../tests/test_native_motion.cpp)
+target_include_directories(native-motion-test PRIVATE shim)
+target_compile_options(native-motion-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+if (APPLE)
+    add_executable(metalfx-test EXCLUDE_FROM_ALL ../tests/test_metalfx.mm shim/bbport_metalfx.mm
+        shim/common/logging/log.cpp shim/common/assert.cpp)
+    target_include_directories(metalfx-test PRIVATE shim shadps4)
+    target_compile_options(metalfx-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_link_libraries(metalfx-test PRIVATE bbmetal_core fmt::fmt
+        "-framework Metal" "-framework MetalFX" "-framework Foundation")
+    set_source_files_properties(../tests/test_metalfx.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
