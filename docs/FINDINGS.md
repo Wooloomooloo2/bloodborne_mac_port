@@ -2037,6 +2037,42 @@ Not reproduced on the M4 Max (48 GB, macOS 27) with an external 4K panel (GS27U,
 - Still untested: a scaled mode on the external panel ("looks like 2560x1440" = 5120x2880
   surface), a 60 Hz external display, and slower Macs.
 
+## 2026-10-26: 16-18 GB Macs slow down to 10-20 FPS: pinned GPU memory (#69)
+
+Reported on 16-18 GB Macs on macOS 27 (#69: M3 Pro, 14 GPU cores, 18 GB, 27.0.1): 54 FPS at load,
+then 10-20 FPS within a minute, at 1080p native, upscaler off. The reporter found that
+`BB_ARENA_GIB=5 BB_GC_BUDGET_MB=6000` restores 59-60 FPS. Their slow logs show ~9 GB of GPU
+allocations (6.5 GiB of it resident buffers: the 6 GiB arena and the 520 MiB page table and
+fault buffer), under Metal's working set, no texture evictions, and `required > max` kernel
+messages (`requiredBytes` ~17-20 GB against `maxWired` 14.3 GB).
+
+**Reproduction on the M4 Max (48 GB).** `sudo sysctl iogpu.wired_limit_mb=14000` (Metal's
+working set 37.4 → 13.7 GiB, the reporter's is 13.3) alone does not reproduce it: 60 FPS. With
+a helper holding 30 GiB of locked, incompressible memory as well (~18 GB left, swap in use), it
+does: 53 FPS then 15-17, as reported. The benchmark route drifts at low frame rates, so the
+comparisons below stand at the route's start (benchmark throughput pass capped at 60, 90 s,
+1080p native, upscaler off, windowed, no patches or mods).
+
+| Build / setting | Resident GPU buffers | FPS after the first 15 s |
+|---|---|---|
+| master (0.5.8) | 6,664 MiB | 15-17 |
+| `BB_GC_BUDGET_MB=6000` (texture budget ~1.4 GB, 405 images freed) | 6,664 MiB | 15-20 |
+| PR #85 (page table and fault buffer only with direct memory access) | 6,144 MiB | 21-30 |
+| `BB_ARENA_GIB=5` | 5,640 MiB | 45-60 |
+| `BB_ARENA_GIB=5 BB_GC_BUDGET_MB=6000` (the reporter's) | 5,640 MiB | 52-60 |
+| #85 + `BB_ARENA_GIB=5` | 5,120 MiB | 58-60 |
+| **#85 + #86 `BB_ARENA_LAYOUT=runs`** | **3,530 MiB** | **58-60** |
+
+The texture budget does not matter; the pinned (wired) buffers do. A fixed 5 GiB arena is not a
+safe default: with 6 GiB of direct memory (16:10, ultrawide) the game's mappings reach past
+5.0 GiB, and a request past the arena stops the game. #86's `runs` layout pins only the three
+runs the game maps for the GPU (3,325 + 13 + 0.125 MiB, 64 MiB guard each) and covers any
+mapping. The full benchmark route with #85 + #86 runs under the same limits: 58-60 FPS,
+`result=ok`, 25.2 million arena requests all inside a run, no late run changes, no fallback.
+
+**For 0.5.9 (a test build first):** #85 for every Mac; `runs` by default on Macs with 24 GB or less, or with
+Metal's working set at 18 GiB or less; `legacy` on the others (`BB_ARENA_LAYOUT` chooses).
+
 ## 2026-10-26: the opening-movie freeze and crash on new games (#46, #50, #51, #24, #84)
 
 Reported only on 16-18 GB Macs (macOS 27), never reproduced on the M4 Max until now: the opening

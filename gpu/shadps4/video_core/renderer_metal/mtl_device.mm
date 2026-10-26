@@ -236,6 +236,9 @@ u64 Device::Commit(void* command_buffer) {
     [cmd addCompletedHandler:^(id<MTLCommandBuffer> done) {
         if (done.status == MTLCommandBufferStatusError) {
             shared->errors.fetch_add(1, std::memory_order_relaxed);
+            if (done.error.code == MTLCommandBufferErrorPageFault) {
+                shared->page_faults.fetch_add(1, std::memory_order_relaxed);
+            }
             LOG_ERROR(Render, "Metal command buffer of tick {} failed: {}", tick,
                       done.error ? done.error.localizedDescription.UTF8String : "unknown error");
         }

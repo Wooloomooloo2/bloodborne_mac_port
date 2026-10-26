@@ -15,7 +15,9 @@
 #include <string_view>
 #include <magic_enum/magic_enum.hpp>
 #ifdef __APPLE__
+#include <dlfcn.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
 #endif
@@ -39,6 +41,19 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 namespace VideoCore {
+
+// bbport: which build wrote a layout fallback: this library's size and modification time
+// (a new app version or rebuild has another).
+static std::string LayoutBuildStamp() {
+    Dl_info info{};
+    struct stat st{};
+    if (!dladdr(reinterpret_cast<const void*>(&LayoutBuildStamp), &info) || !info.dli_fname ||
+        stat(info.dli_fname, &st) != 0) {
+        return "unknown";
+    }
+    return fmt::format("build {} {}", static_cast<long long>(st.st_size),
+                       static_cast<long long>(st.st_mtime));
+}
 
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
@@ -141,18 +156,25 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
                 "is %.1f GiB)\n",
                 double(arena_bytes) / double(1_GB), reason, double(memsize) / 1e9,
                 double(max_buffer) / double(1_GB));
-    // bbport: the layout of guest memory in GPU buffers (performance/github/
-    // MEMORY_FIX_RECOMMENDATION.md). legacy: one arena from MacArenaBase, as above. span: one
-    // buffer from the first byte the game maps for the GPU to the last. runs: one buffer per run of
-    // memory mapped for the GPU (~3.3 GiB of the arena's 6). The driver wires each buffer by its
-    // length (tests/test_arena_accounting.mm), and offsets stay below 4 GiB in a run (no index
-    // copies). span and runs follow the game's maps (BbArenaRuns) and are opt-in for now
-    // (BB_ARENA_LAYOUT=span|runs). BB_ARENA_GUARD_MB (64): bytes past each buffer, for shaders
-    // reading past a binding (Metal does not bounds-check).
+    // bbport: the layout of guest memory in GPU buffers. legacy: one arena from MacArenaBase, as
+    // above. span: one buffer from the first byte the game maps for the GPU to the last. runs:
+    // one buffer per run of memory mapped for the GPU (~3.3 GiB of the arena's 6). The driver
+    // wires each buffer by its length (tests/test_arena_accounting.mm), and offsets stay below
+    // 4 GiB in a run (no index copies). span and runs follow the game's maps (BbArenaRuns).
+    // BB_ARENA_GUARD_MB (64): bytes past each buffer, for shaders reading past a binding (Metal
+    // does not bounds-check).
+    // Default: runs on Macs with 24 GB or less, or whose Metal working set is 18 GiB or less
+    // (iogpu.wired_limit_mb); legacy on the others. On an 18 GB M3 Pro (macOS 27, issue #69) the
+    // legacy arena's pinned memory pushed the Mac into swap: 54 FPS falling to 10-20 within a
+    // minute; runs held 60 (FINDINGS 2026-10-26). BB_ARENA_LAYOUT=legacy|span|runs chooses.
     legacy_bytes = arena_bytes;
     mac_arena_end = MacArenaBase + arena_bytes;
     const char* layout_name = std::getenv("BB_ARENA_LAYOUT");
-    const std::string_view wanted_layout = layout_name ? layout_name : "legacy";
+    const bool small_mac = (memsize != 0 && memsize <= (24ULL << 30)) ||
+                           device.GetLimits().recommended_working_set <= (18ULL << 30);
+    const std::string_view wanted_layout = layout_name ? layout_name
+                                           : small_mac ? "runs"
+                                                       : "legacy";
     layout = wanted_layout == "runs"   ? Layout::Runs
              : wanted_layout == "span" ? Layout::Span
                                        : Layout::Legacy;
@@ -167,16 +189,30 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
             forced = "BB_ARENA_GIB sets the arena";
         }
         // The previous launch's fallback (MonitorLayout): one step back from the layout it names.
+        // It holds for this build only: a file another build wrote is removed (an update tries
+        // the layout again instead of keeping a small Mac on the legacy arena for good).
         const auto fallback = Common::FS::GetUserPath(Common::FS::PathType::UserDir) /
                               "gpu_memory_layout_fallback";
         std::string failed;
         if (!forced) {
             if (std::FILE* f = std::fopen(fallback.string().c_str(), "r")) {
-                char line[512] = {};
+                char line[512] = {}, stamp[128] = {};
                 if (std::fgets(line, sizeof line, f)) {
                     failed = line;
                 }
+                const bool has_stamp = std::fgets(stamp, sizeof stamp, f) != nullptr;
                 std::fclose(f);
+                std::string_view written{stamp};
+                if (written.ends_with('\n')) {
+                    written.remove_suffix(1);
+                }
+                if (!has_stamp || written != LayoutBuildStamp()) {
+                    std::printf("GPU arena: the layout fallback from another build (%s) no longer "
+                                "applies\n",
+                                failed.empty() ? "empty" : failed.substr(0, failed.find('\n')).c_str());
+                    std::remove(fallback.string().c_str());
+                    failed.clear();
+                }
             }
         }
         if (forced) {
@@ -219,9 +255,10 @@ BufferCache::BufferCache(Metal::Device& device_, Vulkan::Scheduler& scheduler_,
         SetUpChunk(MacArenaBase, arena_bytes, "Guest Arena");
         return;
     }
-    std::printf("GPU arena: layout %s (BB_ARENA_LAYOUT): buffers for the game's GPU memory as it "
+    std::printf("GPU arena: layout %s (%s): buffers for the game's GPU memory as it "
                 "is mapped, %llu MiB past each, at most %.1f GiB in all\n",
-                name_of(layout), static_cast<unsigned long long>(guard_bytes >> 20),
+                name_of(layout), layout_name ? "BB_ARENA_LAYOUT" : "a Mac with 24 GB or less",
+                static_cast<unsigned long long>(guard_bytes >> 20),
                 double(legacy_bytes) / double(1_GB));
     BbArenaRuns::SetListener(&BufferCache::OnRunsChanged, this);
     MaterializeRuns(); // the runs mapped before the renderer started (none yet: the first record)
@@ -324,7 +361,7 @@ void BufferCache::WriteLayoutFallback(const std::string& reason) {
     const auto path =
         Common::FS::GetUserPath(Common::FS::PathType::UserDir) / "gpu_memory_layout_fallback";
     if (std::FILE* f = std::fopen(path.string().c_str(), "w")) {
-        std::fprintf(f, "%s\n", reason.c_str());
+        std::fprintf(f, "%s\n%s\n", reason.c_str(), LayoutBuildStamp().c_str());
         std::fclose(f);
     }
     std::printf("GPU arena: %s; the next launch uses the previous layout (%s)\n", reason.c_str(),
@@ -336,7 +373,11 @@ void BufferCache::MonitorLayout(std::stop_token stop) {
     const char* name = layout == Layout::Runs ? "runs" : "span";
     std::mutex m;
     std::condition_variable_any cv;
-    u64 last_errors = device.ErrorCount();
+    // Only GPU page faults (an address no resident buffer maps) step back: the one error a
+    // layout can cause. Other command buffer errors (out of memory, timeouts) are more likely
+    // on the small Macs this layout is for, and stepping back on them kept those Macs slow.
+    u64 last_faults = device.PageFaultCount();
+    bool guard_logged = false;
     for (u32 round = 0;; ++round) {
         {
             std::unique_lock lock{m};
@@ -345,16 +386,18 @@ void BufferCache::MonitorLayout(std::stop_token stop) {
         if (stop.stop_requested()) {
             return;
         }
-        const u64 errors = device.ErrorCount();
-        if (errors > last_errors) {
-            WriteLayoutFallback(fmt::format("{}: {} Metal errors", name, errors));
+        const u64 faults = device.PageFaultCount();
+        if (faults > last_faults) {
+            WriteLayoutFallback(fmt::format("{}: {} GPU page faults", name, faults));
             return;
         }
-        last_errors = errors;
-        // The guards hold zeros unless a shader wrote past its binding (every 30 s). Only the
+        last_faults = faults;
+        // The guards hold zeros unless something wrote past a run (every 30 s): logged once, as
+        // a diagnostic. Writes there are expected (ObtainMiss binds writes ending in a guard,
+        // image copies may fill to a buffer's end), so they do not step back. Only the
         // first MiB past each run, and only its pages the process has (mincore): reading the
         // rest gave the process 3 x 64 MiB of zero pages (~170 MiB more footprint).
-        if (round % 3 != 2) {
+        if (guard_logged || round % 3 != 2) {
             continue;
         }
         const u64 page = static_cast<u64>(getpagesize());
@@ -370,17 +413,19 @@ void BufferCache::MonitorLayout(std::stop_token stop) {
             if (mincore(const_cast<u8*>(guard), scan, resident.data()) != 0) {
                 continue;
             }
-            for (u64 p = 0; p < scan; p += page) {
+            for (u64 p = 0; p < scan && !guard_logged; p += page) {
                 if (!(resident[p / page] & MINCORE_INCORE)) {
                     continue;
                 }
                 const u64* words = reinterpret_cast<const u64*>(guard + p);
                 for (u64 i = 0; i < std::min(page, scan - p) / sizeof(u64); ++i) {
                     if (words[i] != 0) {
-                        WriteLayoutFallback(fmt::format(
-                            "{}: bytes written {} past the buffer at {:#x} (its guard)", name,
-                            p + i * sizeof(u64), c.start));
-                        return;
+                        std::printf("GPU arena: bytes written %llu past the buffer at %#llx (its "
+                                    "guard; %s layout kept)\n",
+                                    static_cast<unsigned long long>(p + i * sizeof(u64)),
+                                    static_cast<unsigned long long>(c.start), name);
+                        guard_logged = true;
+                        break;
                     }
                 }
             }
@@ -438,7 +483,10 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
     // bbport: guest memory the arena does not cover holds no GPU data of this cache (every
     // GPU-modified range was bound through the arena): nothing to read back. A fault there
     // stopped the game in GetChunk before (texture watchers protect pages anywhere).
-    if (!FindChunk(device_addr, size)) {
+    // The chunk is looked up by the faulting address alone: a request ending past a run's end
+    // (a read fault in its last bytes) was declined and left the page protected, so the guest
+    // faulted on it forever. The window below stops at the chunk's end.
+    if (!FindChunk(device_addr, 1)) {
         if (is_write) {
             memory_tracker->MarkRegionAsCpuModified(device_addr, size);
         }
@@ -447,13 +495,15 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
         return;
     }
     const auto flush_request = [this, device_addr, size, is_write] {
-        const auto* arena = GetChunk(device_addr, size);
+        const auto* arena = GetChunk(device_addr, 1);
         BbArenaRuns::Note(BbArenaRuns::Caller::ReadBack, device_addr, size);
 
         // GPU-modified ranges come as many small scattered islands,
-        // so the download is widened to a window around the request
+        // so the download is widened to a window around the request.
+        // It ends with the chunk's guest memory, not its guard (another run may follow there).
         constexpr u64 WindowSize = 512_KB;
-        const VAddr arena_end = arena->cpu_addr + arena->size_bytes;
+        const auto* chunk = chunks.Find(device_addr, 1);
+        const VAddr arena_end = chunk ? chunk->end : arena->cpu_addr + arena->size_bytes;
         const VAddr window_start =
             std::max<VAddr>(Common::AlignDown(device_addr, WindowSize), arena->cpu_addr);
         const VAddr window_end = std::min<VAddr>(

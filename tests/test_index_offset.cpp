@@ -100,6 +100,8 @@ int main() {
     setenv("BB_DRAW_PIPE", "0", 1);
     setenv("BB_PIPELINE_CACHE", "0", 1);
     setenv("BB_READBACKS", "2", 1);
+    // The single arena (the default on Macs with more than 24 GB): its 4 GiB windows are tested.
+    setenv("BB_ARENA_LAYOUT", "legacy", 1);
     void* mapped = mmap(reinterpret_cast<void*>(Base), MappedSize, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANON, -1, 0);
     assert(mapped == reinterpret_cast<void*>(Base));
