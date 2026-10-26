@@ -21,6 +21,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **8 GB Macs (2026-10-26, owner question).** The owner saw under 6 GB in Activity Monitor at
+  540p → 1080p (FSR 3.1). Today an 8 GB Mac stops at start: `buffer_cache.cpp` asserts a 5 GiB
+  Metal buffer, and maxBufferLength is ~60% of memory (~4.5 GiB). The `runs` layout (default on
+  ≤ 24 GB since 0.5.9) never needs one buffer that large (largest run ~3.3 GiB), so the assert
+  should apply to `legacy` only. The real risk is the ~3.5 GB of pinned GPU memory on top of macOS
+  and the game (the #69 swap slide). Simulate on the M4 Max as for #69: `iogpu.wired_limit_mb`
+  ~5300, a helper locking ~40 GB, `BB_MAX_BUFFER_GIB=4`, 540p → 1080p; ship only if it holds
+  30+ FPS without swapping.
 - **`tests/test_run_settings.py` fails on master, and no build script runs it (2026-10-26, found
   by evill33t on #90).** `test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it`: the third restart
   (back to 1080p) expects `BB_RENDER_RES` 640x360 and gets none. Run it with
