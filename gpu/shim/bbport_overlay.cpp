@@ -721,32 +721,34 @@ void DisplayTab(BbSettings::Values& s) {
     EndCard();
 
     BeginCard("Frame generation", int(BbSettings::FrameGenerationNeedsRestart()));
-    const bool framegen_available = s.framegen_supported && BbFrameGen::DisplaySupported();
+    const bool framegen_available = s.framegen_supported && upscaler_on && BbFrameGen::DisplaySupported();
     ImGui::BeginDisabled(!framegen_available || s.framegen_forced);
     Toggle("MetalFX 2x (experimental)", s.framegen);
     ImGui::EndDisabled();
     HintBelow("Adds an intermediate image between real frames. Requires an active temporal "
               "upscaler; the FPS cap still controls real frames. Adds GPU work and latency.");
-    if (!s.framegen_supported) {
+    if (!upscaler_on) {
+        Note("Choose MetalFX, FSR 3.1, or TAA above. Native 16:10 and ultrawide output "
+             "disable temporal upscaling and cannot provide frame generation inputs.");
+    } else if (!s.framegen_supported) {
         Note("Unavailable in this session. Requires macOS 26 or newer, a supported GPU, "
              "and the temporal renderer.");
     } else if (!BbFrameGen::DisplaySupported()) {
         if (!s.framegen_real_cap) {
-            Note("Set a real FPS cap to use frame generation. The display must refresh at "
-                 "least twice as fast as that cap.");
+            Note("Set a real FPS cap to use frame generation. Use a fixed refresh rate that is "
+                 "a whole multiple of twice the cap, or an active variable-refresh mode.");
         } else {
-            char text[192];
+            char text[256];
+            const auto timing = s.display_timing.load();
             std::snprintf(text, sizeof(text),
-                          "Requires at least %.0f Hz for the %u FPS real cap. "
-                          "This window's display reports %.1f Hz (0 means unknown).",
-                          2.0 * s.framegen_real_cap, s.framegen_real_cap,
-                          double(s.display_refresh_hz.load()));
+                          "Set the display to %.0f Hz (or a whole multiple) for the %u FPS cap, "
+                          "or use active variable refresh. External Adaptive-Sync needs full screen. "
+                          "This window reports %.2f Hz (0 means unknown).",
+                          2.0 * s.framegen_real_cap, s.framegen_real_cap, double(timing.refresh_hz));
             Note(text);
         }
     } else if (s.framegen_forced) {
         Note("Set by BB_METAL_FRAMEGEN at launch. Remove that override to change it here.");
-    } else if (s.framegen && !upscaler_on) {
-        Note("Choose MetalFX, FSR 3.1, or TAA above to provide depth and motion inputs.");
     }
     EndCard();
 

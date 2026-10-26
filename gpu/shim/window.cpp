@@ -15,6 +15,7 @@
 #include "bbport_mouse.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
+#include "bbport_framegen.h"
 
 namespace Frontend {
 
@@ -204,11 +205,16 @@ void WindowSDL::UpdateVisible() {
 }
 
 void WindowSDL::UpdateDisplayRefresh() {
-    // SDL's display APIs are main-thread-only. Publish the current window's mode
-    // for the renderer; never substitute the primary screen or an assumed 60 Hz.
+    // Publish the window's own mode and active VRR range together on the window thread.
+#ifdef __APPLE__
+    const auto props = SDL_GetWindowProperties(window);
+    void* cocoa_window = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr);
+    BbFrameGen::UpdateDisplayTiming(cocoa_window, IsFullscreen());
+#else
     const auto display = SDL_GetDisplayForWindow(window);
     const auto* mode = display ? SDL_GetCurrentDisplayMode(display) : nullptr;
-    BbSettings::Get().display_refresh_hz = mode ? mode->refresh_rate : 0;
+    BbSettings::Get().display_timing = {mode ? mode->refresh_rate : 0, 0};
+#endif
 }
 
 bool WindowSDL::PollEvents() {

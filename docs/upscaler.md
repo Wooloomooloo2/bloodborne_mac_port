@@ -3,25 +3,37 @@
 ## Experimental MetalFX frame generation on macOS (2026-10-24)
 
 Before starting the game, enable **Upscaler → Frame generation (experimental)**
-in the launcher. It explains unavailable choices and requires a connected display
-with at least twice the selected FPS cap; the game checks its own display again.
+in the launcher. It explains missing temporal inputs and incompatible refresh rates
+on the primary display, where the game opens. The game checks its own display again.
 You can also open the in-game menu with **L3+R3** (or **Cmd+,**) and select
 **Display → Frame generation → MetalFX 2x (experimental)** to enable an intermediate
 image between each pair of real frames. The choice is saved as `framegen=0|1` in
 `bbport.ini` and is **off by default**. After an in-game change, use **Apply and
-Restart Game**; toggling back to the running choice clears the restart notice. The current session keeps
-its existing presentation resources until restart.
+Restart Game**; toggling back to the running choice clears the restart notice. The
+current session keeps its existing presentation resources until restart.
 
 It requires macOS 26+, a build with the macOS 26 SDK or newer, a
 device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, an active
-temporal upscaler (`metalfx`, `fsr3`, or `taa`), and a known window-display refresh
-rate at least twice the configured real FPS cap. A 60 Hz display permits a 30 FPS
-cap, while a 60 FPS cap needs at least 120 Hz; 120 FPS needs at least 240 Hz.
-An uncapped launch or unknown refresh rate disables the switch with a short note.
-The window thread reads SDL's current mode for the window's own display and updates
-it on display/mode/fullscreen changes. Moving to a slower display suspends snapshot
-capture and paired presentation; returning to a suitable display resumes them.
-The control explains when generation is unavailable.
+temporal upscaler (`metalfx`, `fsr3`, or `taa`), and a compatible window-display mode:
+
+- Fixed refresh must be a whole multiple of **2 × the real FPS cap**, within 0.2%.
+  At a 60 FPS cap, 120/240/360 Hz qualify; 144/160 Hz do not. Fractional equivalents
+  such as 119.88 Hz qualify. A 30 FPS cap permits 60 Hz; a 120 FPS cap needs 240 Hz
+  or a whole multiple.
+- Active variable refresh permits a paired rate inside the display's reported
+  minimum/maximum range (with the same 0.2% tolerance). ProMotion can also service
+  windowed output. External
+  Adaptive-Sync requires full screen and a variable mode enabled in macOS display
+  settings, following [Apple's scheduling guidance](https://developer.apple.com/videos/play/wwdc2021/10147/).
+- Off, native 16:10/ultrawide output, an uncapped launch, and an unknown refresh rate
+  disable the control with a reason. Native aspect patches turn temporal upscaling off.
+
+The window thread reads the game window's own `NSScreen` refresh intervals/current
+mode and publishes both limits together on display/mode/fullscreen changes. Moving
+to an incompatible mode suspends snapshot capture and paired presentation; returning
+to a suitable mode resumes them. The saved frame-generation preference is retained.
+For an incompatible fixed 144/160 Hz mode at a 60 FPS cap, the controls recommend
+setting the display to 120 Hz (or a whole multiple).
 `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
 disables both controls for that session; remove it to use the saved preference. It never
 overwrites the file's `framegen` preference: unrelated menu saves preserve the
@@ -91,6 +103,11 @@ period, with scheduling slack). Measured frame cadence includes drawable waits;
 using it to extend the next display hold creates a feedback loop that can collapse
 real FPS. The duration helper returns zero for uncapped output; the display policy
 disables paired generation for uncapped launches.
+It also rejects incompatible fixed refresh modes before snapshot capture. For example,
+an approximately 8.1 ms minimum hold exceeds one refresh at 144/160 Hz, rounding each
+image up to two refreshes and making each real/generated pair take four. The stricter
+display policy prevents this pacing-induced loss of real FPS; interpolation still adds
+GPU work and cannot guarantee an unchanged real rate in a GPU-limited scene.
 
 Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
 timing, and gaps in real-frame sequence reset history. Menus/loading screens with
@@ -125,6 +142,12 @@ out/gpu-arm64/frame-rates-test
 The overlay fixture covers L3+R3 opening/closing, D-pad/Cross activation of the new
 row, saved preferences, reverting a pending restart, and unavailable/overridden
 controls, refresh-limited/uncapped launches, and re-enabling after a display change.
+The refresh policy fixtures reject fixed 144/160 Hz at a 60 FPS cap, accept
+120/240/360 Hz and fractional equivalents, check active variable-refresh ranges,
+and verify that accepted fixed modes do not round display holds into extra refreshes.
+The launcher model uses matching cases and checks the native-aspect/no-upscaler reasons.
+An SDL/Cocoa window probe on the built-in ProMotion display reported 24–120 Hz;
+external 144/160 Hz hardware remains untested locally.
 The settings round-trip fixture checks temporary launch overrides in both
 directions, the absent-key default, unrelated saves, and preservation
 of the launcher's other keys. These are offscreen input events, not a physical

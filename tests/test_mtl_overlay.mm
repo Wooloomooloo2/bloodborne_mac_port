@@ -157,7 +157,7 @@ int main() {
     unsetenv("BB_OVERLAY");
     unsetenv("BB_MENU_OPEN");
     unsetenv("BB_METAL_FRAMEGEN");
-    BbSettings::Get().display_refresh_hz = 120;
+    BbSettings::Get().display_timing = {120, 0};
     BbSettings::Get().framegen_real_cap = 60;
     @autoreleasepool {
         Metal::Device device;
@@ -186,6 +186,7 @@ int main() {
         Expect(Changed(t, 0, 0, Width, Height) == 0.0, "hidden overlay draws nothing");
 
         // FPS counter: top-right corner only (several frames: the window sizes itself first).
+        s.upscaler = BbSettings::UpscalerTaa;
         s.show_fps = true;
         Expect(BbOverlay::Visible(), "visible with the FPS counter on");
         for (int i = 0; i < 4; ++i) {
@@ -220,6 +221,15 @@ int main() {
         Expect(framegen_bounds[3] - framegen_bounds[1] > normal_bounds[3] - normal_bounds[1],
                "framegen adds a second FPS row");
         const auto framegen_counter = counter();
+        s.upscaler = BbSettings::UpscalerOff;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        const auto native_counter = counter();
+        Expect(CounterBounds(t) == normal_bounds, "missing temporal inputs restores the single FPS layout");
+        s.startup_framegen = false;
+        for (int i = 0; i < 4; ++i) Present(t, true);
+        Expect(counter() == native_counter, "no temporal inputs matches the original framegen-off counter");
+        s.startup_framegen = true;
+        s.upscaler = BbSettings::UpscalerTaa;
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
         Expect(counter() != framegen_counter, "displayed FPS changes independently of real FPS");
         s.framegen = false;
@@ -229,10 +239,10 @@ int main() {
         for (int i = 0; i < 4; ++i) Present(t, true);
         Expect(counter() == counter_before, "unsupported framegen uses the single FPS display");
         s.framegen_supported = true;
-        s.display_refresh_hz = 60;
+        s.display_timing = {60, 0};
         for (int i = 0; i < 4; ++i) Present(t, true);
         Expect(counter() == counter_before, "refresh-limited generation uses the single FPS display");
-        s.display_refresh_hz = 120;
+        s.display_timing = {120, 0};
         const std::array<BbFrameRates::Sample, 6> changing_rates{{
             {9, 18}, {99, 198}, {100, 200}, {999, 1998}, {0, 0}, {60, 120}}};
         for (const auto rates : changing_rates) {
@@ -315,12 +325,12 @@ int main() {
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
         Expect(footer() == unsupported_footer, "unavailable framegen hides displayed FPS in the footer");
         s.framegen_supported = true;
-        s.display_refresh_hz = 60;
+        s.display_timing = {60, 0};
         for (int i = 0; i < 4; ++i) Present(t, true);
         const auto limited_footer = footer();
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
         Expect(footer() == limited_footer, "refresh-limited generation hides displayed FPS in the footer");
-        s.display_refresh_hz = 120;
+        s.display_timing = {120, 0};
         s.framegen = s.startup_framegen = false;
         s.framegen_supported = true;
 
@@ -428,11 +438,17 @@ int main() {
         Click(t, fx, fy);
         Expect(!s.framegen, "a launch environment override disables the menu toggle");
         s.framegen_forced = false;
-        s.display_refresh_hz = 60;
+        s.display_timing = {60, 0};
         for (int i = 0; i < 3; ++i) Present(t, true);
         Click(t, fx, fy);
         Expect(!s.framegen, "60 Hz display cannot enable 2x generation at a 60 FPS cap");
-        s.display_refresh_hz = 120;
+        for (const float hz : {144.f, 160.f}) {
+            s.display_timing = {hz, 0};
+            for (int i = 0; i < 3; ++i) Present(t, true);
+            Click(t, fx, fy);
+            Expect(!s.framegen, "incompatible fixed 144/160 Hz cannot enable generation from the menu");
+        }
+        s.display_timing = {120, 0};
         s.framegen_real_cap = 0;
         for (int i = 0; i < 3; ++i) Present(t, true);
         Click(t, fx, fy);

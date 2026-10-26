@@ -9,6 +9,7 @@
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <Metal/Metal.h>
 #import <MetalFX/MetalFX.h>
 #include <algorithm>
@@ -118,15 +119,50 @@ void Pin(Metal::Encoder& e, const FramePtr& frame) {
 bool Requested() {
     return BbSettings::Get().startup_framegen;
 }
-bool DisplaySupported(double refresh_hz, uint32_t real_cap) {
-    return real_cap > 0 && std::isfinite(refresh_hz) && refresh_hz >= 2.0 * real_cap;
+bool DisplaySupported(double refresh_hz, uint32_t real_cap, double min_refresh_hz) {
+    if (!real_cap || !std::isfinite(refresh_hz) || refresh_hz <= 0) return false;
+    const double paired_rate = 2.0 * real_cap;
+    if (min_refresh_hz != 0) {
+        return std::isfinite(min_refresh_hz) && min_refresh_hz > 0 &&
+               min_refresh_hz < refresh_hz && paired_rate >= min_refresh_hz * .998 &&
+               paired_rate <= refresh_hz * 1.002;
+    }
+    const double ratio = refresh_hz / paired_rate;
+    const double multiple = std::round(ratio);
+    // Includes 59.94/119.88 Hz modes without admitting 144/160 Hz at a 60 FPS cap.
+    return multiple >= 1 && std::abs(ratio - multiple) <= .002 * multiple;
 }
 bool DisplaySupported() {
     const auto& s = BbSettings::Get();
-    return DisplaySupported(s.display_refresh_hz, s.framegen_real_cap);
+    const auto timing = s.display_timing.load();
+    return DisplaySupported(timing.refresh_hz, s.framegen_real_cap, timing.min_refresh_hz);
+}
+void UpdateDisplayTiming(void* cocoa_window, bool fullscreen) {
+    NSScreen* screen = [(__bridge NSWindow*)cocoa_window screen];
+    BbSettings::DisplayTiming timing;
+    if (screen) {
+        const auto display = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue];
+        const double shortest = screen.minimumRefreshInterval;
+        const double longest = screen.maximumRefreshInterval;
+        const bool valid_interval = std::isfinite(shortest) && shortest > 0;
+        const bool variable = valid_interval && std::isfinite(longest) && longest > shortest;
+        // External Adaptive-Sync scheduling requires full screen. Built-in ProMotion can
+        // also service composited windows; fixed modes have equal interval limits.
+        const bool adaptive = variable && (fullscreen || CGDisplayIsBuiltin(display));
+        CGDisplayModeRef mode = display ? CGDisplayCopyDisplayMode(display) : nullptr;
+        const double fixed_rate = mode ? CGDisplayModeGetRefreshRate(mode) : 0;
+        if (mode) CGDisplayModeRelease(mode);
+        timing.refresh_hz = variable ? 1.0 / shortest
+            : (std::isfinite(fixed_rate) && fixed_rate > 0 ? fixed_rate
+               : (valid_interval ? 1.0 / shortest : 0));
+        timing.min_refresh_hz = adaptive ? 1.0 / longest : 0;
+    }
+    BbSettings::Get().display_timing = timing;
 }
 bool Active() {
-    return Requested() && BbSettings::Get().framegen_supported && DisplaySupported();
+    const auto& s = BbSettings::Get();
+    return Requested() && s.framegen_supported && s.upscaler != BbSettings::UpscalerOff &&
+           DisplaySupported();
 }
 bool Supported(Metal::Device& device) {
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
