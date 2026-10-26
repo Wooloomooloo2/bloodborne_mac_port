@@ -114,6 +114,7 @@ struct GameSettings: Equatable {
     var wideOutput = PixelSize(3840, 1080)
     var displayOutput: PixelSize { ultrawide ? wideOutput : output }
     var upscaler = Upscaler.off
+    var frameGeneration = false
     var preset = 0
     var sharpen = true
     var sharpness = 0.3
@@ -169,6 +170,8 @@ struct GameSettings: Equatable {
             if let original = ini["standard_output_res"].flatMap(PixelSize.init(iniValue:)) { output = original }
         }
         if let v = ini["upscaler"], let u = Upscaler(rawValue: v) { upscaler = u }
+        // Match the renderer's opt-in parser (only the literal "1" enables it).
+        frameGeneration = ini["framegen"] == "1"
         if let v = ini["preset"], let p = Int(v), Resolution.presetScales.indices.contains(p) { preset = p }
         if let v = flag("sharpen") { sharpen = v }
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
@@ -212,6 +215,7 @@ struct GameSettings: Equatable {
         ini["ultrawide_res"] = ultrawide ? wideOutput.iniValue : nil
         ini["standard_output_res"] = output.iniValue
         ini["upscaler"] = ultrawide ? "off" : upscaler.rawValue
+        ini["framegen"] = frameGeneration ? "1" : "0"
         ini["preset"] = ultrawide ? "0" : String(preset)
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
@@ -247,5 +251,20 @@ struct GameSettings: Equatable {
     /// The scene size the game renders.
     var renderSize: PixelSize {
         ultrawide ? wideOutput : (upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output)
+    }
+
+    /// Launcher preflight. The renderer checks the game window's own display again at runtime.
+    /// Unavailable choices stay saved so changing the cap/display/upscaler does not erase them.
+    func frameGenerationUnavailableReason(deviceSupported: Bool, displayRefreshRates: [Double]) -> String? {
+        guard deviceSupported else { return "Requires macOS 26 or later and a Mac supporting MetalFX frame generation." }
+        guard !ultrawide else { return "Unavailable with native ultrawide or 16:10 output: upscaling is off." }
+        guard upscaler != .off else { return "Select MetalFX, FSR 3.1 or TAA to use frame generation." }
+        let rates = displayRefreshRates.filter { $0.isFinite && $0 > 0 }
+        guard !rates.isEmpty else { return "The display refresh rate could not be determined." }
+        let required = frameCap.rawValue * 2
+        guard rates.contains(where: { $0 >= Double(required) }) else {
+            return "Needs a \(required) Hz display at the \(frameCap.label) FPS cap. Lower the cap or change the display mode."
+        }
+        return nil
     }
 }

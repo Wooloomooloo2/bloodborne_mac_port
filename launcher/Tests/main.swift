@@ -194,6 +194,51 @@ do {
     check(Bindings.canonical("left gui") == nil && Bindings.canonical("wheel up") == "Wheel Up", "reserved and mouse names")
 }
 
+// Frame generation: share the renderer's saved startup choice and preserve it while unavailable.
+do {
+    check(!GameSettings().frameGeneration, "frame generation defaults off")
+    check(!GameSettings(ini: IniFile(text: "framegen=2\n")).frameGeneration, "frame generation uses the renderer's literal opt-in")
+    var ini = IniFile(text: "# menu settings\nframegen=1\nupscaler=metalfx\ncustom_key=keep\n")
+    var settings = GameSettings(ini: ini)
+    check(settings.frameGeneration, "read the in-game menu's frame generation choice")
+    for upscaler in [Upscaler.metalfx, .fsr3, .taa] {
+        settings.upscaler = upscaler
+        check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [120]) == nil,
+              "temporal upscaler \(upscaler) allows 60 -> 120 frame generation")
+    }
+    check(settings.frameGenerationUnavailableReason(deviceSupported: false, displayRefreshRates: [120]) != nil,
+          "unsupported OS/device explains unavailable frame generation")
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [60]) != nil,
+          "60 FPS cap needs more than a 60 Hz display")
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [60, 120]) == nil,
+          "a suitable external display enables the launcher choice")
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [0, .nan, .infinity]) != nil,
+          "unknown refresh rates cannot enable generation")
+    settings.frameCap = .fps30
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [60]) == nil,
+          "30 FPS cap allows generation at 60 Hz")
+    settings.frameCap = .fps120
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [120])?.contains("240 Hz") == true,
+          "120 FPS cap explains the need for 240 Hz")
+    settings.upscaler = .off
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [240]) != nil,
+          "upscaling off disables generation")
+    settings.upscaler = .metalfx
+    settings.ultrawide = true
+    check(settings.frameGenerationUnavailableReason(deviceSupported: true, displayRefreshRates: [240]) != nil,
+          "native wide output disables generation")
+    settings.apply(to: &ini)
+    check(ini["framegen"] == "1" && GameSettings(ini: ini).frameGeneration,
+          "unavailable frame generation keeps the saved preference")
+    settings.frameGeneration = false
+    settings.apply(to: &ini)
+    check(ini["framegen"] == "0" && !GameSettings(ini: ini).frameGeneration,
+          "launcher can disable the same saved startup choice")
+    check(ini["custom_key"] == "keep" && ini.text.hasPrefix("# menu settings\n")
+          && ini.text.split(separator: "\n").filter { $0.hasPrefix("framegen=") }.count == 1,
+          "frame generation save keeps comments and other settings without duplicate keys")
+}
+
 // Shell quoting and launch.conf (review focus 1: spaces, quotes; bash must source it).
 do {
     let tricky = ["/Users/a/Library/Application Support/Bloodborne", "/Volumes/My Drive/Hunter's saves", "/tmp/$HOME `x` \\ \"q\""]

@@ -13,8 +13,8 @@ struct LauncherView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
-            // points, Dock shown) without scrolling, even with every optional row showing.
+            // Two pages of two columns keep the window within a 13" MacBook Air (1440 x 900
+            // points, Dock shown). Forms scroll when optional rows or explanations need more room.
             // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
             // graph and SwiftUI's accessibility nodes loop on a dependency cycle, printing it
             // forever with the window frozen (#47, sampled by the reporter).
@@ -159,6 +159,14 @@ struct LauncherView: View {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
                     .disabled(model.settings.ultrawide)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Frame generation (experimental)", isOn: $model.settings.frameGeneration)
+                            .disabled(model.frameGenerationUnavailableReason != nil)
+                            .help("MetalFX 2×: adds one generated image between real frames. Applies when you start the game. Use a display with at least \(model.settings.frameCap.rawValue * 2) Hz.")
+                        if let reason = model.frameGenerationUnavailableReason {
+                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }

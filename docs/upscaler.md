@@ -2,11 +2,14 @@
 
 ## Experimental MetalFX frame generation on macOS (2026-10-24)
 
-Open the in-game menu with **L3+R3** (or **Cmd+,**) and select **Display → Frame
-generation → MetalFX 2x (experimental)** to enable an intermediate image between
-each pair of real frames. The choice is saved as `framegen=0|1` in `bbport.ini` and
-is **off by default**. Use **Apply and Restart Game** after changing it; toggling
-back to the running choice clears the restart notice. The current session keeps
+Before starting the game, enable **Upscaler → Frame generation (experimental)**
+in the launcher. It explains unavailable choices and requires a connected display
+with at least twice the selected FPS cap; the game checks its own display again.
+You can also open the in-game menu with **L3+R3** (or **Cmd+,**) and select
+**Display → Frame generation → MetalFX 2x (experimental)** to enable an intermediate
+image between each pair of real frames. The choice is saved as `framegen=0|1` in
+`bbport.ini` and is **off by default**. After an in-game change, use **Apply and
+Restart Game**; toggling back to the running choice clears the restart notice. The current session keeps
 its existing presentation resources until restart.
 
 It requires macOS 26+, a build with the macOS 26 SDK or newer, a
@@ -20,7 +23,7 @@ it on display/mode/fullscreen changes. Moving to a slower display suspends snaps
 capture and paired presentation; returning to a suitable display resumes them.
 The control explains when generation is unavailable.
 `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
-disables the menu switch for that session; remove it to use the menu. It never
+disables both controls for that session; remove it to use the saved preference. It never
 overwrites the file's `framegen` preference: unrelated menu saves preserve the
 pre-override value (including the default off when no key existed). For example,
 with your existing game/data configuration:
