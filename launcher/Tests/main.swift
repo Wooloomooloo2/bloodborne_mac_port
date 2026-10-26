@@ -80,6 +80,14 @@ do {
 do {
     let defaults = GameSettings(ini: IniFile())
     check(defaults == GameSettings(), "empty ini = defaults")
+    check(!defaults.hdr && defaults.hdrHighlights == 0.5, "HDR defaults off")
+    var hdrIni = IniFile(text: "hdr=1\nhdr_highlights=0.75\ncustom_hdr_key=keep\n")
+    let hdrSettings = GameSettings(ini: hdrIni)
+    check(hdrSettings.hdr && hdrSettings.hdrHighlights == 0.75, "read HDR settings")
+    hdrSettings.apply(to: &hdrIni)
+    check(GameSettings(ini: hdrIni) == hdrSettings && hdrIni["custom_hdr_key"] == "keep", "HDR round trip preserves unknown keys")
+    check(GameSettings(ini: IniFile(text: "hdr_highlights=nan\n")).hdrHighlights == 0.5 &&
+          GameSettings(ini: IniFile(text: "hdr_highlights=9\n")).hdrHighlights == 1, "HDR strength finite and bounded")
     check(defaults.output == PixelSize(1920, 1080) && defaults.upscaler == .off && defaults.preset == 0, "default display")
     check(defaults.frameCap == .fps60 && !defaults.fullscreen, "default cap, window")
     check(defaults.gameTiming == .fixed && GameSettings(ini: IniFile(text: "game_timing=variable\n")).gameTiming == .variable, "game timing: default fixed, read")

@@ -70,6 +70,7 @@ struct LayerConfig {
     u32 max_drawables{2};
     bool display_sync{true};
     bool framebuffer_only{true};
+    bool extended_range{false};
 };
 /// Configures a CAMetalLayer (void* = CAMetalLayer*, e.g. SDL_Metal_GetLayer): device, pixel
 /// format, sRGB colorspace, maximumDrawableCount, displaySyncEnabled, framebufferOnly.

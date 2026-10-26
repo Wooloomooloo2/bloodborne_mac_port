@@ -811,6 +811,11 @@ saves and settings as the Finder launcher.
   the launcher when launched from it. All six menu choices are visible, including in the
   DLC title menus. The in-world System menu's save-and-return-to-title action is unchanged.
   Set `BB_EXIT_GAME=0` to disable this entry independently of Mac Settings.
+
+**Experimental HDR presentation:** enable it in the launcher's Display section or the in-game
+Display page, then restart. Highlight strength is live; SDR displays keep normal brightness.
+See [HDR presentation](docs/HDR.md) for behaviour, source credits and validation limits.
+
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.

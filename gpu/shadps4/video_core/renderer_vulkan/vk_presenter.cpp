@@ -125,6 +125,12 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         snapshot_trigger = env;
     }
     Metal::LayerConfig config = LayerConfigFromEnv();
+    if (BbSettings::Get().startup_hdr) {
+        config.pixel_format = 115; // MTLPixelFormatRGBA16Float, extended linear sRGB
+        config.extended_range = true;
+        hdr_passes = std::make_unique<Metal::HdrPasses>(device);
+        std::printf("HDR: EDR presentation enabled (display headroom is sampled on the window thread)\n");
+    }
     // Snapshots read the drawable back.
     config.framebuffer_only = snapshot_trigger.empty();
     Metal::ConfigureLayer(device, layer, config);
@@ -177,6 +183,12 @@ Frame* Presenter::GetRenderFrame(u32 width, u32 height) {
         desc.height = height;
         desc.render_target = true;
         frame->texture = Metal::CreateTexture(device, desc, "Frame", nullptr);
+        if (hdr_passes) {
+            desc.pixel_format = 115; // MTLPixelFormatRGBA16Float
+            desc.shader_write = true;
+            frame->hdr_texture = Metal::CreateTexture(device, desc, "HDR frame", nullptr);
+            ASSERT_MSG(frame->hdr_texture, "Presenter: no HDR frame texture");
+        }
         ASSERT_MSG(frame->texture, "Presenter: no {}x{} frame texture", width, height);
         frame->width = width;
         frame->height = height;
@@ -254,6 +266,19 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     pp_pass.Render(draw_scheduler, std::move(input), Metal::Object::Retain(frame->texture.Get()),
                    frame->width, frame->height, pp_settings);
+
+    auto captures = rasterizer->GetUpscaler().TakeHdrCaptures();
+    if (hdr_passes) {
+        const float headroom = BbSettings::Get().hdr_headroom;
+        const float highlights = BbSettings::Get().hdr_highlights;
+        draw_scheduler.Record([passes = hdr_passes.get(),
+            source = Metal::Object::Retain(frame->texture.Get()),
+            output = Metal::Object::Retain(frame->hdr_texture.Get()),
+            scene = std::move(captures.scene), hudless = std::move(captures.hudless),
+            headroom, highlights](Metal::Encoder& e) mutable {
+            passes->Convert(e, source.Get(), scene.Get(), hudless.Get(), output.Get(), headroom, highlights);
+        });
+    }
 
     // Flush frame creation commands.
     frame->ready_tick = draw_scheduler.CurrentTick();
@@ -420,17 +445,38 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         }
         // A blank frame clears the drawable. Every acquired drawable is presented: one that is
         // not returns to the layer only after about a display refresh.
-        pp_pass.Passes().Present(command_buffer, source, frame->width, frame->height,
-                                 drawable.texture, drawable.width, drawable.height);
+        if (hdr_passes) {
+            // The UI backend keeps its BGRA8 format; a separate transparent target avoids
+            // gamma-space blending into an extended-linear drawable.
+            if (!frame->hdr_overlay ||
+                Metal::TexturePixelFormat(frame->hdr_overlay.Get()) != FrameFormat ||
+                // A retained per-pool-slot target cannot be reused while its present is in flight.
+                frame->hdr_overlay_width != drawable.width || frame->hdr_overlay_height != drawable.height) {
+                frame->hdr_overlay = Metal::CreateTexture(device,
+                    {.pixel_format = FrameFormat, .width = drawable.width, .height = drawable.height,
+                     .render_target = true}, "HDR overlay", nullptr);
+                frame->hdr_overlay_width = drawable.width; frame->hdr_overlay_height = drawable.height;
+                ASSERT_MSG(frame->hdr_overlay, "Presenter: no HDR overlay target");
+            }
+            hdr_passes->ClearOverlay(command_buffer, frame->hdr_overlay.Get());
+            BbOverlay::Render(command_buffer, frame->hdr_overlay.Get(), drawable.width, drawable.height);
+            hdr_passes->Present(command_buffer, source ? frame->hdr_texture.Get() : nullptr,
+                frame->width, frame->height, frame->hdr_overlay.Get(), drawable.texture,
+                drawable.width, drawable.height, BbSettings::Get().hdr_headroom);
+        } else {
+            pp_pass.Passes().Present(command_buffer, source, frame->width, frame->height,
+                                     drawable.texture, drawable.width, drawable.height);
+            BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height);
+        }
         // The settings menu / FPS counter over the presented image, before the snapshot (which
         // shows it) and the commit. Called every present: it also times the FPS readout and
         // saves menu changes while nothing is drawn.
-        BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height);
         std::string snapshot_path = TakeSnapshotRequest();
         std::shared_ptr<Metal::Object> snapshot;
         if (!snapshot_path.empty()) {
-            snapshot = std::make_shared<Metal::Object>(Metal::EncodeSnapshot(
-                device, command_buffer, drawable.texture, drawable.width, drawable.height));
+            snapshot = std::make_shared<Metal::Object>(hdr_passes
+                ? hdr_passes->Snapshot(device, command_buffer, drawable.texture, drawable.width, drawable.height)
+                : Metal::EncodeSnapshot(device, command_buffer, drawable.texture, drawable.width, drawable.height));
         }
         present_queue->Commit(
             command_buffer, drawable.drawable.Get(),
