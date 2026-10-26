@@ -15,7 +15,7 @@
 #                            (BB_LAZY_TEXTURE_USAGE=0; default 1, compressed)
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
-    local line cap='' full='' hud='' compress='' timing=''
+    local line cap='' full='' hud='' compress='' timing='' display=''
     # BB_FPS chosen here for the previous launch is chosen again after an in-game restart.
     if [[ ${BB_FPS_AUTO:-} == 1 ]]; then unset BB_FPS BB_FPS_AUTO; fi
     [[ -f $1 ]] || return 0
@@ -26,6 +26,8 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^metal_hud=([01])$ ]]; then hud=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^game_timing=(fixed|variable)$ ]]; then timing=${BASH_REMATCH[1]}; fi
+        # The launcher's display choice: a CoreGraphics display UUID (absent = the main display).
+        if [[ $line =~ ^display=([0-9A-Fa-f-]{36})$ ]]; then display=${BASH_REMATCH[1]}; fi
     done < "$1"
     if [[ -z ${BB_FPS:-} ]]; then
         export BB_FPS=uncap BB_FPS_AUTO=1
@@ -35,6 +37,7 @@ bb_launch_settings() { # ini file
     fi
     if [[ -n $cap && -z ${BB_FPS_LIMIT:-} ]]; then export BB_FPS_LIMIT=$cap; fi
     if [[ $full == 1 && -z ${BB_FULLSCREEN:-} ]]; then export BB_FULLSCREEN=1; fi
+    if [[ -n $display && -z ${BB_DISPLAY:-} ]]; then export BB_DISPLAY=$display; fi
     if [[ $hud == 1 && -z ${MTL_HUD_ENABLED:-} ]]; then export MTL_HUD_ENABLED=1; fi
     if [[ $compress == 0 && -z ${BB_LAZY_TEXTURE_USAGE:-} ]]; then export BB_LAZY_TEXTURE_USAGE=0; fi
     return 0

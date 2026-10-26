@@ -879,11 +879,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
   UI Fixes" mod (Nexus 207) replaces them; consider pointing to it from the launcher when 16:10
   is chosen (the mod manager can load it).
 
-- **Preferred display (#60, 2026-10-24).** The window always opens centred on the main display
-  (`gpu/shim/window.cpp`, `SDL_WINDOWPOS_CENTERED`) and the default resolution comes from it
-  (`gpu/shim/bbgpu.cpp`). Add a `display=` setting chosen in the launcher, applied with
-  `SDL_WINDOWPOS_CENTERED_DISPLAY(id)`, and keep resolution/ultrawide per display so docking does
-  not reset them.
+- **Resolution per display (#60, 2026-10-24).** The display choice is done (2026-10-26: launcher
+  `display=` UUID → `BB_DISPLAY`, window centred on it, vblank from it). Still open: keep
+  resolution/ultrawide per display so docking does not reset them.
 - **Leftover game processes (#71, 2026-10-24).** After a force-quit of a hung game, `bb-probe`
   and a GPU host stuck in exit stay alive and the launcher refuses to start ("only one copy").
   `stop_host` no longer waits forever after SIGKILL (fixes-0.5.6); the launcher should also offer

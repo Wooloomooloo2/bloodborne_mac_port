@@ -135,6 +135,8 @@ struct GameSettings: Equatable {
     var frameCap = FrameCap.fps60
     var gameTiming = GameTiming.fixed
     var fullscreen = false
+    /// bbport.ini display (GameDisplay): the display's UUID, nil = the main display.
+    var display: String?
     var shaderCompile = ShaderCompile.balanced
     // The in-game menu's Graphics and Advanced options (gpu/shim/bbport_settings.h, same defaults).
     var jitter = false
@@ -181,6 +183,7 @@ struct GameSettings: Equatable {
         if let v = ini["fps_cap"], let n = Int(v), let cap = FrameCap(rawValue: n) { frameCap = cap }
         if let v = ini["game_timing"], let t = GameTiming(rawValue: v) { gameTiming = t }
         if let v = flag("fullscreen") { fullscreen = v }
+        if let v = ini["display"], GameDisplay.isUUID(v) { display = v.uppercased() }
         if let v = ini["shader_compile"], let s = ShaderCompile(rawValue: v) { shaderCompile = s }
         // Ranges as the game clamps them.
         func number(_ key: String, _ range: ClosedRange<Double>) -> Double? {
@@ -222,6 +225,7 @@ struct GameSettings: Equatable {
         ini["fps_cap"] = String(frameCap.rawValue)
         ini["game_timing"] = gameTiming.rawValue
         ini["fullscreen"] = fullscreen ? "1" : "0"
+        ini["display"] = display
         ini["shader_compile"] = shaderCompile.rawValue
         ini["jitter"] = jitter ? "1" : "0"
         ini["model_lod"] = String(modelDetail.rawValue)

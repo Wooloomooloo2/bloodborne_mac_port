@@ -61,10 +61,27 @@ timing $'fps_cap=60\n' "uncap -" BB_FPS=uncap             # explicit BB_FPS wins
 timing $'fps_cap=60\n' "90 1" BB_FPS_LIMIT=90             # explicit limit picks the patch
 timing $'fps_cap=90\n' "60 1" BB_FPS=uncap BB_FPS_AUTO=1 BB_FPS_LIMIT=60
 timing $'fps_cap=60\ngame_timing=variable\n' "uncap 1" BB_FPS=60 BB_FPS_AUTO=1  # restart re-picks
+display() { # ini text, expected BB_DISPLAY (- = unset), extra environment...
+    printf '%s' "$1" > "$ini"
+    local got
+    got=$(env -u BB_DISPLAY "${@:3}" /bin/bash -c \
+        'source scripts/launch_settings.sh; bb_launch_settings "$1"; printf "%s" "${BB_DISPLAY:--}"' _ "$ini")
+    if [[ $got != "$2" ]]; then
+        echo "FAIL: display for $(printf %q "$1") ${*:3}: got '$got', want '$2'"
+        exit 1
+    fi
+}
+uuid=37D8832A-2D66-02CA-B9F7-8F30A301B230
+display "display=$uuid"$'\n' "$uuid"
+display "display=$uuid"$'\r\n' "$uuid"                  # CRLF
+display $'upscaler=off\n' "-"                           # absent: the main display
+display $'display=\n' "-"                               # empty: the main display
+display $'display=main; rm -rf /\n' "-"                 # not a UUID: ignored
+display "display=$uuid"$'\n' "OTHER" BB_DISPLAY=OTHER   # explicit environment wins
 rm -f "$ini"
 /bin/bash -c 'source scripts/launch_settings.sh; bb_launch_settings /nonexistent/bbport.ini' ||
     { echo "FAIL: launch settings with a missing file"; exit 1; }
-echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, game_timing)"
+echo "PASS: launch settings (fps_cap, fullscreen, texture_compression, game_timing, display)"
 
 # In-game restart inherits the old environment: disabling wide mode must clear only our
 # overrides and keep the user's external patch list and explicit memory limit.

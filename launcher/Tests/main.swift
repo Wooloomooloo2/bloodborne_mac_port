@@ -126,6 +126,21 @@ do {
     check(file["metal_hud"] == "1", "apply writes the Metal HUD key")
     check(file["texture_compression"] == "1", "apply writes the texture compression key")
     check(file["game_timing"] == "fixed", "apply writes the game timing key")
+    check(file["display"] == nil, "main display: no display key")
+    let uuid = "37D8832A-2D66-02CA-B9F7-8F30A301B230"
+    var onDisplay = GameSettings(ini: IniFile(text: "display=\(uuid.lowercased())\n"))
+    check(onDisplay.display == uuid, "read display, normalised to upper case")
+    check(GameSettings(ini: IniFile(text: "display=main\n")).display == nil, "invalid display -> main")
+    var displayFile = IniFile(text: "display=\(uuid)\n")
+    onDisplay.display = nil
+    onDisplay.apply(to: &displayFile)
+    check(displayFile["display"] == nil, "main display removes the key")
+    let screens = [GameDisplay(uuid: uuid, name: "Built-in (main)")]
+    check(GameDisplay.choices(connected: screens, saved: nil) == screens, "choices: connected displays")
+    check(GameDisplay.choices(connected: screens, saved: uuid) == screens, "choices: saved and connected")
+    let missing = "11111111-2222-3333-4444-555555555555"
+    check(GameDisplay.choices(connected: screens, saved: missing).last == GameDisplay(uuid: missing, name: "Display not connected"),
+          "choices: a saved display that isn't connected stays listed")
     check(file.text.hasPrefix("# header\n"), "header kept")
     // Review focus 3: reloading after the game's menu changed the file picks up its values.
     file["preset"] = "3"

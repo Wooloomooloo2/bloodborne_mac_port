@@ -124,6 +124,14 @@ struct LauncherView: View {
                         Text("Full screen").tag(true)
                     }
                     .pickerStyle(.segmented)
+                    if model.showsDisplayChoice {
+                        Picker("Display", selection: $model.settings.display) {
+                            Text("Main display").tag(String?.none)
+                            ForEach(model.displayChoices) { Text($0.name).tag(Optional($0.uuid)) }
+                        }
+                        Text("The game opens on this display, in a window or full screen. If it isn't connected, the main display is used.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Frame rate cap", selection: $model.settings.frameCap) {
                         ForEach(FrameCap.allCases) { Text($0.label).tag($0) }
                     }

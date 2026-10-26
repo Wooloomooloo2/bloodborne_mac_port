@@ -39,6 +39,9 @@ final class LauncherModel: ObservableObject {
     @Published private(set) var benchmarkProblem: String?
     /// The mod folders the next launch loads (mods.json), for the footer's summary.
     @Published private(set) var enabledMods: [String] = []
+    /// The connected displays (NSScreen order: the main display first), kept current.
+    @Published private(set) var displays: [GameDisplay] = []
+    private var screenChanges: AnyCancellable?
 
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
@@ -49,6 +52,19 @@ final class LauncherModel: ObservableObject {
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
+        displays = Self.connectedDisplays()
+        screenChanges = NotificationCenter.default
+            .publisher(for: NSApplication.didChangeScreenParametersNotification)
+            .sink { [weak self] _ in self?.displays = Self.connectedDisplays() }
+    }
+
+    private static func connectedDisplays() -> [GameDisplay] {
+        NSScreen.screens.enumerated().compactMap { index, screen in
+            guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                  let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+                  let text = CFUUIDCreateString(nil, uuid) as String? else { return nil }
+            return GameDisplay(uuid: text, name: index == 0 ? "\(screen.localizedName) (main)" : screen.localizedName)
+        }
     }
 
     var confURL: URL { layout.launchConfURL(env: env) }
@@ -67,6 +83,9 @@ final class LauncherModel: ObservableObject {
     var outputChoices: [PixelSize] {
         Resolution.outputs.contains(settings.output) ? Resolution.outputs : Resolution.outputs + [settings.output]
     }
+    var displayChoices: [GameDisplay] { GameDisplay.choices(connected: displays, saved: settings.display) }
+    /// Only worth showing with a second display, or a saved one that isn't connected.
+    var showsDisplayChoice: Bool { displays.count > 1 || settings.display != nil }
     var upscalerChoices: [Upscaler] {
         Upscaler.launcherChoices.contains(settings.upscaler) ? Upscaler.launcherChoices
             : Upscaler.launcherChoices + [settings.upscaler]
