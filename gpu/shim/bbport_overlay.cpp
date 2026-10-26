@@ -662,8 +662,8 @@ void DisplayTab(BbSettings::Values& s) {
         "No temporal upscaling: the game's own image.",
         "AMD FSR 3.1. Light on the GPU.",
         "Anti-aliasing at output resolution, without upscaling.",
-        "Apple MetalFX temporal upscaling, on the Mac's GPU.",
-        "MetalFX Spatial scaling of the current frame, without temporal history.",
+        "MetalFX temporal: recommended for a steadier image in motion.",
+        "Spatial: lighter on the GPU, shimmers more in motion.",
     };
     bool available[choice_count];
     const char* tips[choice_count] = {};
