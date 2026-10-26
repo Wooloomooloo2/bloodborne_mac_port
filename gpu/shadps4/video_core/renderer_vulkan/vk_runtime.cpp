@@ -354,6 +354,7 @@ void Runtime::FillBuffer(const VideoCore::Buffer& dst, u64 offset, u64 size, u32
 }
 
 void Runtime::AccessImage(VideoCore::Image* image, bool write) {
+    if (write && BbNativeMotion::Enabled()) image->native_motion = {};
     BeforeImageAccess();
     if (scene_targets) {
         scene_targets->NativeAccess(*image, write);
@@ -1102,6 +1103,12 @@ void Runtime::ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRang
     }
     if (targets.empty()) {
         return;
+    }
+    if (BbNativeMotion::Enabled() && dst->info.pixel_format == vk::Format::eR8G8B8A8Unorm && desc.levels == 1 &&
+        desc.layers == 1 && targets.size() == 1 && targets[0].level == 0 &&
+        targets[0].slice == 0 && BbNativeMotion::CanonicalClear(clear_value.color.float32)) {
+        dst->native_motion.frame = native_motion_frame;
+        dst->native_motion.cleared = true;
     }
     scheduler.Record([texture = dst->GetImage(),
                       color = ClearColorOf(dst->info.pixel_format, clear_value.color),
