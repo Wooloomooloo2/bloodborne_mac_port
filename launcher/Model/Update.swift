@@ -98,6 +98,24 @@ enum Updates {
     }
 
     /// nil when an unpacked app (its Info.plist) is this app at the release's version.
+    /// The longest the relaunch waits for the old copy to exit before opening the new one anyway.
+    static let relaunchWait: TimeInterval = 30
+
+    /// After an update: a detached shell that waits until the old copy (`pid`) has exited, then
+    /// opens the new one with --updated (its launcher window shows). Opening it while the old copy
+    /// still runs showed both for a moment: `open -n` started a second instance beside the one
+    /// still quitting, and a plain `open` would only bring the old one forward. `opener`: the tests'.
+    static func relaunchCommand(pid: Int32, bundle: URL, opener: String = "/usr/bin/open",
+                                wait: TimeInterval = relaunchWait) -> [String] {
+        let tries = Int(wait / 0.1)
+        let script = """
+            i=0
+            while /bin/kill -0 "$1" 2>/dev/null && [ "$i" -lt \(tries) ]; do /bin/sleep 0.1; i=$((i+1)); done
+            exec "$3" "$2" --args --updated
+            """
+        return ["/bin/sh", "-c", script, "bloodborne-relaunch", String(pid), bundle.path, opener]
+    }
+
     static func unpackedProblem(info: [String: Any], expected: ReleaseVersion) -> String? {
         guard info["CFBundleIdentifier"] as? String == bundleIdentifier else {
             return "The download is not Bloodborne.app (bundle identifier \(info["CFBundleIdentifier"] as? String ?? "missing"))."
