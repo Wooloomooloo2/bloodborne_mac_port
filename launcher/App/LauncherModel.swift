@@ -16,6 +16,8 @@ final class LauncherModel: ObservableObject {
     private var updaterChanges: AnyCancellable?
     private var benchmarkChanges: AnyCancellable?
     private var gameProcess: Process?
+    private let frameGenerationDeviceSupported = FrameGenerationSupport.deviceSupported
+    @Published private(set) var displayRefreshRates = FrameGenerationSupport.displayRefreshRates
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -55,7 +57,10 @@ final class LauncherModel: ObservableObject {
         displays = Self.connectedDisplays()
         screenChanges = NotificationCenter.default
             .publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in self?.displays = Self.connectedDisplays() }
+            .sink { [weak self] _ in
+                self?.displays = Self.connectedDisplays()
+                self?.displayRefreshRates = FrameGenerationSupport.displayRefreshRates
+            }
     }
 
     private static func connectedDisplays() -> [GameDisplay] {
@@ -89,6 +94,13 @@ final class LauncherModel: ObservableObject {
     var upscalerChoices: [Upscaler] {
         Upscaler.launcherChoices.contains(settings.upscaler) ? Upscaler.launcherChoices
             : Upscaler.launcherChoices + [settings.upscaler]
+    }
+    var frameGenerationUnavailableReason: String? {
+        if env["BB_METAL_FRAMEGEN"] != nil {
+            return "BB_METAL_FRAMEGEN overrides this choice. Remove it to use the launcher setting."
+        }
+        return settings.frameGenerationUnavailableReason(deviceSupported: frameGenerationDeviceSupported,
+                                                          displayRefreshRates: displayRefreshRates)
     }
     var canPlay: Bool { !running && !checkingGame && config.gameDir != nil && gameProblem == nil }
     /// Straight into the game (no window): the toggle is off and a game folder is known.
@@ -412,6 +424,7 @@ final class LauncherModel: ObservableObject {
     private var settingsSummary: [String] {
         var items = ["output \(settings.output.iniValue)", "upscaler \(settings.upscaler.rawValue)"]
         if settings.upscaler.usesPreset { items.append("quality \(Resolution.presetNames[settings.preset])") }
+        items.append("frame generation \(settings.frameGeneration ? "on" : "off")")
         items += ["cap \(settings.frameCap.rawValue) FPS", "\(settings.frameCap.hasFixedSteps ? settings.gameTiming.rawValue : "variable") timing", settings.fullscreen ? "full screen" : "windowed"]
         return items
     }
