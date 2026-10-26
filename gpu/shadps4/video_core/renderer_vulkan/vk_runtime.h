@@ -63,7 +63,6 @@ public:
     }
 
     void TickFrame();
-    u64 native_motion_frame = 0;
     SceneTargets* scene_targets = nullptr;
 
     /// bbport: `where` names the caller in BB_PASS_STATS.

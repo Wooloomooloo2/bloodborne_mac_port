@@ -60,25 +60,18 @@ int main(int argc, char** argv) {
     assert(!staging.mapped_data.empty());
     const auto run=[&](const char* label,float depth,float translation,float rotation,
                        float object_depth,u32 mode,float expected,bool jitter=false,
-                       bool d32s8=false,float lift=0.f,float expected_y=0.f,int native=0) {
+                       bool d32s8=false,float lift=0.f,float expected_y=0.f) {
         auto* pixels=reinterpret_cast<float*>(staging.mapped_data.data());
         for (u32 p=0;p<N;++p) {
             pixels[p*4]=depth;
             pixels[N*4+p*4]=2.f; pixels[N*4+p*4+1]=0.f;
             pixels[N*4+p*4+2]=1.f; pixels[N*4+p*4+3]=object_depth;
             pixels[N*8+p]=depth;
-            if (native) {
-                pixels[N*4+p*4] = native==4 ? 1.f : native==5 ? .501f : .75f;
-                pixels[N*4+p*4+1] = .5f;
-                const float z=.05f/(1-depth);
-                pixels[N*4+p*4+2] = native==3 ? .8f : z/(z+10);
-                pixels[N*4+p*4+3] = native==2 ? 0.f : 1.f;
-            }
         }
         // `lift`: the previous view sits higher by this much (view +y), for the vertical case.
         const Vulkan::CameraMotion::Params params{{1,0,rotation,translation,0,1,0,lift,0,0,1,0},
             {1,1,1,-0.05f},{1,1,1,-0.05f},{W,H},
-            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{0,0},mode,{-.225f,-.4f},u32(native!=0)};
+            {jitter ? 0.37f : 0.f,jitter ? -0.29f : 0.f},{0,0},mode};
         void* const depth_texture=d32s8 ? scene_depth.Get() : images[0].Get();
         scheduler.Record([&,buffer=staging.Handle(),depth_texture](Metal::Encoder& e) {
             for (u32 i : {0u,2u}) {
@@ -90,7 +83,7 @@ int main(int argc, char** argv) {
                     Metal::BlitAspect::Depth);
             }
             Vulkan::CameraMotion::Record(e,kernel,depth_texture,images[1].Get(),images[2].Get(),
-                params,native ? images[2].Get() : nullptr);
+                params);
             e.CopyTextureToBuffer(images[1].Get(),0,0,{4,3,0},{1,1,1},{buffer,0},4,4);
         });
         scheduler.Finish();
@@ -119,11 +112,6 @@ int main(int argc, char** argv) {
     // Metal-native addition: the first case again with the renderer's D32S8 scene depth.
     run("distant geometry moves, D32S8 depth",distant,1000,0,0,0,4.5f*1000*(1-distant)/0.05f,
         false,true);
-    run("native signed object motion",.5f,0,0,0,0,-.50625f,false,false,0,0,1);
-    run("native uncovered pixel uses camera",.5f,0,0,0,0,0,false,false,0,0,2);
-    run("native depth mismatch uses camera",.5f,0,0,0,0,0,false,false,0,0,3);
-    run("native saturated motion uses camera",.5f,0,0,0,0,0,false,false,0,0,4);
-    run("native quantization preserves camera",.5f,0,0,0,0,0,false,false,0,0,5);
     // The debug overlay kernel (BB_DEBUG_MOTION=1) builds, with its four bindings.
     const Metal::HostKernel overlay=Metal::BuildHostKernel(device,CAMERA_MOTION_DEBUG_COMP,{},
         "camera_motion_debug");

@@ -7,10 +7,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#ifdef __APPLE__
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#endif
 
 #include "bbport_toggles.h"
 #include "common/assert.h"
@@ -30,8 +26,7 @@ namespace Vulkan {
 namespace {
 
 using PushConstants = CameraMotion::Params;
-static_assert(sizeof(PushConstants) == 128 && offsetof(PushConstants, mode) == 104 &&
-              offsetof(PushConstants, native_scale) == 112 && offsetof(PushConstants, native_enabled) == 120);
+static_assert(sizeof(PushConstants) == 112 && offsetof(PushConstants, mode) == 104);
 
 Metal::Size3 Groups(const PushConstants& push, const Metal::HostKernel& kernel) {
     const u32 width = u32(push.size[0]), height = u32(push.size[1]);
@@ -61,12 +56,11 @@ std::array<float, 12> Multiply(const std::array<float, 12>& a, const std::array<
 } // namespace
 
 void CameraMotion::Record(Metal::Encoder& encoder, const Metal::HostKernel& kernel, void* depth,
-                          void* motion, void* object, const Params& params, void* native) {
+                          void* motion, void* object, const Params& params) {
     encoder.SetComputePipeline(kernel.pipeline.Get(), Metal::Access::None); // textures only
     encoder.SetTexture(Metal::Stage::Compute, kernel.texture_slot[0], depth);
     encoder.SetTexture(Metal::Stage::Compute, kernel.texture_slot[1], motion);
     encoder.SetTexture(Metal::Stage::Compute, kernel.texture_slot[2], object);
-    encoder.SetTexture(Metal::Stage::Compute, kernel.texture_slot[3], native ? native : depth);
     encoder.SetBytes(Metal::Stage::Compute, Metal::kPushConstantBuffer, &params, sizeof(params));
     encoder.Dispatch(Groups(params, kernel), Threads(kernel));
 }
@@ -140,26 +134,11 @@ void CameraMotion::RecordMotion(void* depth_texture, void* motion_texture, u32 w
     bool object_valid = false;
     void* const object_texture = object_motion && object_motion->Enabled()
         ? object_motion->PrepareRead(width, height, object_valid) : depth_texture;
-    Params params = MakeParams(width, height, object_valid ? 1u : 0u);
-    void* native = nullptr;
-    std::shared_ptr<std::atomic<bool>> encoded;
-    if (native_candidate) {
-        texture_cache.UpdateImage(native_candidate);
-        auto& image = texture_cache.GetImage(native_candidate);
-        const auto& state = image.native_motion;
-        if (state.frame == native_sequence && state.produced &&
-            image.info.size.width * 2 == width && image.info.size.height * 2 == height) {
-            runtime.AccessImage(&image, false);
-            native = image.GetImage(); encoded = state.encoded;
-            params.native_scale = state.scale;
-        }
-    }
+    const Params params = MakeParams(width, height, object_valid ? 1u : 0u);
     scheduler.EndRendering();
     scheduler.Record([kernel = &motion_kernel, depth_texture, motion_texture, object_texture,
-                      params, native = Metal::Object::Retain(native), encoded](Metal::Encoder& e) mutable {
-        params.native_enabled = native && encoded && encoded->load(std::memory_order_acquire);
-        Record(e, *kernel, depth_texture, motion_texture, object_texture, params, native.Get());
-        if (native) e.KeepAlive(Metal::Object::Retain(native.Get()));
+                      params](Metal::Encoder& e) {
+        Record(e, *kernel, depth_texture, motion_texture, object_texture, params);
     });
 }
 
@@ -185,75 +164,11 @@ void CameraMotion::OnConstants(const float* data) {
     frame_has_camera = true;
 }
 
-namespace {
-bool NativeRead(u64 address, void* result, u64 size) {
-#ifdef __APPLE__
-    if (!address || address > UINT64_MAX-size) return false;
-    mach_vm_size_t copied = 0;
-    return mach_vm_read_overwrite(mach_task_self(), address, size,
-        reinterpret_cast<mach_vm_address_t>(result), &copied) == KERN_SUCCESS && copied == size;
-#else
-    (void)address; (void)result; (void)size; return false;
-#endif
-}
-u64 NativeAddress(const u32* descriptor) {
-    return u64(descriptor[0]) | (u64(descriptor[1]&0xfff)<<32);
-}
-std::array<float,16> NativeVp(const std::array<float,12>& view, const std::array<float,4>& proj) {
-    std::array<float,16> result{};
-    for (u32 k=0; k<4; ++k) {
-        result[k] = view[k]*proj[0]; result[4+k] = view[4+k]*proj[1];
-        result[8+k] = view[8+k]*proj[2] + (k==3 ? proj[3] : 0);
-        result[12+k] = view[8+k];
-    }
-    return result;
-}
-}
-std::shared_ptr<std::atomic<bool>> CameraMotion::NativeProducer(VideoCore::ImageId id,
-    const BbNativeMotion::State& prior, u64 vertex, u64 pixel,
-    std::span<const u32> vertex_ud, std::span<const u32> pixel_ud) {
-    if (!BbNativeMotion::Enabled() || !id || !current.valid || !previous.valid ||
-        !BbNativeMotion::Vertex(vertex) || !BbNativeMotion::Producer(pixel) ||
-        !prior.cleared || prior.frame != native_sequence || vertex_ud.size()<12 || pixel_ud.size()<8)
-        return {};
-    auto& image = texture_cache.GetImage(id);
-    if (image.info.pixel_format != vk::Format::eR8G8B8A8Unorm || image.info.num_samples != 1 ||
-        image.info.resources.levels != 1 || image.info.resources.layers != 1) return {};
-    const auto* camera = vertex_ud.data()+8;
-    if (u64(camera[2])*std::max(1u,(camera[1]>>16)&0x3fff) != 192) return {};
-    std::array<float,32> matrices{};
-    if (!NativeRead(NativeAddress(camera),matrices.data(),sizeof(matrices))) return {};
-    const auto a=NativeVp(current.view,current.proj), b=NativeVp(previous.view,previous.proj);
-    for (u32 k=0; k<32; ++k) {
-        const float expected=k<16 ? a[k] : b[k-16];
-        if (!std::isfinite(matrices[k]) || std::abs(matrices[k]-expected)>
-            2e-4f*std::max(1.f,std::abs(expected))) return {};
-    }
-    std::array<u32,4> descriptor{};
-    if (pixel==0x570e1a1bf6b555a0ull) std::copy_n(pixel_ud.data()+4,4,descriptor.begin());
-    else {
-        const u64 address=NativeAddress(pixel_ud.data()+2);
-        if (address>UINT64_MAX-16 || !NativeRead(address+16,descriptor.data(),16)) return {};
-    }
-    if (u64(descriptor[2])*std::max(1u,(descriptor[1]>>16)&0x3fff) != 176) return {};
-    std::array<float,2> producer{}, scale{};
-    if (!NativeRead(NativeAddress(descriptor.data()),producer.data(),sizeof(producer)) ||
-        !BbNativeMotion::DecodeScale(producer,scale) || (prior.produced && prior.scale != scale)) return {};
-    auto encoded = std::make_shared<std::atomic<bool>>(false);
-    image.native_motion = prior;
-    image.native_motion.produced = true; image.native_motion.scale = scale;
-    image.native_motion.encoded = encoded;
-    native_candidate = id;
-    return encoded;
-}
-
 void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
     depth_id = depth;
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
-    native_candidate = {};
-    runtime.native_motion_frame = ++native_sequence;
     if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }

@@ -69,7 +69,7 @@ Rasterizer::Rasterizer(Metal::Device& device_, Scheduler& scheduler_, Runtime& r
     // has the temporal scaler, FSR 3.1 on Apple7 and later (the FidelityFX Metal back end) -- and
     // the fallback is never saved.
     BbSettings::ConfigureUpscalerSupport(BbMetalFx::Supported(device), FfxMetal::Supported(device),
-                                          BbMetalFx::SpatialSupported(device));
+                                         BbMetalFx::SpatialSupported(device));
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(device, scheduler);
     camera_motion = std::make_unique<CameraMotion>(device, scheduler, texture_cache, runtime);
@@ -1084,20 +1084,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (!bound) {
         return;
     }
-    const bool track_native = BbNativeMotion::Enabled();
-    auto native_prior = track_native && cb_descs[0].first ?
-        texture_cache.GetImage(cb_descs[0].first).native_motion : BbNativeMotion::State{};
     const auto state = BeginRendering(pipeline);
-    // Every attachment writer invalidates provenance, including memoized passes.
-    if (track_native) for (u32 cb=0; cb<cb_descs.size(); ++cb) {
-        if (cb_descs[cb].first && (pipeline->GetGraphicsKey().mrt_mask & (1u<<cb)))
-            texture_cache.GetImage(cb_descs[cb].first).native_motion = {};
-    }
-    if (track_native && state.colors[0].clear && BbNativeMotion::CanonicalClear(state.colors[0].clear_value.color.float32)) {
-        native_prior = {};
-        native_prior.frame = runtime.native_motion_frame;
-        native_prior.cleared = true;
-    }
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);
@@ -1226,18 +1213,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const Metal::Draw::Resources resources = RecordResources(is_indexed);
     // bbport: the pipeline may still be compiling on the creation pool; the recording thread
     // waits for it as late as possible (failed: the draw helper skips and counts it).
-    std::shared_ptr<std::atomic<bool>> native_encoded;
-    const auto* native_ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
-    if (track_native && native_ps && std::popcount(pipeline->GetGraphicsKey().mrt_mask)==1 &&
-        regs.color_target_mask.GetMask(0)==15 && !regs.blend_control[0].enable && !IsTessellated(*pipeline)) {
-        native_encoded = camera_motion->NativeProducer(cb_descs[0].first, native_prior,
-            vs_info.native_fingerprint, native_ps->native_fingerprint, vs_info.UserData(), native_ps->UserData());
-    }
     scheduler.RecordDraw(
         [=, runs = &scheduler.GetDrawRuns()](Metal::Encoder& e) {
-            const bool drew = runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
-            if (native_encoded) native_encoded->store(drew && (!native_prior.encoded ||
-                native_prior.encoded->load(std::memory_order_acquire)), std::memory_order_release);
+            runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
         },
         IsTessellated(*pipeline));
     if (FrameCapture::Active()) {
@@ -1321,10 +1299,6 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         return;
     }
     const auto state = BeginRendering(pipeline);
-    if (BbNativeMotion::Enabled()) for (u32 cb=0; cb<cb_descs.size(); ++cb)
-        if (cb_descs[cb].first && (pipeline->GetGraphicsKey().mrt_mask & (1u<<cb)))
-            texture_cache.GetImage(cb_descs[cb].first).native_motion = {};
-
 
     ResolveVertexBuffers(pipeline);
     if (is_indexed) {
