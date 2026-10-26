@@ -21,6 +21,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **`tests/test_run_settings.py` fails on master, and no build script runs it (2026-10-26, found
+  by evill33t on #90).** `test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it`: the third restart
+  (back to 1080p) expects `BB_RENDER_RES` 640x360 and gets none. Run it with
+  `cd tests && python3 -m unittest test_run_settings` (it imports `paths` from `tests/`). Decide
+  whether run.sh or the expectation is wrong, then add the suite to `build_macos.sh --test` so
+  restart-settings regressions show up.
 - **Opening-movie freeze and crash on new games (#46, #50, #51, #24, #84): fixed 2026-10-26 on
   branch `cutscene-race`, for the 0.5.x hotfix.** Two causes (FINDINGS 2026-10-26): the AvPlayer
   stop request missed a decoder whose `jthread` the demuxer had taken to join (freeze in
