@@ -17,7 +17,7 @@ process.
 
 ## Status (2026-10-26)
 
-**Current version: [mac-v0.5.8](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.8)** (download the app, or build it as below).
+**Current version: [mac-v0.5.9](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.9)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -30,8 +30,25 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
 
 **Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
 @evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
-The opening-movie freeze and crash are fixed in 0.5.8; slowdowns on some 16 GB Macs (#69) are
-still being looked into. Online play (#9) is still in progress.
+The opening-movie freeze and crash are fixed in 0.5.8, and the slowdowns on 16-18 GB Macs (#69)
+in 0.5.9. Online play (#9) is still in progress.
+
+### New in 0.5.9: 16-18 GB Macs run at full speed
+
+- **16-18 GB Macs no longer slow down to 10-20 FPS** (#69, #83). The cause was memory, not the
+  GPU: the port kept 6.5 GB of GPU memory pinned (it can never be swapped out), and on a 16 or 18
+  GB Mac that left too little for the game and macOS, so the Mac swapped and the frame rate
+  collapsed. On Macs with 24 GB or less, the game's memory is now mapped to the GPU only where the
+  game actually uses it (3.5 GB pinned instead of 6.5 GB). This is
+  [@MojahedAbushawish](https://github.com/MojahedAbushawish)'s work in #85 and #86.
+  - On a Mac limited to behave like an 18 GB Mac: 15-17 FPS before, 58-60 after (1080p, 60 cap).
+  - Players: an M4 MacBook Air 16 GB went from 11-16 FPS to 57-60 (#83), and the M3 Pro 18 GB
+    from #69 plays smoothly.
+  - Macs with more memory keep the previous layout, unchanged. `BB_ARENA_LAYOUT=legacy` in
+    `launch.conf` brings it back on a smaller Mac, if ever needed.
+- If you added `BB_ARENA_GIB` or `BB_GC_BUDGET_MB` to `launch.conf` while testing, remove them.
+- Thank you to @lifeos-creator, @danielsirbubusiness and @khhan0703 for testing the test build on
+  their Macs.
 
 ### New in 0.5.8: the opening-movie freeze and crash fixed
 
@@ -757,6 +774,7 @@ Thank you to everyone who sent pull requests:
   - Invariant vertex positions, copies held to the end of a render pass, and the loading-screen fix
     (from #20).
   - Mouse look (#20).
+  - Guest memory mapped in runs for 16-18 GB Macs (#85, #86).
   - Benchmarks on an M3 Pro.
 - **[DiAvisoo](https://github.com/DiAvisoo)**
   - Native ultrawide (#30).
@@ -774,12 +792,12 @@ Thank you to everyone who sent pull requests:
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
 @satperm, @IlyaDylko (keyboard sprint #61, long-session FPS #55), @wgorecodes (stuck game #71,
-preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69), @Sah-D (#47),
-@ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84), @Didjus (#18),
+preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9), @Sah-D (#47),
+@ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84, tested 0.5.9), @Didjus (#18),
 @PensionPlanning (#19), @muharremsedona6034gm-hub (#22), @Walltor (#25), @AmberUpraity,
 @VanDung-dev, @douglasrlee, @jefer9011 and @mariuszparowa666 (GPU stalls, fixed in 0.5.4.2),
 @zhouhaoyaomei-ship-it, @SimonKabb and @juliotwo (the memmove crash, fixed in 0.5.5), @ELLDev
-(#74), @danielsirbubusiness (#83), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
+(#74), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
 
 Each third-party component keeps its own license file in its directory.
 
