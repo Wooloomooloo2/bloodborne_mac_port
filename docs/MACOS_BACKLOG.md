@@ -556,6 +556,22 @@ Each item: what was done for now, what the refinement is, and where it lives.
   macOS 27"). Needs a slow Mac to test: the kernel log for `required > max`, raising
   `iogpu.wired_limit_mb`, then BB_GC_BUDGET_MB / BB_ARENA_GIB / BB_ARENA_LAZY / BB_FRAMES_AHEAD with
   the benchmark. Likely fix if wiring: size the arena and its residency by RAM, or a growing arena.
+  *2026-10-26:* cause found (pinned GPU memory, FINDINGS #69); fix = #85 + #86 runs layout on Macs
+  with 24 GB or less, branch `memory-16gb`, test build mac-v0.5.9-test1. First tester result: an
+  M4 Air 16 GB went from 11-16 to 57-60 FPS (#83); #69 and #84 confirmed. Released in 0.5.9.
+
+- **The overlook above the carriage in Central Yharnam doesn't hold the cap on an M4 Max
+  (2026-10-26).** Owner's save, full screen, 2560x1440 output (drawable 3840x2160), upscaler off:
+  0.5.6 at a 120 cap 70.9 FPS / GPU 9.4 ms (Game Mode on), 0.5.9-test1 62.6 / 10.1 ms (Game Mode
+  off, local app, camera not identical). At a 60 cap it drops frames and stutters. GPU time is
+  well under 16.7 ms, so look at the CPU side (draw recording, faults, pacing) with
+  `BB_FRAME_STATS=1` / `BB_SAMPLE_MS=1` there. Owner doesn't remember this spot being so
+  demanding: compare older releases (0.5.0-0.5.5) at the same spot and settings, Game Mode on in
+  both, before calling it a regression.
+- **Benchmark scenes at the most demanding spots.** The traversal route and the throughput stand
+  don't include the heaviest areas (e.g. the overlook above). Add scripted scenes there
+  (owner will record routes / lantern 360 spins), some uncapped, so regressions in demanding
+  areas show up in the report.
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
   pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
@@ -826,6 +842,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Local apps from `make_app.sh` never get Game Mode (2026-10-26).** Its `bbgpu-host*` are
+  symlinks into `out/`, so macOS sees anonymous processes outside the bundle and gamepolicyd only
+  recognises the launcher (packaged apps: all three processes, "Plist category type"). Copy or
+  hard-link the executables into the bundle so local tests match what players get.
 - **Launcher: the Controls section pushes Locations off the bottom of the window** (0.5.7, the
   window is sized for a 13" Air). Move the bindings list to Advanced or make Controls one row.
 
