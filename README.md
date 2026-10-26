@@ -15,9 +15,9 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-25)
+## Status (2026-10-26)
 
-**Current version: [mac-v0.5.7](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.7)** (download the app, or build it as below).
+**Current version: [mac-v0.5.8](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.8)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -30,8 +30,28 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
 
 **Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
 @evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
-Fixes for 16 GB Macs (slowdowns over long sessions, the opening-movie freeze) will come as a 0.5.x
-hotfix once the reports' logs and benchmark results are in. Online play (#9) is still in progress.
+The opening-movie freeze and crash are fixed in 0.5.8; slowdowns on some 16 GB Macs (#69) are
+still being looked into. Online play (#9) is still in progress.
+
+### New in 0.5.8: the opening-movie freeze and crash fixed
+
+- **New games no longer freeze or crash in the opening movie** (#46, #50, #51, #24, #84). Both
+  showed up on slower or busier Macs, which is why they were hard to reproduce on a fast one.
+  - **The freeze** ("no new frame for 30 seconds"): when a movie ended and the game closed the movie
+    player at the same moment, the stop request could miss a decoder thread that was waiting for a
+    free frame buffer, and the game waited for it forever.
+  - **The crash** (signal 11 at guest offset 0x26c01c3): during the movie, the game's main thread
+    drew into the render thread's GPU context from a path the port didn't lock. It now runs under
+    the same lock as the others.
+  - On a Mac slowed down on purpose, 5 of 5 new games froze or crashed before the fix; 4 of 4
+    reached character creation after it. Normal play and the benchmark are unchanged (60 FPS).
+- **A hang report:** if the game ever stops responding, the log now lists where every game thread
+  is waiting, so freeze reports can be read from `game.log` alone.
+- **Co-op stability** (from [@noelmiller](https://github.com/noelmiller), #11): two renderer stops
+  seen in co-op (a render-pass submit and a recording-chunk race) are now survivable.
+- **Safety fixes in the PS4 runtime** (from [@evill33t](https://github.com/evill33t), #80, #81,
+  #82): semaphore handles kept at full width, system-module IDs checked in full before lookup, and
+  guest thread-local storage checked before the runtime is entered.
 
 ### New in 0.5.7: mouse look, a Stop button, keyboard fixes
 
@@ -730,6 +750,7 @@ Thank you to everyone who sent pull requests:
   - Buffer arena sizing for Macs with less memory (#13).
   - The HUD item icon above 1080p (#17).
   - Online play (#9, in progress).
+  - Survivable co-op renderer stops (#11).
 - **[Mojahed Abushawish](https://github.com/MojahedAbushawish)**
   - Lossless texture compression (#33).
   - The upscaler haze fix (#48).
@@ -747,12 +768,14 @@ Thank you to everyone who sent pull requests:
   - The About panel and update check (#23).
   - Dated session logs and crash reports (#40).
 - **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
+- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82) and MetalFX
+  frame generation (#64, in progress).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
 @satperm, @IlyaDylko (keyboard sprint #61, long-session FPS #55), @wgorecodes (stuck game #71,
 preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69), @Sah-D (#47),
-@ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @Didjus (#18),
+@ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84), @Didjus (#18),
 @PensionPlanning (#19), @muharremsedona6034gm-hub (#22), @Walltor (#25), @AmberUpraity,
 @VanDung-dev, @douglasrlee, @jefer9011 and @mariuszparowa666 (GPU stalls, fixed in 0.5.4.2),
 @zhouhaoyaomei-ship-it, @SimonKabb and @juliotwo (the memmove crash, fixed in 0.5.5), @ELLDev
