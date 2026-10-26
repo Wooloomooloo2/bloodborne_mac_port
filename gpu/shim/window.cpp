@@ -9,6 +9,8 @@
 #include "sdl_window.h"
 #include "bbport_mouse.h"
 #include "bbport_overlay.h"
+#include "bbport_settings.h"
+#include "video_core/renderer_metal/mtl_hdr.h"
 
 namespace Frontend {
 
@@ -128,6 +130,20 @@ void WindowSDL::UpdateVisible() {
 }
 
 bool WindowSDL::PollEvents() {
+    // Cocoa display queries belong to this main/window thread. Polling also catches brightness
+    // and battery changes that do not move the window. Rendering only reads atomic snapshots.
+    if (const u64 now = SDL_GetTicks(); now >= next_hdr_poll) {
+        next_hdr_poll = now + 250;
+        const auto range = Metal::QueryDisplayRange(SDL_GetPointerProperty(
+            SDL_GetWindowProperties(window), SDL_PROP_WINDOW_COCOA_WINDOW_POINTER, nullptr));
+        auto& settings = BbSettings::Get();
+        if (settings.startup_hdr && (range.current > settings.hdr_headroom + 0.1f ||
+                                    range.current < settings.hdr_headroom - 0.1f)) {
+            std::printf("HDR: display headroom %.2f (potential %.2f)\n", range.current, range.potential);
+        }
+        settings.hdr_headroom = range.current;
+        settings.hdr_potential = range.potential;
+    }
     {
         std::scoped_lock lock{text_mutex};
         if (text_requested) { // SDL text input must be toggled from the window thread

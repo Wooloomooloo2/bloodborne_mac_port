@@ -76,6 +76,11 @@ struct Values {
     /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};
+    /// EDR presentation is selected at launch; highlight strength is live.
+    std::atomic<bool> hdr{false};
+    std::atomic<float> hdr_highlights{0.5f};
+    std::atomic<float> hdr_headroom{1.0f}, hdr_potential{1.0f};
+    bool startup_hdr = false;
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
     /// Off by default: on, the first left click in the window captures the cursor, for gamepad
     /// players too. Players turn it on in the menu (Display > Mouse camera).

@@ -155,6 +155,11 @@ struct LauncherView: View {
                     }
                     .disabled(model.settings.ultrawide || !model.settings.upscaler.usesPreset)
                     LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.displayOutput)")
+                    Toggle("HDR presentation (experimental)", isOn: $model.settings.hdr)
+                        .help("Uses the display's available HDR range. Applies next launch; SDR displays retain normal brightness.")
+                    if model.settings.hdr {
+                        Slider(value: $model.settings.hdrHighlights, in: 0...1) { Text("HDR highlights") }
+                    }
                     if model.settings.upscaler != .off {
                         Toggle("Sharpening", isOn: $model.settings.sharpen)
                         if model.settings.sharpen {

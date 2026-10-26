@@ -694,6 +694,10 @@ saves and settings as the Finder launcher.
 
 ### In the game
 
+**Experimental HDR presentation:** enable it in the launcher's Display section or the in-game
+Display page, then restart. Highlight strength is live; SDR displays keep normal brightness.
+See [HDR presentation](docs/HDR.md) for behaviour, source credits and validation limits.
+
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.
