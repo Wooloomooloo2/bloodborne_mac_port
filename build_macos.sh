@@ -190,8 +190,6 @@ if [[ ${1:-} == --test ]]; then
         [[ ${PIPESTATUS[0]} == 0 ]] || { echo 'FAIL: overlay-test (validation)'; exit 1; }
         # Saved upscaler choices (unavailable providers run as a fallback, the ini keeps the
         # user's value).
-        ninja -C out/gpu-arm64 native-motion-test >/dev/null
-        out/gpu-arm64/native-motion-test
         ninja -C out/gpu-arm64 upscaler-support-test >/dev/null
         out/gpu-arm64/upscaler-support-test 2>&1 | grep -E 'PASS|FAIL' || { echo 'FAIL: upscaler-support-test'; exit 1; }
         # Metal-native M5: the motion shader variants compile to MSL; object motion on Metal

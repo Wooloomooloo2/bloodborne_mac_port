@@ -14,7 +14,6 @@
 #include "video_core/texture_cache/image_view.h"
 
 #include <deque>
-#include "bbport_native_motion.h"
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 
@@ -44,7 +43,6 @@ DECLARE_ENUM_FLAG_OPERATORS(ImageFlagBits)
 bool LazyTextureUsage();
 
 struct Image {
-    BbNativeMotion::State native_motion;
     explicit Image(Metal::Device& device, Vulkan::Runtime& runtime,
                    Common::SlotVector<ImageView>& slot_image_views, const ImageInfo& info);
     ~Image();

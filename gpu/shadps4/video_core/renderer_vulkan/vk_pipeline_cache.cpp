@@ -13,7 +13,6 @@
 #include <unordered_set>
 
 #include "bbport_settings.h"
-#include "bbport_shader_fingerprint.h"
 #include "bbport_threads.h"
 #include "bbport_toggles.h"
 
@@ -887,7 +886,6 @@ PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage 
     auto it_pgm = program_cache.find(params.hash); // this thread is the only writer
     if (it_pgm == program_cache.end()) {
         auto new_program = std::make_unique<Program>(hw_stage, sw_stage, params);
-        new_program->info.native_fingerprint = BbShader::Fingerprint(params.code);
         auto start = binding;
         const size_t perm_idx = FreePermIndex(params.hash, 0);
         auto module =

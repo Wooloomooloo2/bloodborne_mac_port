@@ -82,7 +82,6 @@ struct InfoPersistent {
 };
 
 struct Info : InfoPersistent {
-    u64 native_fingerprint = 0;
     struct AttributeFlags {
         bool Get(IR::Attribute attrib, u32 comp = 0) const {
             return flags[Index(attrib)] & (1 << comp);

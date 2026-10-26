@@ -415,10 +415,6 @@ target_compile_options(index-offset-test PRIVATE -UNDEBUG)
 target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
 target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)
 
-add_executable(native-motion-test EXCLUDE_FROM_ALL ../tests/test_native_motion.cpp)
-target_include_directories(native-motion-test PRIVATE shim)
-target_compile_options(native-motion-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
-
 if (APPLE)
     add_executable(metalfx-test EXCLUDE_FROM_ALL ../tests/test_metalfx.mm shim/bbport_metalfx.mm
         shim/common/logging/log.cpp shim/common/assert.cpp)
