@@ -255,15 +255,25 @@ struct GameSettings: Equatable {
 
     /// Launcher preflight. The renderer checks the game window's own display again at runtime.
     /// Unavailable choices stay saved so changing the cap/display/upscaler does not erase them.
-    func frameGenerationUnavailableReason(deviceSupported: Bool, displayRefreshRates: [Double]) -> String? {
+    func frameGenerationUnavailableReason(deviceSupported: Bool, display: FrameGenerationDisplay?) -> String? {
         guard deviceSupported else { return "Requires macOS 26 or later and a Mac supporting MetalFX frame generation." }
         guard !ultrawide else { return "Unavailable with native ultrawide or 16:10 output: upscaling is off." }
         guard upscaler != .off else { return "Select MetalFX, FSR 3.1 or TAA to use frame generation." }
-        let rates = displayRefreshRates.filter { $0.isFinite && $0 > 0 }
-        guard !rates.isEmpty else { return "The display refresh rate could not be determined." }
+        guard let display, display.refreshRate.isFinite, display.refreshRate > 0 else {
+            return "The display refresh rate could not be determined."
+        }
         let required = frameCap.rawValue * 2
-        guard rates.contains(where: { $0 >= Double(required) }) else {
-            return "Needs a \(required) Hz display at the \(frameCap.label) FPS cap. Lower the cap or change the display mode."
+        let rate = display.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
+        let minimum = display.minimumRefreshRate.formatted(.number.precision(.fractionLength(0...2)))
+        guard display.supports(realCap: frameCap.rawValue, fullscreen: fullscreen) else {
+            if !fullscreen, display.requiresFullscreen,
+               display.supports(realCap: frameCap.rawValue, fullscreen: true) {
+                return "Use full screen for Adaptive-Sync, or set the display to \(required) Hz (or a whole multiple)."
+            }
+            if display.minimumRefreshRate > 0, !display.requiresFullscreen || fullscreen {
+                return "The paired \(required) FPS is outside the display's variable refresh range (\(minimum)–\(rate) Hz). Change the cap or display mode."
+            }
+            return "Set the display to \(required) Hz (or a whole multiple) for the \(frameCap.label) FPS cap, or lower the cap. Fixed \(rate) Hz cannot pace the pair evenly."
         }
         return nil
     }

@@ -17,16 +17,27 @@ enum FrameGenerationSupport {
         return false
     }
 
-    static var displayRefreshRates: [Double] {
-        NSScreen.screens.map { screen in
-            if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
-               let mode = CGDisplayCopyDisplayMode(number.uint32Value),
-               mode.refreshRate.isFinite, mode.refreshRate > 0 {
-                // SDL's current display mode reports an integer refresh rate too.
-                return mode.refreshRate.rounded()
+    static func launchDisplay(preferred: String? = nil) -> FrameGenerationDisplay? {
+        // Match the preferred-display picker and BB_DISPLAY override. A disconnected saved
+        // display falls back to the primary one, as the SDL window does.
+        let selected = preferred.flatMap { preferred in
+            NSScreen.screens.first { screen in
+                guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber,
+                      let uuid = CGDisplayCreateUUIDFromDisplayID(number.uint32Value)?.takeRetainedValue(),
+                      let text = CFUUIDCreateString(nil, uuid) as String? else { return false }
+                return text.caseInsensitiveCompare(preferred) == .orderedSame
             }
-            // Variable-refresh displays can report zero through CoreGraphics.
-            return Double(screen.maximumFramesPerSecond)
         }
+        guard let screen = selected ?? NSScreen.screens.first,
+              let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+        let shortest = screen.minimumRefreshInterval
+        let longest = screen.maximumRefreshInterval
+        let validInterval = shortest.isFinite && shortest > 0
+        let variable = validInterval && longest.isFinite && longest > shortest
+        let modeRate = CGDisplayCopyDisplayMode(number.uint32Value)?.refreshRate ?? 0
+        let rate = variable ? 1 / shortest
+            : (modeRate.isFinite && modeRate > 0 ? modeRate : (validInterval ? 1 / shortest : 0))
+        return FrameGenerationDisplay(refreshRate: rate, minimumRefreshRate: variable ? 1 / longest : 0,
+                                      requiresFullscreen: CGDisplayIsBuiltin(number.uint32Value) == 0)
     }
 }

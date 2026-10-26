@@ -336,7 +336,7 @@ if (APPLE)
     target_compile_features(framegen-test PRIVATE cxx_std_20)
     target_compile_options(framegen-test PRIVATE -Wall -Wextra -Werror -UNDEBUG)
     target_link_libraries(framegen-test PRIVATE bbmetal_core fmt::fmt
-        "-framework Metal" "-framework MetalFX" "-framework Foundation")
+        "-framework Metal" "-framework MetalFX" "-framework Foundation" "-framework AppKit")
     set_source_files_properties(../tests/test_framegen.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 
     # Metal::BuildHostKernel (SPIR-V -> MSL through the renderer's ShaderCompiler, in libbbgpu):

@@ -162,7 +162,7 @@ struct LauncherView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Toggle("Frame generation (experimental)", isOn: $model.settings.frameGeneration)
                             .disabled(model.frameGenerationUnavailableReason != nil)
-                            .help("MetalFX 2×: adds one generated image between real frames. Applies when you start the game. Use a display with at least \(model.settings.frameCap.rawValue * 2) Hz.")
+                            .help("MetalFX 2×: adds one generated image between real frames. Applies when you start the game. Use \(model.settings.frameCap.rawValue * 2) Hz (or a whole multiple), or active variable refresh.")
                         if let reason = model.frameGenerationUnavailableReason {
                             Text(reason).font(.caption).foregroundStyle(.secondary)
                         }

@@ -52,20 +52,52 @@ void Policy() {
     settings.startup_framegen = false;
     for (const auto [hz, cap, supported] : {
              std::tuple{60.0, 30u, true}, {60.0, 60u, false}, {120.0, 60u, true},
-             {120.0, 120u, false}, {144.0, 60u, true}, {240.0, 120u, true},
-             {59.94, 30u, false}, {0.0, 30u, false}, {120.0, 0u, false},
+             {120.0, 120u, false}, {144.0, 60u, false}, {160.0, 60u, false},
+             {240.0, 60u, true}, {360.0, 60u, true}, {240.0, 120u, true},
+             {80.0, 40u, true}, {120.0, 40u, false}, {180.0, 90u, true},
+             {59.94, 30u, true}, {119.88, 60u, true}, {239.76, 60u, true},
+             {119.0, 60u, false}, {121.0, 60u, false}, {0.0, 30u, false}, {120.0, 0u, false},
              {-1.0, 30u, false}, {std::numeric_limits<double>::quiet_NaN(), 30u, false}}) {
         Expect(BbFrameGen::DisplaySupported(hz, cap) == supported,
-               "paired drawables require known refresh at least twice a finite real cap");
+               "fixed refresh must be a whole multiple of twice the cap within 0.2 percent");
+        if (supported) {
+            const double hold = BbFrameGen::PresentDuration(1.f / cap, cap);
+            const double refreshes = std::ceil(hold * hz);
+            const double paced_real_rate = hz / (2.0 * refreshes);
+            Expect(std::abs(paced_real_rate / cap - 1) <= .002,
+                   "accepted fixed modes do not add refreshes that reduce the real rate beyond tolerance");
+        }
+    }
+    for (const auto [maximum, minimum, cap, supported] : {
+             std::tuple{144.0, 48.0, 60u, true}, {160.0, 48.0, 60u, true},
+             {119.88, 23.976, 60u, true},
+             {160.0, 48.0, 40u, true}, {160.0, 100.0, 40u, false},
+             {160.0, 48.0, 90u, false}, {160.0, 0.0, 60u, false},
+             {160.0, 160.0, 60u, false}, {160.0, 200.0, 60u, false},
+             {160.0, std::numeric_limits<double>::quiet_NaN(), 60u, false}}) {
+        Expect(BbFrameGen::DisplaySupported(maximum, cap, minimum) == supported,
+               "active variable refresh allows only paired rates inside its range");
     }
     settings.startup_framegen = settings.framegen_supported = true;
+    settings.upscaler = BbSettings::UpscalerMetalFx;
     settings.framegen_real_cap = 60;
-    settings.display_refresh_hz = 120;
+    settings.display_timing = {120, 0};
     Expect(BbFrameGen::Active(), "supported launch activates generation at 120 Hz / 60 FPS");
-    settings.display_refresh_hz = 60;
+    settings.display_timing = {60, 0};
     Expect(!BbFrameGen::Active(), "moving the window to 60 Hz suspends generation");
-    settings.display_refresh_hz = 120;
+    settings.display_timing = {144, 0};
+    Expect(!BbFrameGen::Active(), "moving to fixed 144 Hz suspends capture and paired presentation");
+    settings.display_timing = {160, 0};
+    Expect(!BbFrameGen::Active(), "fixed 160 Hz cannot activate paired presentation");
+    settings.display_timing = {160, 48};
+    Expect(BbFrameGen::Active(), "active 48-160 Hz variable refresh resumes generation");
+    settings.display_timing = {160, 0};
+    Expect(!BbFrameGen::Active(), "leaving Adaptive-Sync suspends generation on an incompatible fixed mode");
+    settings.display_timing = {120, 0};
     Expect(BbFrameGen::Active(), "moving back to a suitable display resumes generation");
+    settings.upscaler = BbSettings::UpscalerOff;
+    Expect(!BbFrameGen::Active(), "native output without a temporal upscaler cannot activate generation");
+    settings.upscaler = BbSettings::UpscalerMetalFx;
     settings.startup_framegen = false;
     const auto previous = Description();
     auto next = previous;

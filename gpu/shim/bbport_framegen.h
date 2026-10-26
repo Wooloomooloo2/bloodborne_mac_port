@@ -17,9 +17,11 @@ namespace BbFrameGen {
 
 bool Requested();                      // launch setting; menu changes need a restart
 bool Supported(Metal::Device& device); // macOS 26+, queried on the actual device
-// Two vsync-presented drawables must fit inside each real-frame period.
-bool DisplaySupported(double refresh_hz, uint32_t real_cap);
+// Fixed refresh must be a whole multiple of twice the cap (0.2% tolerance).
+// A positive minimum denotes active variable refresh; the paired rate must fit its range.
+bool DisplaySupported(double refresh_hz, uint32_t real_cap, double min_refresh_hz = 0);
 bool DisplaySupported(); // current window display and configured real cap
+void UpdateDisplayTiming(void* cocoa_window, bool fullscreen); // window/main thread only
 bool Active(); // running launch choice, device/path support, and display support
 inline constexpr std::size_t MaxSnapshotSets = 3;
 
