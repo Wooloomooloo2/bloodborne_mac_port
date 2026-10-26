@@ -15,9 +15,13 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-26)
+**Video guide:** Andrew Tsai has made a video guide to this port:
+[watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
+taking the time to make it!
 
-**Current version: [mac-v0.5.9](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.9)** (download the app, or build it as below).
+## Status (2026-11-10)
+
+**Current version: [mac-v0.5.15](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.15)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -28,10 +32,109 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
-@evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
-The opening-movie freeze and crash are fixed in 0.5.8, and the slowdowns on 16-18 GB Macs (#69)
-in 0.5.9. Online play (#9) is still in progress.
+**Releases:** 0.5.x is the stable line, with fixes and features from master. **0.7** will be
+**online play**: the game's own bells, summons and invasions through a community server. It's
+being tested in contributors' forks and will come back as one tested pull request, reviewed and
+collected on the `release-0.7` branch.
+The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
+in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
+sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
+menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, and 0.5.15 makes controller buttons remappable.
+
+### New in 0.5.15: remappable controller buttons
+
+- **Controller buttons can be remapped** in the launcher: **Controls > Controller > Controller
+  Buttons…**. Click a slot and press the button you want; each action takes up to four buttons,
+  including Select/Share/View, the back paddles (Xbox Elite, DualSense Edge) and the Misc button.
+  **Reset to Defaults** puts everything back. Triggers keep their analog pull when bound to L2/R2.
+  The settings are stored as `bind_pad_` lines in `bbport.ini`; the L3 + R3 menu shortcut always
+  uses the sticks.
+- **Builds on macOS 15 with Xcode 16** (#141, from [@byebyevlad](https://github.com/byebyevlad)).
+
+### New in 0.5.14: long sessions no longer freeze
+
+- **Fixed: the freeze after about 1.5 to 2 hours of play** (#127, #139). The game's occlusion
+  queries never finished on the port: the result was written and then wiped by the game's own
+  clear of the same memory, which ran later. The list of waiting queries grew every frame until a
+  small per-frame memory area filled, and the game froze or crashed (the #99/#113 crashes were the
+  same thing). The results now arrive in order; a 2.5-hour test session stayed at 60 FPS with
+  that memory area at 3% full. No need to restart every 90 minutes any more.
+- **M5 Macs on macOS 27.2: a fix for the GPU process crash about 40 seconds after start** (#129,
+  confirmed by the reporter). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
+  `=render` forces render-only elsewhere). Other Macs are unchanged.
+
+### New in 0.5.13: Mac Settings in the game's menu
+
+- **Mac Settings in the game's own System menu** (#76, from [@evill33t](https://github.com/evill33t)):
+  the renderer, quality, effects and launch settings in the game's native menu, in nine groups
+  (Left/Right on **Page**, or L1/R1). It shares `bbport.ini` with the launcher and the ⌘,
+  overlay; `*` marks changes that need a restart. The title menu also gets an **Exit Game**
+  entry. Its menu assets are generated from your own game files; `BB_MAC_SETTINGS=0` and
+  `BB_EXIT_GAME=0` turn them off.
+- **Avoid white scenes (MetalFX)** (#116, #117, from @evill33t): an opt-in switch for the
+  Forbidden Woods scene that turns white with MetalFX above 1080p. Off by default because it
+  costs some GPU time; starting with the upscaler off and turning MetalFX on in game also avoids it.
+- **A conflicting patch file no longer stops the game from starting** (#79, from @evill33t):
+  a third-party patch that overlaps a built-in one is skipped with a log line, and patches can
+  no longer overwrite the port's own runtime hooks.
+- **A game stuck before its first frame now ends with a report** (#121): after 3 minutes on a
+  black screen it stops and writes the thread list, so the launcher can show why.
+- Long sessions could freeze after 1.5 to 2 hours (#127) and M5 Macs on macOS 27.2 could crash at
+  start (#129): both addressed in 0.5.14.
+
+### New in 0.5.12
+
+- **Fixed: the crash after long sessions, again** (#113; "signal 11 at guest offset 0x216a08c",
+  after about 90 minutes). 0.5.11 skipped the game's render bind for a resource that was gone,
+  but the game then also released it and asked for its value. Both are now skipped as well
+  (#114, from [@evill33t](https://github.com/evill33t)).
+- **Fewer false "the GPU stopped making progress" exits** (#106): the GPU watchdog now also
+  watches the GPU's own completion signal, so CPU-side delays no longer count as a GPU stall. A
+  real GPU stall still ends the game, so it cannot freeze the Mac's display (#107, from
+  @evill33t).
+- **L3 + R3 can be switched off** (#104): the launcher's **Controls** page and the in-game menu
+  (**Controller**) have a switch for it, for players who press both sticks by accident. ⌘, still
+  opens the menu.
+- **Known:** above 1920×1080 with the upscaler off, the game's own anti-aliasing doesn't reach
+  the picture (#115), so edges can look sharper and more jagged than at 1080p. Until that's
+  fixed, try **MetalFX** with the **Native AA** preset at those resolutions.
+
+### New in 0.5.11: 5120×2160 fixed, a long-session crash fixed
+
+- **5120×2160 now draws the level** (#93). In 0.5.10 the game ran out of its own graphics memory
+  at this size: the city had no buildings or ground, or the game crashed while loading. It now
+  gets a bigger graphics heap and about 2 GB more memory, at this resolution only (about 50 FPS
+  uncapped on an M4 Max in Central Yharnam). The launcher warns on Macs with less than 32 GB.
+- **Fixed: the crash in the Hunter's Dream after long sessions** (#99, #101, #102; "signal 11 at
+  guest offset 0x2169edc", after about 90 minutes). The game queued a render bind for a resource
+  that was gone; it now skips that one bind instead of crashing (#100, from
+  [@evill33t](https://github.com/evill33t)).
+- **Fewer GPU-process crashes from stale graphics data** (#98, from @evill33t): if a draw reads
+  graphics data the game has already freed, the renderer reads zeros instead of crashing. If
+  0.5.11 runs slower than 0.5.10 on your Mac, please open an issue with your Mac and settings.
+- **Video guide:** Andrew Tsai's [guide to this port](https://www.youtube.com/watch?v=_QgmfFyZbYo).
+
+### New in 0.5.10: rebindable controls, a crash fix, choose the display
+
+- **Rebindable keys and mouse buttons.** The launcher has a new **Controls** page: every action
+  (movement, camera, buttons, d-pad, Options, touch pad) can take keys or mouse buttons, two per
+  action, and the mouse wheel can be bound too. There is a **walk** key (Left Alt by default:
+  movement keys push the stick half way), a vertical mouse speed, and mouse sensitivity now goes
+  up to 10. The defaults are the 0.5.9 layout, so nothing changes until you rebind something.
+- **Fixed: the GPU process crash in fights** (#74; "signal 11 in StageSpecialization", seen
+  fighting Ebrietas and in the Forbidden Woods). The game sometimes leaves a resource table
+  empty; the port read through it and crashed. It now reads zeros there, as the PS4's GPU does.
+- **Choose the display the game opens on** (#60): with a second display connected, the launcher
+  shows a **Display** picker. Full screen opens there too. If that display isn't connected, the
+  game opens on the main one.
+- **5120×2160 (21:9)** native resolution (#93), under **Ultrawide or 16:10** in the launcher
+  (it did not draw the level until 0.5.11).
+- **The mouse cursor hides** after 3 seconds without moving over the game window (#93), and
+  comes back as soon as you move or click.
+- **Updates no longer leave the old launcher open** (#96): after **Install Update**, the old
+  copy stayed on "Installing…" beside the new one. This is fixed in 0.5.10's updater, so it
+  takes effect from the *next* update: when updating from 0.5.9, the old window can still stay
+  open once. Quit it with ⌥⌘Esc (Force Quit); the update itself is installed.
 
 ### New in 0.5.9: 16-18 GB Macs run at full speed
 
@@ -394,8 +497,8 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
-- Rebindable keys (an `input.ini`, from #21's ideas) and the keyboard/mouse list in the launcher made editable.
+- **0.7:** online play (bells, summons and invasions through a community server), once it has been tested in the forks.
+- A faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
@@ -424,7 +527,7 @@ Details:
   `gpu/shim/ffx_metal/`) and TAA. Planned: zero-copy guest memory on unified memory.
 - Inherited from upstream: high-frame-rate community patches, synthetic motion vectors and
   temporal upscaling (FSR 3.1), a two-stage multi-threaded draw pipeline, and an in-game
-  settings overlay (`⌘,` or `L3 + R3`).
+  settings overlay (`⌘,` or `L3 + R3`; L3 + R3 can be turned off on the Controls page).
 
 ## Download (no building needed)
 
@@ -491,6 +594,9 @@ example a 60 FPS patch made for jailbroken consoles) is rejected: this port appl
 - A Mac with **Apple Silicon** running **macOS 15 or newer**, with at least **16 GB** of memory
 - **Rosetta 2** (`softwareupdate --install-rosetta`)
 - **Xcode Command Line Tools** (`xcode-select --install`)
+  With Command Line Tools 27 alone, the launcher is built against an older macOS SDK that is
+  still installed (the macOS 27 SDK there lacks SwiftUI's macro plugin; the build says which SDK
+  it uses). If no older SDK is left, install the full Xcode.
 - **Homebrew** (arm64) with build tools:
   `brew install cmake ninja nasm glslang pkgconf boost cryptopp`
 - **Python 3** (patch compiler and eboot preparation scripts)
@@ -694,12 +800,24 @@ saves and settings as the Finder launcher.
 
 ### In the game
 
+- **System → Mac Settings:** one native game-menu entry for renderer, quality, effects and
+  launch settings. Use Left/Right on **Page**, or L1/R1 (keyboard 1/3), to change groups.
+  Changes save to the same `bbport.ini`; `*` marks changes requiring a restart. On the final
+  page, enable **Confirm restart**, then **Restart now**. Native ultrawide remains a launcher
+  setting. The menu uses English captions in every supported game language.
+  Its assets are generated privately from your game files after user mods; originals stay
+  untouched. Set `BB_MAC_SETTINGS=0` to disable it. Unsupported assets/code leave it disabled.
+- **Exit Game:** the last entry in the native title menu closes the game and returns to
+  the launcher when launched from it. All six menu choices are visible, including in the
+  DLC title menus. The in-world System menu's save-and-return-to-title action is unchanged.
+  Set `BB_EXIT_GAME=0` to disable this entry independently of Mac Settings.
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the
   same settings before the game starts.
 - **Full screen:** ⌃⌘F or the green window button.
 - **Input:** game controllers (through SDL), the keyboard, and the mouse for the camera (turn on
-  **Mouse camera**). The launcher's **Controls** section lists the bindings.
+  **Mouse camera**). The launcher's **Controls** page rebinds keys, mouse buttons and the wheel
+  (two slots per action, a walk key) and sets the mouse speed; changes apply at the next start.
 - **First launch and new areas** compile shaders, so the first minutes stutter a little; later
   sessions load them from the cache at start. The first launch after a rebuild takes ~20 s to
   open the window.
@@ -741,6 +859,10 @@ This port stands entirely on the work of others:
   FSR 3.1 / FSR 4 runtime the port used until 0.5.0; FSR 3.1 is still built from its AMD
   FidelityFX SDK sources (MIT).
 - **Omar Cornut** — [Dear ImGui](https://github.com/ocornut/imgui), used for the in-game overlay (MIT).
+- **[evill33t/bloodborne_mac](https://github.com/evill33t/bloodborne_mac/tree/bbacb95c3338efcd627c0edaec05ff7534e555da)**
+  and **[droogie/bbhost](https://github.com/droogie/bbhost/tree/566184a74f071166299bb656c4af479e5bbe2771)** —
+  selected native menu builders and asset-generation techniques, adapted to this port's
+  existing settings and process bridge. [Provenance and validation](docs/NATIVE_MAC_SETTINGS.md).
 - **Alex Barney (Thealexbarney)** — [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9),
   AT9 audio decoding (MIT).
 - **sirit** — SPIR-V emitter used by the shader recompiler (BSD-3-Clause), with Khronos
@@ -786,22 +908,27 @@ Thank you to everyone who sent pull requests:
   - The About panel and update check (#23).
   - Dated session logs and crash reports (#40).
 - **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
-- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82) and MetalFX
-  frame generation (#64, in progress).
+- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82), the
+  long-session crash guards (#100, #114), stale descriptor hardening (#98), the GPU watchdog
+  fix (#107), and MetalFX frame
+  generation (#64, in progress).
+- **[byebyevlad](https://github.com/byebyevlad)**: builds on macOS 15 with Xcode 16 (#141).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
 @satperm, @IlyaDylko (keyboard sprint #61, long-session FPS #55), @wgorecodes (stuck game #71,
-preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9), @Sah-D (#47),
+preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9; the updater, #96), @Sah-D (#47),
 @ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84, tested 0.5.9), @Didjus (#18),
 @PensionPlanning (#19), @muharremsedona6034gm-hub (#22), @Walltor (#25), @AmberUpraity,
 @VanDung-dev, @douglasrlee, @jefer9011 and @mariuszparowa666 (GPU stalls, fixed in 0.5.4.2),
 @zhouhaoyaomei-ship-it, @SimonKabb and @juliotwo (the memmove crash, fixed in 0.5.5), @ELLDev
-(#74), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
+and @GChaucer (the GPU crash in fights, #74), @brewboi (5120×2160 and the cursor, #93), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
 
 Each third-party component keeps its own license file in its directory.
 
 ## License
 
 GNU General Public License v2.0 or later (GPL-2.0-or-later), because of the shadPS4
-components. See [LICENSE](LICENSE).
+components. See [LICENSE](LICENSE). The native-menu adapters retain GPL-3.0-or-later;
+the combined runtime containing them is GPL-3.0-or-later. See
+[the retained license](LICENSES/GPL-3.0-or-later.txt).

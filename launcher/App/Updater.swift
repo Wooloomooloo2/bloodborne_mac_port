@@ -84,9 +84,29 @@ final class Updater: ObservableObject {
             status = .failed("The update was not installed: \(error.localizedDescription)")
             return
         }
-        // The new copy shows its launcher window (--updated) rather than going straight to the game.
-        GameRunner.run(["/usr/bin/open", "-n", bundle.path, "--args", "--updated"])
+        // The new copy opens once this one has exited (Updates.relaunchCommand), showing its
+        // launcher window (--updated) rather than going straight to the game.
+        let command = Updates.relaunchCommand(pid: getpid(), bundle: bundle)
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: command[0])
+        relaunch.arguments = Array(command.dropFirst())
+        relaunch.standardInput = FileHandle.nullDevice
+        relaunch.standardOutput = FileHandle.nullDevice
+        relaunch.standardError = FileHandle.nullDevice
+        do {
+            try relaunch.run() // (outlives this process: launchd adopts it)
+        } catch {
+            status = .failed("The update is installed; open Bloodborne again to use it (\(error.localizedDescription)).")
+            return
+        }
+        // Nothing left on screen while quitting. Hiding also takes down this update sheet: AppKit
+        // refuses to quit while a sheet is attached (terminate returns without asking the
+        // delegate), which left 0.5.9-test1 open on "Installing…" beside the new copy (#96).
+        for window in NSApp.windows { window.orderOut(nil) }
         NSApp.terminate(nil)
+        // terminate returns only when the quit was refused. The settings were saved before the
+        // install (LauncherModel.installUpdate) and the new copy is in place, so leave anyway.
+        exit(0)
     }
 
     /// Downloads `update`, checks it and puts it in place of the app at `bundle`.

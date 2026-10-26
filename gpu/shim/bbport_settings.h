@@ -76,12 +76,17 @@ struct Values {
     /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};
-    /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
+    /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity (0.1-10),
+    /// mouse_vertical (vertical speed relative to horizontal, 0.25-4), mouse_invert_y.
     /// Off by default: on, the first left click in the window captures the cursor, for gamepad
     /// players too. Players turn it on in the menu (Display > Mouse camera).
     std::atomic<bool> mouse_look{false};
     std::atomic<float> mouse_sensitivity{1.0f};
+    std::atomic<float> mouse_vertical{1.0f};
     std::atomic<bool> mouse_invert_y{false};
+    /// L3+R3 on a controller opens this menu (#104: pressed by accident in play). Off, only the
+    /// keyboard shortcut opens it and the game gets both stick clicks. bbport.ini pad_menu_combo; live.
+    std::atomic<bool> pad_menu_combo{true};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     // Fixed at launch: native scene/UI patch dimensions, requiring a restart.
     int ultrawide_width = 0, ultrawide_height = 0;
@@ -92,11 +97,20 @@ struct Values {
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (off on a Mac), 1 on. On restart.
     std::atomic<int> live_resolution{0};
+    /// Opt-in native guest targets for MetalFX white scenes above 1080p; on restart.
+    std::atomic<bool> metalfx_white_scene_fix{false};
     /// A draw whose pipeline is still compiling in the background: Wait waits for it (a hitch,
     /// correct image), Skip leaves the draw out until it is ready (no hitch, an object may be
     /// missing for a few frames), Balanced waits within a small time budget and skips past it.
     /// bbport.ini shader_compile=wait|skip|balanced; live.
     std::atomic<int> shader_compile{ShaderBalanced};
+    /// Launcher options, read from the same ini and changed by native Mac Settings. The
+    /// launcher consumes them on the next start; no running renderer state is changed here.
+    std::atomic<int> fps_cap{60};
+    std::atomic<int> game_timing{0}; ///< 0 fixed, 1 variable
+    std::atomic<bool> fullscreen{false};
+    std::atomic<bool> metal_hud{false};
+    std::atomic<bool> texture_compression{true};
     /// Providers this build and device can run (ConfigureUpscalerSupport); off and TAA always.
     std::atomic<bool> metalfx_supported{false}; ///< macOS: Apple MetalFX temporal scaler
     std::atomic<bool> spatial_supported{false};
@@ -114,6 +128,12 @@ struct Values {
     int startup_model_lod = 0;
     int startup_output_res = OutputDefault;
     int startup_live_resolution = 0;
+    bool startup_metalfx_white_scene_fix = false;
+    int startup_fps_cap = 60;
+    int startup_game_timing = 0;
+    bool startup_fullscreen = false;
+    bool startup_metal_hud = false;
+    bool startup_texture_compression = true;
 };
 
 Values& Get();

@@ -3,7 +3,12 @@
 // bbport: SDL3 window for the presenter (a CAMetalLayer on macOS; X11 or Wayland elsewhere).
 #include <cstdlib>
 #include <cstring>
+#include <strings.h>
 #include <SDL3/SDL.h>
+#ifdef __APPLE__
+#include <ColorSync/ColorSync.h> // CGDisplayCreateUUIDFromDisplayID
+#include <CoreGraphics/CoreGraphics.h>
+#endif
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
@@ -11,6 +16,73 @@
 #include "bbport_overlay.h"
 
 namespace Frontend {
+
+namespace {
+#ifdef __APPLE__
+// SDL has no display UUIDs: find the CoreGraphics display with that UUID, then the SDL display
+// with the same bounds (SDL's Cocoa backend takes them from CGDisplayBounds).
+SDL_DisplayID DisplayWithUuid(const char* wanted) {
+    CGDirectDisplayID ids[32];
+    uint32_t count = 0;
+    if (CGGetActiveDisplayList(32, ids, &count) != kCGErrorSuccess) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(ids[i]);
+        if (!uuid) {
+            continue;
+        }
+        CFStringRef text = CFUUIDCreateString(nullptr, uuid);
+        CFRelease(uuid);
+        char buffer[64] = {};
+        const bool same = text && CFStringGetCString(text, buffer, sizeof(buffer), kCFStringEncodingASCII) &&
+                          strcasecmp(buffer, wanted) == 0;
+        if (text) {
+            CFRelease(text);
+        }
+        if (!same) {
+            continue;
+        }
+        const CGRect bounds = CGDisplayBounds(ids[i]);
+        int n = 0;
+        SDL_DisplayID* displays = SDL_GetDisplays(&n);
+        SDL_DisplayID found = 0;
+        for (int d = 0; displays && d < n && !found; ++d) {
+            SDL_Rect r;
+            if (SDL_GetDisplayBounds(displays[d], &r) && r.x == int(bounds.origin.x) &&
+                r.y == int(bounds.origin.y) && r.w == int(bounds.size.width) &&
+                r.h == int(bounds.size.height)) {
+                found = displays[d];
+            }
+        }
+        SDL_free(displays);
+        return found;
+    }
+    return 0;
+}
+#endif
+} // namespace
+
+u32 ChosenDisplay() {
+    static const SDL_DisplayID chosen = [] {
+        const char* wanted = std::getenv("BB_DISPLAY");
+        if (!wanted || !wanted[0]) {
+            return SDL_GetPrimaryDisplay();
+        }
+        SDL_DisplayID id = 0;
+#ifdef __APPLE__
+        id = DisplayWithUuid(wanted);
+#endif
+        if (!id) {
+            std::printf("Window: display %s is not connected: using the main display\n", wanted);
+            return SDL_GetPrimaryDisplay();
+        }
+        const char* name = SDL_GetDisplayName(id);
+        std::printf("Window: on the chosen display, %s\n", name ? name : "unnamed");
+        return id;
+    }();
+    return chosen;
+}
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}, height{height_} {
     // Gamepads are sampled by runtime_pad.c; their events are pumped here with the window's.
@@ -22,8 +94,10 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetHint(SDL_HINT_QUIT_ON_LAST_WINDOW_CLOSE, "0");
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED);
+    // Centred on the launcher's display choice; full screen opens on the window's display.
+    const u32 display = ChosenDisplay();
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(display));
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(display));
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width_);
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);

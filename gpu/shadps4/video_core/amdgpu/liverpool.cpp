@@ -458,6 +458,35 @@ void SignalFlip(Vulkan::Rasterizer& rasterizer, const u8*) {
     Platform::IrqC::Instance()->Signal(Platform::InterruptId::GfxFlip);
 }
 
+/// bbport: an occlusion query dump (EVENT_WRITE PixelPipeStatDump, index ZpassDone): the
+/// counts it writes, prepared on the GPU command thread.
+struct ZpassDump {
+    u64 address;
+    u64 value;
+    u32 pairs;
+};
+
+/// Writes the dump's per-render-backend counts (every other qword) in order with the draws.
+/// The game clears the query block with DMA_DATA before it begins the query; that fill runs in
+/// order on the draw recording thread, and a dump written straight away on the command thread
+/// was wiped by it: every occlusion query stayed "not ready", the game kept them pending, and its
+/// per-frame copy of that list filled the 256 KiB frame heap after ~2 hours of play (#127).
+void WriteZpassDump(const ZpassDump& dump) {
+    auto* memory = Core::Memory::Instance();
+    auto* results = reinterpret_cast<u64*>(dump.address);
+    for (u32 i = 0; i < dump.pairs; ++i, results += 2) {
+        if (!memory->TryWriteBacking(results, &dump.value, sizeof(dump.value))) {
+            StoreLabel(results, dump.value, sizeof(dump.value));
+        }
+    }
+}
+
+void RunZpassDump(Vulkan::Rasterizer&, const u8* data) {
+    ZpassDump dump;
+    std::memcpy(&dump, data, sizeof(dump));
+    WriteZpassDump(dump);
+}
+
 void RunWriteData(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto* header = reinterpret_cast<const PM4Header*>(data);
     const auto* write_data = reinterpret_cast<const PM4CmdWriteData*>(data);
@@ -1307,9 +1336,14 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     if (event->event_type.Value() == EventType::PixelPipeStatDump) {
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
-                        u64* results = event->Address<u64*>();
-                        for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
-                            *results = pixel_counter | OcclusionCounterValidMask;
+                        const ZpassDump dump{event->Address<u64>(),
+                                             pixel_counter | OcclusionCounterValidMask,
+                                             static_cast<u32>(num_counter_pairs)};
+                        if (rasterizer) {
+                            rasterizer->RunInOrder(&RunZpassDump, &dump, sizeof(dump),
+                                                   BbToggle::PipelinedMemoryWrites);
+                        } else {
+                            WriteZpassDump(dump);
                         }
                         pixel_counter += OcclusionCounterStep;
                     }

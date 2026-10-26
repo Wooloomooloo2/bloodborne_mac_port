@@ -21,6 +21,49 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **Long sessions hang (#127, #139): fixed in 0.5.14 (2026-11-06).**
+  Occlusion query dumps were written before the game's DMA_DATA clear of the same block (it runs
+  in order with the draws), so no query ever completed and the pending list filled the frame
+  heap. Verified: 2.5 h scripted session (heap flat at 8 KiB), glare/flares checked by the owner.
+  The occlusion counts are a stand-in (always visible): real per-draw sample counts would need
+  Metal visibility results (follow-up, only if an effect looks wrong). FINDINGS 2026-11-06.
+- **Motion blur smears a still picture until restart (#109, 2026-11-05).** M2 16 GB, 1280x720,
+  upscaler off: after a while the whole scene streaks as if moving; restarting clears it, and
+  with motion blur off it never comes back (reporter). The blur pass reads wrong velocity or a
+  stale previous-frame matrix. Two "Failed to find exact image match for copy addr=0x70f1ee0000,
+  size=0x10000" warnings came shortly before the screenshot. Not reproduced here.
+- **Forbidden Woods turns white with MetalFX above 1080p (#116, 2026-11-02).** With the startup
+  patch (guest targets 1708x960 at 1440p Quality) the scene goes flat white after the passage
+  beside the lift; PR #117 (evill33t) read the frame back: MetalFX's input is already one colour,
+  depth still varies, so a game post-process breaks at that size. #117 (merged 2026-11-05 as an
+  opt-in, `metalfx_white_scene_fix`, off by default) puts MetalFX above 1080p on the live path,
+  which costs ~5-20% GPU in the Hunter's Dream (post at 1080p plus proxy resolves; two noisy
+  battery-power A/B pairs, FINDINGS 2026-11-02). *Fix:* find the pass that first writes the white image (frame capture at the gate with
+  the reporter's save, 1-2 passes through the passage reproduce it) and fix it on the startup
+  path; then #117 is not needed. Workaround for players: start with the upscaler off, then enable
+  MetalFX in game.
+- **The game's AA is lost above 1080p (#115, 2026-10-31).** Above 1920x1080 run.sh uses live
+  resolution changes: the guest's buffers stay at 1080p and host targets are scaled, so the game's
+  own temporal AA (a 1080p post-process) never reaches the picture. Measured at the benchmark stand
+  (window snapshots): at 1080p `effect_game_aa=0` raises edge energy 1.53 -> 1.86; at 4K on and
+  off are identical (1.554). Players see more jagged edges at 4K than at 1080p (BD-Jacek, M3 Max).
+  Workaround: MetalFX at Native AA. *Fix:* above 1080p with the upscaler off, run the port's TAA
+  (or MetalFX Native AA) by default, or scale the game's AA targets with the scene. Check
+  full-screen 4K snapshots (window snapshots are downscaled, which hides jaggies).
+- **8 GB Macs (2026-10-26, owner question).** The owner saw under 6 GB in Activity Monitor at
+  540p → 1080p (FSR 3.1). Today an 8 GB Mac stops at start: `buffer_cache.cpp` asserts a 5 GiB
+  Metal buffer, and maxBufferLength is ~60% of memory (~4.5 GiB). The `runs` layout (default on
+  ≤ 24 GB since 0.5.9) never needs one buffer that large (largest run ~3.3 GiB), so the assert
+  should apply to `legacy` only. The real risk is the ~3.5 GB of pinned GPU memory on top of macOS
+  and the game (the #69 swap slide). Simulate on the M4 Max as for #69: `iogpu.wired_limit_mb`
+  ~5300, a helper locking ~40 GB, `BB_MAX_BUFFER_GIB=4`, 540p → 1080p; ship only if it holds
+  30+ FPS without swapping.
+- **`tests/test_run_settings.py` fails on master, and no build script runs it (2026-10-26, found
+  by evill33t on #90).** `test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it`: the third restart
+  (back to 1080p) expects `BB_RENDER_RES` 640x360 and gets none. Run it with
+  `cd tests && python3 -m unittest test_run_settings` (it imports `paths` from `tests/`). Decide
+  whether run.sh or the expectation is wrong, then add the suite to `build_macos.sh --test` so
+  restart-settings regressions show up.
 - **Opening-movie freeze and crash on new games (#46, #50, #51, #24, #84): fixed 2026-10-26 on
   branch `cutscene-race`, for the 0.5.x hotfix.** Two causes (FINDINGS 2026-10-26): the AvPlayer
   stop request missed a decoder whose `jthread` the demuxer had taken to join (freeze in
@@ -551,6 +594,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 2. Performance
 
+- **Watch after 0.5.11: performance reports against #98 (2026-10-29, owner).** #98 guards
+  GPU-thread descriptor reads with a local fault recovery (`gpu/shim/bbport_guest_memory.h`):
+  about 2.4 ns more per read on an M4 Max, estimated ~0.1% of a 60 FPS frame on slower Macs, and
+  the A/B (native 1080p uncapped) showed no cost. If players report lower FPS after 0.5.11, A/B
+  0.5.10 against 0.5.11 on the benchmark route first; the guard can be skipped for reads whose
+  table pointer is already known valid.
+
 - **16–18 GB Macs on macOS 27 run at 5–17 FPS (2026-10-25, top priority, the 0.5.x hotfix).**
   Not GPU-bound: the GPU idles ~60% of each frame (FINDINGS "the slow Macs are 16–18 GB Macs on
   macOS 27"). Needs a slow Mac to test: the kernel log for `required > max`, raising
@@ -842,6 +892,17 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Fixed in 0.5.10: the old launcher stayed open after an update (#96, 2026-10-27).** AppKit
+  refuses to quit while a sheet is attached: `NSApp.terminate` returns without asking the
+  delegate, so 0.5.9-test1 stayed on "Installing…" (⌘Q dead too) beside the new copy. Reproduced
+  with the real 0.5.9-test1 → 0.5.9 update in a scratch folder. #87 (after 0.5.9) hides the
+  windows first, which takes the sheet down; `Updater.install` now also `exit(0)`s if terminate
+  still returns. Verified: the old copy exits ~7 s after Install, the new one opens alone.
+  *Still open:* the fix runs in the *old* copy, so updating **from** 0.5.9 to 0.5.10 shows the
+  bug once more (say so in the 0.5.10 notes: quit the old window with Force Quit). Also, ⌘Q is
+  ignored whenever a launcher sheet is open (any sheet, not only updates): standard AppKit, but
+  players read it as a hang; consider ending the sheet in `applicationShouldTerminate`'s path.
+
 - **Local apps from `make_app.sh` never get Game Mode (2026-10-26).** Its `bbgpu-host*` are
   symlinks into `out/`, so macOS sees anonymous processes outside the bundle and gamepolicyd only
   recognises the launcher (packaged apps: all three processes, "Plist category type"). Copy or
@@ -854,11 +915,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
   UI Fixes" mod (Nexus 207) replaces them; consider pointing to it from the launcher when 16:10
   is chosen (the mod manager can load it).
 
-- **Preferred display (#60, 2026-10-24).** The window always opens centred on the main display
-  (`gpu/shim/window.cpp`, `SDL_WINDOWPOS_CENTERED`) and the default resolution comes from it
-  (`gpu/shim/bbgpu.cpp`). Add a `display=` setting chosen in the launcher, applied with
-  `SDL_WINDOWPOS_CENTERED_DISPLAY(id)`, and keep resolution/ultrawide per display so docking does
-  not reset them.
+- **Resolution per display (#60, 2026-10-24).** The display choice is done (2026-10-26: launcher
+  `display=` UUID → `BB_DISPLAY`, window centred on it, vblank from it). Still open: keep
+  resolution/ultrawide per display so docking does not reset them.
 - **Leftover game processes (#71, 2026-10-24).** After a force-quit of a hung game, `bb-probe`
   and a GPU host stuck in exit stay alive and the launcher refuses to start ("only one copy").
   `stop_host` no longer waits forever after SIGKILL (fixes-0.5.6); the launcher should also offer
@@ -926,6 +985,18 @@ Each item: what was done for now, what the refinement is, and where it lives.
     the default layout in the README.
   - Split mode: mouse events live in the GPU host's window; extend the shared block's keyboard
     bridge (`bbgpu_split_keyboard`) with mouse deltas and buttons.
+  *2026-10-27 (branch `input-bindings`, docs/DESIGN_INPUT.md):* rebindable keys and mouse buttons
+  (`bind_*` in bbport.ini, `src/runtime_bindings.c`), the wheel, a walk key, a launcher Controls
+  page, vertical mouse speed. Still open, in order:
+  - **Mouse too slow (player feedback):** the mouse is a right stick, so it can never turn faster
+    than the stick at full deflection (reached at 650 points/s). Calibrate turn rate per stick
+    value with the pad file (`rx=`), linearise the curve with that table, shorten the 33 ms speed
+    window, then a test build for players.
+  - **Direct camera (spike, about a day):** find the camera's yaw/pitch in game memory and add the
+    mouse motion to them while the camera is free (not locked on, not in cutscenes or menus);
+    stick fallback otherwise. No speed ceiling, 1:1 feel.
+  - Rebinding in the in-game menu (today: the launcher, applied at the next start). Controller
+    button remapping: done 2026-11-08, released in 0.5.15 (docs/DESIGN_INPUT.md).
 
 - **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
   (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the

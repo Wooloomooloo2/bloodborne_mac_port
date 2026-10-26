@@ -8,9 +8,8 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
-    private enum Page: Hashable { case general, advanced }
+    private enum Page: Hashable { case general, advanced, controls }
     @State private var page = Page.general
-    @State private var showingControls = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +21,7 @@ struct LauncherView: View {
             Picker("", selection: $page) {
                 Text("General").tag(Page.general)
                 Text("Advanced").tag(Page.advanced)
+                Text("Controls").tag(Page.controls)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -31,6 +31,7 @@ struct LauncherView: View {
                 switch page {
                 case .general: general
                 case .advanced: advanced
+                case .controls: ControlsView(model: model)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -123,6 +124,14 @@ struct LauncherView: View {
                         Text("Full screen").tag(true)
                     }
                     .pickerStyle(.segmented)
+                    if model.showsDisplayChoice {
+                        Picker("Display", selection: $model.settings.display) {
+                            Text("Main display").tag(String?.none)
+                            ForEach(model.displayChoices) { Text($0.name).tag(Optional($0.uuid)) }
+                        }
+                        Text("The game opens on this display, in a window or full screen. If it isn't connected, the main display is used.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Frame rate cap", selection: $model.settings.frameCap) {
                         ForEach(FrameCap.allCases) { Text($0.label).tag($0) }
                     }
@@ -178,26 +187,6 @@ struct LauncherView: View {
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
                 }
-                Section("Controls") {
-                    HStack {
-                        Toggle("Mouse camera", isOn: $model.settings.mouseLook)
-                            .help(model.settings.mouseLook
-                                  ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
-                                  : "Off: the arrow keys turn the camera. Controllers always work.")
-                        Spacer()
-                        Button("Keyboard and Mouse…") { showingControls = true }
-                            .popover(isPresented: $showingControls, arrowEdge: .bottom) {
-                                Form {
-                                    ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
-                                        LabeledContent(row.0, value: row.1)
-                                    }
-                                }
-                                .formStyle(.grouped)
-                                .frame(width: 440)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-                    }
-                }
             }
             .formStyle(.grouped)
         }
@@ -219,7 +208,10 @@ struct LauncherView: View {
                         ForEach(LiveResolution.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Above 1080p it is always on.")
+                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Scene resolutions above 1080p always use it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Avoid white scenes (MetalFX)", isOn: $model.settings.metalfxWhiteSceneFix)
+                    Text("For MetalFX output above 1080p. Keeps post-processing at 1080p to avoid white scenes, but can reduce performance. Requires a restart.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Shader compilation") {

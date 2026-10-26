@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,22 +15,34 @@ namespace BbSettings {
 
 namespace {
 
+// Both menus share one ini writer. Hold this across read/merge/write so a native edit and
+// the renderer's Save cannot each truncate the other's preserved launch or future keys.
+std::mutex file_mutex;
+
 const char* Path() {
     const char* env = std::getenv("BB_CONFIG");
     return env && env[0] ? env : "bbport.ini";
 }
 
-/// Keys Save() writes; every other key=value line of the file is kept as it is (the launcher's
-/// fps_cap and fullscreen, the removed FSR 4 checks fsr4_auto_exposure/fsr4_invert_jitter, ...).
+/// Keys Save() writes; every other key=value line of the file is kept as it is (future launcher
+/// options, the removed FSR 4 checks fsr4_auto_exposure/fsr4_invert_jitter, ...).
 /// `renderer` (metal|vulkan until 0.5.2) is owned but no longer written: saving drops it.
+std::string_view Trim(std::string_view text) {
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos) return {};
+    return text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+}
+
 bool OwnedKey(const std::string& key) {
+    if (Trim(key) == "metalfx_white_scene_fix") return true;
     static constexpr const char* owned[] = {
         "upscaler", "preset", "sharpen", "sharpness", "jitter", "reactive", "object_motion",
         "reactive_scale", "reactive_threshold", "reactive_max", "debug_view", "show_fps",
         "frame_pacing",
         "model_lod", "output_res",
-        "live_resolution", "shader_compile", "renderer",
-        "mouse_look", "mouse_sensitivity", "mouse_invert_y"};
+        "live_resolution", "metalfx_white_scene_fix", "shader_compile", "renderer", "fps_cap",
+        "game_timing", "fullscreen", "metal_hud", "texture_compression",
+        "mouse_look", "mouse_sensitivity", "mouse_vertical", "mouse_invert_y", "pad_menu_combo"};
     for (const char* k : owned) {
         if (key == k) {
             return true;
@@ -83,11 +96,27 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "mouse_look") {
         v.mouse_look = i != 0;
     } else if (key == "mouse_sensitivity") {
-        v.mouse_sensitivity = Clamp(f, 0.1f, 5.0f);
+        v.mouse_sensitivity = Clamp(f, 0.1f, 10.0f);
+    } else if (key == "mouse_vertical") {
+        v.mouse_vertical = Clamp(f, 0.25f, 4.0f);
     } else if (key == "mouse_invert_y") {
         v.mouse_invert_y = i != 0;
+    } else if (key == "pad_menu_combo") {
+        v.pad_menu_combo = i != 0;
+    } else if (key == "fps_cap") {
+        if (i == 30 || i == 40 || i == 60 || i == 90 || i == 120) v.fps_cap = i;
+    } else if (key == "game_timing") {
+        v.game_timing = value == "variable" ? 1 : 0;
+    } else if (key == "fullscreen") {
+        v.fullscreen = i != 0;
+    } else if (key == "metal_hud") {
+        v.metal_hud = i != 0;
+    } else if (key == "texture_compression") {
+        v.texture_compression = i != 0;
     } else if (key == "model_lod") {
         v.model_lod = std::clamp(i, -2, 2);
+    } else if (Trim(key) == "metalfx_white_scene_fix") {
+        v.metalfx_white_scene_fix = Trim(value) == "1";
     } else if (key == "live_resolution") {
         v.live_resolution = value == "auto" ? -1 : std::clamp(i, 0, 1);
     } else if (key == "shader_compile") {
@@ -124,7 +153,14 @@ std::array<int, 2> OutputSize() {
 }
 
 void Load() {
+    std::scoped_lock lock{file_mutex};
     auto& v = Get();
+    v.metalfx_white_scene_fix = false;
+    v.fps_cap = 60;
+    v.game_timing = 0;
+    v.fullscreen = false;
+    v.metal_hud = false;
+    v.texture_compression = true;
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = Effects[e].default_on;
     }
@@ -166,7 +202,7 @@ void Load() {
     v.ultrawide_width = v.ultrawide_height = 0;
     if (const char* wide = std::getenv("BB_ULTRAWIDE_RES"); wide && wide[0]) {
         constexpr std::array<int, 2> sizes[] = {
-            {2560, 720}, {3840, 1080}, {5120, 1440}, {2560, 1080}, {3440, 1440},
+            {2560, 720}, {3840, 1080}, {5120, 1440}, {2560, 1080}, {3440, 1440}, {5120, 2160},
             {1280, 800}, {1920, 1200}, {2560, 1600}};
         for (const auto& size : sizes) {
             if (wide == std::to_string(size[0]) + "x" + std::to_string(size[1])) {
@@ -193,6 +229,12 @@ void Load() {
     v.startup_model_lod = v.model_lod;
     v.startup_output_res = v.output_res;
     v.startup_live_resolution = v.live_resolution;
+    v.startup_metalfx_white_scene_fix = v.metalfx_white_scene_fix;
+    v.startup_fps_cap = v.fps_cap;
+    v.startup_game_timing = v.game_timing;
+    v.startup_fullscreen = v.fullscreen;
+    v.startup_metal_hud = v.metal_hud;
+    v.startup_texture_compression = v.texture_compression;
 }
 
 void ConfigureUpscalerSupport(bool metalfx, bool fsr3, bool spatial) {
@@ -269,6 +311,7 @@ bool ResolutionNeedsRestart() {
 }
 
 void Save() {
+    std::scoped_lock lock{file_mutex};
     const auto& v = Get();
     std::vector<std::string> kept;
     if (FILE* old = std::fopen(Path(), "r")) {
@@ -299,14 +342,15 @@ void Save() {
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nframe_pacing=%d\nmouse_look=%d\n"
-                 "mouse_sensitivity=%.2f\nmouse_invert_y=%d\n",
+                 "mouse_sensitivity=%.2f\nmouse_vertical=%.2f\nmouse_invert_y=%d\npad_menu_combo=%d\n",
                  UpscalerName(saved_upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()), int(v.frame_pacing.load()),
                  int(v.mouse_look.load()), v.mouse_sensitivity.load(),
-                 int(v.mouse_invert_y.load()));
+                 v.mouse_vertical.load(), int(v.mouse_invert_y.load()),
+                 int(v.pad_menu_combo.load()));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
@@ -314,11 +358,17 @@ void Save() {
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res]);
     // Read by run.sh at start.
+    std::fprintf(file, "metalfx_white_scene_fix=%d\n", int(v.metalfx_white_scene_fix));
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");
     static constexpr const char* compile_modes[] = {"wait", "skip", "balanced"};
     std::fprintf(file, "shader_compile=%s\n",
                  compile_modes[std::clamp(v.shader_compile.load(), 0, 2)]);
+    std::fprintf(file, "fps_cap=%d\ngame_timing=%s\nfullscreen=%d\nmetal_hud=%d\n"
+                       "texture_compression=%d\n",
+                 v.fps_cap.load(), v.game_timing ? "variable" : "fixed",
+                 int(v.fullscreen.load()), int(v.metal_hud.load()),
+                 int(v.texture_compression.load()));
     for (const std::string& line : kept) {
         std::fprintf(file, "%s\n", line.c_str());
     }
@@ -353,6 +403,7 @@ int show_launcher = -2; ///< -2: not read yet
 } // namespace
 
 int ShowLauncher() {
+    std::scoped_lock lock{file_mutex};
     if (show_launcher == -2) {
         show_launcher = -1;
         if (LaunchConfPath()) {
@@ -371,6 +422,7 @@ int ShowLauncher() {
 }
 
 void SetShowLauncher(bool show) {
+    std::scoped_lock lock{file_mutex};
     if (!LaunchConfPath()) {
         return;
     }

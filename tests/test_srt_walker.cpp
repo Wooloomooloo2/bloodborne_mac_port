@@ -133,10 +133,35 @@ int main() {
         Expect("recover pointer restored", runtime_fault_recover != nullptr, 0);
     }
     Expect("faults (first walk only)", faults, 1);
+
+    // A null table (#74) reads zero without a fault, and only for that walk: once the game
+    // fills the pointer in, the same load reads the table again.
+    const u32 null_program[] = {
+        0x31545253,
+        PushPtrImm, 2, 0,     // cur = user_data[2..3]
+        CopyImm, 1, 16,       // flat[16] = table[1]
+        PushPtrImm, 4, 0,     // cur = (table[4..5])
+        CopyImm, 3, 17,       // flat[17] = inner[3]
+        PopPtr, 0, 0,
+        PopPtr, 0, 0,
+        End, 0, 0,
+    };
+    const Shader::SrtWalkerCode null_code = Shader::RegisterWalkerCode(
+        reinterpret_cast<const unsigned char*>(null_program), sizeof(null_program));
+    const u64 pointers[] = {0, reinterpret_cast<u64>(table), 0, reinterpret_cast<u64>(table)};
+    for (const u64 pointer : pointers) {
+        u32 null_ud[16] = {};
+        std::memcpy(&null_ud[2], &pointer, 8);
+        u32 flat[24] = {};
+        Shader::RunSrtWalker(null_code, null_ud, flat);
+        Expect("null table, outer load", flat[16], pointer ? 0x22 : 0);
+        Expect("null table, nested load", flat[17], pointer ? 0x33 : 0);
+    }
+    Expect("faults (null tables add none)", faults, 1);
     if (failures) {
         return 1;
     }
-    std::printf("PASS: SRT walker bytecode (%s): pointers, offsets, faulting load zeroed once\n",
+    std::printf("PASS: SRT walker bytecode (%s): pointers, offsets, faulting load zeroed once, null tables\n",
 #if defined(__aarch64__)
                 "arm64"
 #else

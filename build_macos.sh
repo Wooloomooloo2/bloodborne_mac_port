@@ -78,18 +78,32 @@ if [[ -f $ARM64_PREFIX/lib/pkgconfig/sdl3.pc ]]; then
     # carries the range as a zero-fill segment the kernel maps at exec (host/guest_reservation.s,
     # host/main.c reserve_guest_range). bb-probe runs it on macOS 27 and later only: on 26 the
     # pinned segment breaks dyld's flat-namespace lookups into the executable (PR #7).
-    "${host_cc[@]}" host/guest_reservation.s -Wl,-segaddr,__GUESTRSV,0x7000000000 -Wl,-segprot,__GUESTRSV,---,--- \
-        -o out/bbgpu-host-macos27
+    rsv_link=("${host_cc[@]}" host/guest_reservation.s -Wl,-segaddr,__GUESTRSV,0x7000000000
+        -Wl,-segprot,__GUESTRSV,---,--- -o out/bbgpu-host-macos27)
+    rsv_size() { otool -l out/bbgpu-host-macos27 | awk '/segname __GUESTRSV/ {f=1} f && /vmsize/ {print $2; exit}'; }
+    "${rsv_link[@]}"
+    # Xcode 16's linker (ld-1167) writes the 0x8C00000000 zero-fill segment with vmsize 0, and
+    # macOS rejects the binary as malformed. Its classic linker gets the size right.
+    if [[ $(rsv_size) != 0x0000008c00000000 ]]; then
+        echo "bbgpu-host-macos27: this linker drops the __GUESTRSV size; relinking with -ld_classic" >&2
+        "${rsv_link[@]}" -Wl,-ld_classic 2>&1 | { grep -v -- '-ld_classic is deprecated' || true; } >&2
+        if [[ $(rsv_size) != 0x0000008c00000000 ]]; then
+            echo "bbgpu-host-macos27: __GUESTRSV is $(rsv_size), expected 0x0000008c00000000: use Xcode 26 or newer" >&2
+            exit 1
+        fi
+    fi
     echo "Built $PWD/out/bbgpu-host and out/bbgpu-host-macos27 (arm64, renderer: out/gpu-arm64/libbbgpu.dylib)"
 else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
 fi
 if [[ ${1:-} == --test ]]; then
     python3 tests/test_launcher_stop.py
-    "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
+    "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_pad.c src/runtime_bindings.c src/runtime_host.c "${libraries[@]}" -Wl,-rpath,"$PREFIX/lib" -o out/pad-test
     out/pad-test
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
     out/runtime-test
+    "$CC" "${cflags[@]}" -I. -Isrc tests/test_render_guard.c src/runtime_render_guard.c -o out/render-guard-test
+    out/render-guard-test
     "$CC" "${cflags[@]}" -Isrc tests/test_file_mods.c -o out/file-mods-test
     out/file-mods-test
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test
@@ -99,6 +113,15 @@ if [[ ${1:-} == --test ]]; then
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test
+    /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Werror -Igpu/shim tests/test_mac_settings.cpp \
+        gpu/shim/bbport_settings.cpp gpu/shim/bbport_mac_settings.cpp -o out/mac-settings-test
+    out/mac-settings-test
+    "${PYTHON:-python3}" -m unittest discover -s tests -p test_mac_menu_assets.py
+    "${PYTHON:-python3}" -m unittest discover -s tests -p test_exit_menu_assets.py
+    "$CC" "${cflags[@]}" -I. -Isrc tests/test_mac_menu.c -o out/mac-menu-test
+    out/mac-menu-test
+    "$CC" "${cflags[@]}" -I. -Isrc tests/test_exit_menu.c -o out/exit-menu-test
+    out/exit-menu-test
     bash tests/test_launch_settings.sh
     bash scripts/macos/build_launcher.sh --test
     # Shared control block rings between bb-probe (x86-64) and bbgpu-host (arm64).
@@ -118,6 +141,9 @@ if [[ ${1:-} == --test ]]; then
             -Wall -Wextra -Werror tests/test_srt_walker.cpp -L"${walker#*:}" -lbbgpu \
             -Wl,-rpath,"$ROOT/${walker#*:}" -o "out/srt-walker-test-${walker%%:*}"
         "out/srt-walker-test-${walker%%:*}"
+        # Vertex/tessellation descriptor reads use the same bounded guest-fault recovery.
+        cmake --build "${walker#*:}" --target shader-userdata-test >/dev/null
+        "${walker#*:}/shader-userdata-test"
     done
     # Metal-native M1: Metal::Object, Device ticks and limits, Metal::Encoder (arm64, no window);
     # again under Metal's validation layer.
@@ -128,6 +154,12 @@ if [[ ${1:-} == --test ]]; then
         glslang -V --quiet tests/data/spec_const.comp -o out/spec_const.spv  # the Specialize test's module
         out/mtl-encoder-test
         MTL_DEBUG_LAYER=1 out/mtl-encoder-test
+        # Watch actual GPU signals rather than delayed CPU handlers; retain real-stall exits.
+        /usr/bin/clang++ -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c++20 -fobjc-arc -O2 -g \
+            -Wall -Wextra -Werror -Igpu/shim -Igpu/shadps4 -I"$ARM64_PREFIX/include" tests/test_mtl_watchdog.mm gpu/shim/common/logging/log.cpp gpu/shim/common/assert.cpp out/gpu-arm64/libbbmetal_core.a -L"$ARM64_PREFIX/lib" -lfmt \
+            -framework Metal -framework Foundation -o out/mtl-watchdog-test
+        out/mtl-watchdog-test
+        MTL_DEBUG_LAYER=1 out/mtl-watchdog-test
         # Metal-native M3: the rasterizer's draw helper (core part), plain and under validation.
         /usr/bin/clang++ -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c++20 -fobjc-arc -O2 -g \
             -Wall -Wextra -Werror -Igpu/shim -Igpu/shadps4 -I"$ARM64_PREFIX/include" tests/test_mtl_draw.mm gpu/shim/common/logging/log.cpp gpu/shim/common/assert.cpp out/gpu-arm64/libbbmetal_core.a -L"$ARM64_PREFIX/lib" -lfmt \

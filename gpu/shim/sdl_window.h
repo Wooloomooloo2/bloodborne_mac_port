@@ -11,6 +11,10 @@ struct SDL_Window;
 
 namespace Frontend {
 
+/// The display chosen in the launcher (BB_DISPLAY, a CoreGraphics display UUID), as an SDL display
+/// ID; the primary display when unset or not connected (logged once). Needs SDL video.
+u32 ChosenDisplay();
+
 enum class WindowSystemType : u8 { Headless, Windows, X11, Wayland, Metal };
 
 struct WindowSystemInfo {
