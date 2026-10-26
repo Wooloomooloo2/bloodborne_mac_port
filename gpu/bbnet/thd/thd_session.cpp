@@ -207,9 +207,10 @@ std::mutex g_poll_client_mu;
 httplib::Client* g_poll_client = nullptr;
 thread_local bool t_is_poller = false;
 
-// One keep-alive connection per thread and server (the poller keeps one open across its polls,
-// as the server asks). The connect (and TLS) timeout is a few seconds whatever the call; the read
-// timeout is the caller's, so a poll the server holds open waits as long as it should.
+// Cache clients per thread and server, but keep connections alive only on the poller, which
+// uses them continuously. Player actions can be minutes apart: a fresh connection avoids an
+// idle socket closed by the server without risking a duplicate POST through transport retries.
+// The connect/TLS timeout is bounded; the read timeout lets the server hold a long poll.
 HttpResult Perform(const std::string& base, const std::string& path, const std::string* post,
                    int timeout_ms) {
     thread_local std::map<std::string, std::unique_ptr<httplib::Client>> clients;
@@ -218,7 +219,7 @@ HttpResult Perform(const std::string& base, const std::string& path, const std::
     const auto connect_timeout = std::chrono::milliseconds(std::min(timeout_ms, 5000));
     auto open = [&] {
         auto next = std::make_unique<httplib::Client>(base);
-        next->set_keep_alive(true);
+        next->set_keep_alive(t_is_poller);
         next->set_follow_location(false);
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         next->enable_server_certificate_verification(Cfg().verify_tls);
@@ -759,6 +760,8 @@ std::mutex g_poll_lifecycle_mu;
 std::thread g_poll_thread, g_keep_thread;
 bool g_poll_finished = true;
 std::function<void(const Json&)> g_handler;
+// Account/configuration are fixed for this process. Keep its observed event cursor across
+// context restarts; only the poll worker uses it, and Stop joins that worker before Start.
 long long g_cursor = 0;
 
 // Long polling, as The Hunter's Dream asks of clients (2026-10-18): every poll carries WaitMs
@@ -790,6 +793,9 @@ void PollerMain() {
         const int timeout_ms = wait_ms > 0 ? wait_ms + 5000 : 4000;
         const auto poll_started = Clock::now();
         const bool answered = NpPost("/np/events/poll", body, reply, err, timeout_ms);
+        // Remember even an event suppressed by Stop, or one whose handler finishes during
+        // Stop before its ack. Restarting from zero would deliver it into the new context.
+        if (answered) g_cursor = std::max(g_cursor, IntOf(reply, "NextCursor", g_cursor));
         if (!g_pollrun.load()) break; // a stopped context must not deliver or ack an old event
         if (answered) {
             backoff_ms = 0;
@@ -824,10 +830,8 @@ void PollerMain() {
                 Json ack_reply;
                 std::string ack_err;
                 NpPost("/np/events/ack", ack, ack_reply, ack_err, 4000);
-                g_cursor = next;
                 continue; // drain without waiting while there are events
             }
-            g_cursor = std::max(g_cursor, next);
             if (interval_ms == 0) continue; // the server waited: poll again now
         } else if (Refused()) {
             interval_ms = 60000; // nothing arrives until this PC signs in again
@@ -904,13 +908,14 @@ void KeepaliveMain() {
 void PollerStart(std::function<void(const Json&)> handler) {
     std::lock_guard lifecycle(g_poll_lifecycle_mu);
     // Register after configuration initialization, so workers stop before its exit cleanup.
+    // Normal exit waits on the lifecycle mutex if another thread is already stopping workers;
+    // this deliberately shares Stop's join semantics rather than abandoning live workers.
     (void)Cfg();
     static const bool cleanup = [] { std::atexit(PollerStop); return true; }();
     (void)cleanup;
     std::lock_guard lk(g_pollmu);
     g_handler = std::move(handler);
     if (g_pollrun.exchange(true)) return;
-    g_cursor = 0;
     g_poll_finished = false;
     g_poll_thread = std::thread(PollerMain);
     if (!g_keeprun.exchange(true)) g_keep_thread = std::thread(KeepaliveMain);

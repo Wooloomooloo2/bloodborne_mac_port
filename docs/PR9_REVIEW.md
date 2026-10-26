@@ -16,11 +16,22 @@ history are retained. No remote branch, PR description or comments were changed.
   reused connection after a read/write error. A server could already have created or joined a
   room. Only GETs receive that transport retry now. A loopback fixture executes a POST and
   drops the response; it reproduces two executions on the original code and one on this branch.
+- **Idle action connections (PR #78 feedback):** non-poller clients now disable keep-alive.
+  Each action opens a fresh connection, so a bell after minutes of inactivity does not reuse
+  a socket the server has closed. POSTs still receive no transport replay; the continuously
+  active poller retains keep-alive. The fixture checks distinct action connections, success
+  after the server's idle timeout, and connection reuse by the poller.
 - **Overlapping pollers after a context restart:** detached poll/keepalive workers shared a
   restartable flag. Stop now cancels requests and joins both workers before Start can run.
   Context teardown releases the matching mutex before waiting, since the event handler needs
   it. Client replacement/destruction is synchronized with cancellation, and cancellation is
   repeated while the worker exits to cover connection-setup races. Exit cleanup stops workers.
+- **Cursor retention (PR #78 feedback):** context restarts retain the account's observed event
+  cursor. A parsed reply advances it before the stop check or event handler, so stopping
+  before acknowledgement does not replay that observed invite into the replacement context.
+  Events whose reply was lost or cancelled remain unobserved; this is not a server-side
+  context-generation fence. Exit cleanup's comment also records that normal exit waits on a
+  concurrent stop through the lifecycle mutex.
 - **Empty-poll load:** an immediate empty response advertising long polling could create a
   tight request loop. Empty replies are capped at the legacy four requests per second; a
   server-held response is polled again immediately and events still drain immediately.
@@ -58,13 +69,20 @@ history are retained. No remote branch, PR description or comments were changed.
 
 ## Remaining verification
 
-Live sign-in and Mac–Windows co-op with the distinct `bbport-mac` identity still need real
-sessions. The historical intermittent HTTPS failure did not reproduce in a subsequent
-36-request check through the actual x86-64 game HTTP module, including the custom-CA flag;
-see [HTTPS verification](HTTPS_VERIFICATION.md) for results and limits. Authenticated gameplay
-was not tested, so this is not a confirmed fix for the earlier report. The PR discussion records prior
-co-op success, but that does not verify this local rebase. No gameplay or FPS improvement is
-claimed from these network changes. No game files or player credentials were used.
+The original review above used no game files or player credentials. A later authenticated
+gameplay smoke at `9a23eaf` completed sign-in, fresh-character gameplay and reconnect with 37
+HTTP 200 responses and no observed TLS errors. It did not exercise second-player co-op or
+invasions, or measure peak HTTP concurrency; see [HTTPS verification](HTTPS_VERIFICATION.md)
+for evidence and limits. The PR discussion records co-op success on the earlier #9 branch,
+which does not verify this branch's identity and lifecycle changes.
+
+The 2026-10-26 feedback changes built successfully and passed the extended loopback fixture,
+online import/loader tests, P2P codec checks and seven online Python tests. The new fixture
+fails against `9a23eaf` for action keep-alive and, with only that fixed, for replaying an event
+after stop. A separate 48-request probe with four concurrent `sceHttp` workers returned only
+HTTP 307s and no transport/TLS failures, with and without the custom-CA flag. It remains
+unauthenticated GET traffic; the reviewer's signed-in parallel gameplay failure is unresolved.
+These changes have not had a new gameplay or second-player test. No FPS improvement is claimed.
 
 The review app is a local artifact, built with LTO disabled. Its source is this local branch
 until the changes are published; it is not a production release.
