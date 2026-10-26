@@ -564,3 +564,22 @@ path; it has not been tried on macOS, where FSR 4 is not expected to work.)
 **Correction to the A/B above ("the frame is CPU-bound").** Those measurements ran while 12
 hung shadPS4 processes each occupied a core. On an idle system: "host copies" 1.6%, GPU wait
 ~41% — the frame is GPU-bound, so async compute for FSR makes sense again.
+
+## 2026-10-26: HUD-free frame-generation color
+
+The frame interpolator now receives scene color captured before HUD composition.
+On the verified retail display pass, a matching pre-HUD view is processed using
+its actual gamma LUT and sampler into the display target's pixel format. The
+presenter's video-out view then applies the same sRGB decoding and component
+swizzle as for the real frame. Real composited color is kept separately and
+current HUD pixels are restored after interpolation. A missing or unrecognized
+scene/display match clears interpolation history and presents the real frame.
+The existing three-slot lease bound and refresh/cap gate remain in effect.
+
+The full arm64 GPU library builds. The offscreen framegen fixture passes normally
+and with `MTL_DEBUG_LAYER=1`: its interpolator input excludes the colored HUD,
+display gamma is preserved, current HUD restoration is exact, and a translating
+rectangle reaches 49.50 pixels against an expected 49.5-pixel midpoint. Existing
+history/cut/gap, cropped-display and bounded-pool checks pass. The new capture
+path has not been checked in gameplay or benchmarked; earlier framegen timing
+results describe the preceding composited-color implementation.

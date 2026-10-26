@@ -13,6 +13,7 @@
 #include "bbport_metalfx.h"
 #include "ffx_metal/ffx_metal.h"
 #include "bbport_settings.h"
+#include "bbport_shader_fingerprint.h"
 #include "core/memory.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/amdgpu/liverpool.h"
@@ -1217,6 +1218,21 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
         },
         IsTessellated(*pipeline));
+    if (auto frame = upscaler->FrameForDisplay(); frame &&
+        BbShader::Fingerprint(AmdGpu::GetParams(regs.ps_program).code) == 0x86a2e9eb1700b3c1ull &&
+        BbShader::Fingerprint(AmdGpu::GetParams(regs.vs_program).code) == 0xd4cbe93c97d2197aull &&
+        !is_indexed && (num_indices == 3 || num_indices == 4) && num_instances == 1 &&
+        !state.depth.texture && !regs.blend_control[0].enable &&
+        draw_state.scissor_x == 0 && draw_state.scissor_y == 0 &&
+        draw_state.scissor_width >= state.width && draw_state.scissor_height >= state.height &&
+        std::popcount(pipeline->GetGraphicsKey().mrt_mask) == 1) {
+        scheduler.EndRendering();
+        scheduler.Record([generator = upscaler->FrameGenerator(), frame,
+                          display = state.colors[0].texture, resources](Metal::Encoder& e) {
+            generator->CaptureDisplay(e, frame, display, resources.bound);
+        });
+        scheduler.GetDynamicState().Invalidate();
+    }
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
         FrameCapture::Draw(vs_info.pgm_hash, ps ? ps->pgm_hash : 0, num_indices, num_instances);

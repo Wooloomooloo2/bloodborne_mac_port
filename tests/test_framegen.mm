@@ -150,6 +150,32 @@ void Upload(Metal::Device& device, Metal::Encoder& e, void* texture, const void*
     e.KeepAlive(Metal::Object::Adopt((__bridge_retained void*)buffer));
 }
 
+void SceneDisplay(Metal::Device& device, Metal::Encoder& encoder, BbFrameGen::Generator& generator,
+                  const BbFrameGen::FramePtr& frame, void* ui, void* displayed) {
+    auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float
+        width:256 height:1 mipmapped:NO];
+    d.textureType = MTLTextureType2DArray; d.arrayLength = 1;
+    d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead;
+    auto lut = [Dev(device) newTextureWithDescriptor:d];
+    std::vector<float> values(256);
+    for (unsigned i=0; i<256; ++i) {
+        const float x = float(i)/255;
+        values[i] = x <= .04045f ? x/12.92f : std::pow((x+.055f)/1.055f,2.4f);
+    }
+    [lut replaceRegion:MTLRegionMake2D(0,0,256,1) mipmapLevel:0 slice:0
+        withBytes:values.data() bytesPerRow:256*4 bytesPerImage:256*4];
+    auto sd = [MTLSamplerDescriptor new];
+    sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
+    sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+    auto sampler = [Dev(device) newSamplerStateWithDescriptor:sd];
+    const Metal::Draw::Bound bindings[] = {{.texture=ui}, {.texture=(__bridge void*)lut},
+                                           {.sampler=(__bridge void*)sampler}};
+    Expect(generator.CaptureDisplay(encoder, frame, displayed, bindings),
+           "retail gamma pass admits the captured scene view and LUT");
+    encoder.KeepAlive(Metal::Object::Adopt((__bridge_retained void*)lut));
+    encoder.KeepAlive(Metal::Object::Adopt((__bridge_retained void*)sampler));
+}
+
 void Gpu(Metal::Device& device) {
     using namespace BbFrameGen;
     Generator generator{device};
@@ -198,17 +224,21 @@ void Gpu(Metal::Device& device) {
         Upload(device, encoder, ui.Get(), hud.data(), 128, 72, 4);
         generator.FinishUi(encoder, frame, ui.Get());
         Upload(device, encoder, displayed.Get(), display.data(), 128, 72, 4);
+        SceneDisplay(device, encoder, generator, frame, ui.Get(), displayed.Get());
         generator.Interpolate(encoder, frame, displayed.Get());
         auto readback = [Dev(device) newBufferWithLength:128 * 72 * 8
                                                  options:MTLResourceStorageModeShared];
         auto real = [Dev(device) newBufferWithLength:128 * 72 * 8
                                              options:MTLResourceStorageModeShared];
+        auto scene_input = [Dev(device) newBufferWithLength:128 * 72 * 8 options:MTLResourceStorageModeShared];
         auto vectors = [Dev(device) newBufferWithLength:64 * 36 * 4
                                                 options:MTLResourceStorageModeShared];
         encoder.CopyTextureToBuffer(frame->generated.Get(), 0, 0, {}, {128, 72, 1},
                                     {(__bridge void*)readback, 0}, 128 * 8, 128 * 72 * 8);
-        encoder.CopyTextureToBuffer(frame->color.Get(), 0, 0, {}, {128, 72, 1},
+        encoder.CopyTextureToBuffer(frame->real.Get(), 0, 0, {}, {128, 72, 1},
                                     {(__bridge void*)real, 0}, 128 * 8, 128 * 72 * 8);
+        encoder.CopyTextureToBuffer(frame->color.Get(), 0, 0, {}, {128,72,1},
+            {(__bridge void*)scene_input,0},128*8,128*72*8);
         encoder.CopyTextureToBuffer(frame->motion.Get(), 0, 0, {}, {64, 36, 1},
                                     {(__bridge void*)vectors, 0}, 64 * 4, 64 * 36 * 4);
         device.Wait(encoder.Submit());
@@ -217,6 +247,11 @@ void Gpu(Metal::Device& device) {
                "GPU history gates warmup, gaps and camera cuts");
         const auto* a = static_cast<const _Float16*>(readback.contents);
         const auto* b = static_cast<const _Float16*>(real.contents);
+        const auto* clean = static_cast<const _Float16*>(scene_input.contents);
+        const auto hud_pixel = (5 * 128 + 5) * 4;
+        Expect(std::abs(float(clean[hud_pixel])-.21586f)<.01f &&
+               std::abs(float(clean[hud_pixel+2])-.21586f)<.01f,
+               "interpolator color excludes the colored HUD and keeps display gamma");
         const auto centre = (36 * 128 + 64) * 4;
         Expect(std::abs(float(b[centre]) - .21586f) < .005f,
                "video-out view preserves sRGB decoding");
@@ -301,6 +336,7 @@ void Gpu(Metal::Device& device) {
         moving.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get());
         moving.FinishUi(encoder, frame, ui.Get()); // no HUD, so no restoration should run
         Upload(device, encoder, displayed.Get(), image.data(), 128, 72, 4);
+        SceneDisplay(device, encoder, moving, frame, ui.Get(), displayed.Get());
         moving.Interpolate(encoder, frame, displayed.Get());
         auto readback = [Dev(device) newBufferWithLength:128 * 72 * 8
                                                  options:MTLResourceStorageModeShared];
