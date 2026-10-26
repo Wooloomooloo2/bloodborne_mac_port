@@ -67,15 +67,21 @@ Snapshots belong to individual frames and travel with the display buffer to the
 presenter. Three reusable snapshot sets bound allocation (25% fewer sets than the
 original four-set pool); busy slots skip generation without waiting. Deferred
 closures, GPU completion handlers, interpolation history,
-and the final real-frame present pin the relevant sets until all reads complete.
-The real present's completion releases its snapshot before returning the frame
-to the pool; skipped presents release it too. Display-buffer entries hold weak
+and submitted presents pin the relevant sets until all reads complete.
+The last submitted image's completion releases the frame-pool slot and its
+snapshot; skipped images retain no presentation ownership. Display-buffer entries hold weak
 references to a distinct lease for each use of a snapshot allocation, so buffers
 that were drawn but never flipped cannot reserve a set or acquire it after reuse.
 Queued recording, history, and GPU completion handlers keep strong leases until
 their reads finish.
-The two presents wait on the same render tick. A three-drawable layer admits the
-pair; a missing second drawable presents the real frame alone. The same overlay
+The two presents wait on the same render tick. The generated image is submitted
+and its drawable references are released inside a separate autorelease pool before
+acquiring the real image's drawable. Acquiring both first can exhaust the
+three-drawable layer during direct scanout and add whole refresh intervals between
+pairs; composited presentation can hide that stall through earlier drawable reuse.
+Both completion handlers retain the frame-pool slot. If the second acquisition
+fails, the submitted generated image still pins its source through GPU completion;
+the missing real image is skipped safely. The same overlay
 draw data is rendered over both images without advancing UI/input/FPS timing twice.
 The minimum display interval comes only from the configured real FPS cap (half its
 period, with scheduling slack). Measured frame cadence includes drawable waits;
@@ -137,7 +143,32 @@ clamping, refresh/cap gating, warmup/cut/gap resets and moving
 geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
 pixels interpolated to the expected midpoint 49.5. These are fixture results,
 not gameplay or FPS measurements. The existing present and overlay fixtures also
-cover paired drawable retirement and identical overlay pixels.
+cover sequential drawable acquisition, retirement with and without a real image,
+and identical overlay pixels.
+
+### Direct/composited presentation diagnosis (2026-10-26)
+
+A stationary city-gate diagnostic on an M4 Max used MetalFX Quality,
+2560x1440 scene rendering to 3840x2160 output, a 60 FPS real cap, and private
+save/cache copies. The internal display's drawable was 3456x2168; this was a 4K
+render/output test, not a 3840x2160 physical display measurement. Metal HUD's
+direct/composited labels were checked interactively. A small passive overlapping
+window selected composited presentation without resizing the game.
+
+Actual real-frame and drawable-presentation timestamps over 20-second windows:
+
+| Presentation | Acquisition order | Real FPS | Displayed FPS | Display interval P95 |
+| --- | --- | ---: | ---: | ---: |
+| Direct | Acquire both, then submit | 30.53 | 61.08 | 25.00 ms |
+| Composited | Acquire both, then submit | 45.25 | 90.53 | 16.67 ms |
+| Direct | Submit generated, then acquire real | 47.70 | 95.31 | 16.67 ms |
+
+No missing-snapshot or unprimed fallbacks were recorded. The original direct path mostly
+alternated 8.33/25.00 ms display intervals; sequential submission removed that
+plateau. Generation and GPU image work were unchanged. These short diagnostic
+samples isolate the presentation issue; they do not establish a universal speedup
+or guarantee 120 displayed FPS. The scene remained GPU-limited with the corrected
+ordering, and thermal/power conditions were not controlled for a formal benchmark.
 
 ### Gameplay benchmark and pacing regression (2026-10-24)
 

@@ -459,30 +459,38 @@ void TestSnapshot(Device& device, PresentPasses& passes, PresentQueue& queue) {
     unlink(path);
 }
 
-void TestFramePair(Device& device, PresentPasses& passes, PresentQueue& queue) {
-    CAMetalLayer* layer = OffscreenLayer(device, 64, 36, 3);
+void TestFramePair(Device& device, PresentPasses& passes, PresentQueue& queue, bool present_real) {
+    CAMetalLayer* layer = OffscreenLayer(device, 64, 36, 2);
     Object source = RedFrame(device);
     auto packet = std::make_shared<int>(1);
     std::weak_ptr<int> lifetime = packet;
     const u64 tick = device.CurrentTick();
     std::atomic<int> done{0};
     WithAutoreleasePool([&] {
-        auto real = NextDrawable((__bridge void*)layer);
         auto generated = NextDrawable((__bridge void*)layer);
-        Expect(real.drawable && generated.drawable, "three-drawable layer admits a frame pair");
-        if (!real.drawable || !generated.drawable) return;
+        Expect(bool(generated.drawable), "generated drawable acquired independently");
+        if (!generated.drawable) return;
         void* first = queue.Begin();
         queue.WaitForDeviceTick(first, tick);
         passes.Present(first, source.Get(), 64, 36, generated.texture, 64, 36);
-        queue.Commit(first, generated.drawable.Get(), [&done] { ++done; }, .97 / 120);
-        void* second = queue.Begin();
-        queue.WaitForDeviceTick(second, tick);
-        passes.Present(second, source.Get(), 64, 36, real.texture, 64, 36);
-        queue.Commit(second, real.drawable.Get(), [packet, &done] { ++done; }, .97 / 120);
+        queue.Commit(first, generated.drawable.Get(), [packet, &done] { ++done; }, .97 / 120);
     });
+    Expect(queue.InFlight() == 1 && done == 0,
+           "generated image submitted before acquiring the real drawable");
+    if (present_real) {
+        WithAutoreleasePool([&] {
+            auto real = NextDrawable((__bridge void*)layer);
+            Expect(bool(real.drawable), "two-drawable layer admits the next image after submission");
+            if (!real.drawable) return;
+            void* second = queue.Begin();
+            queue.WaitForDeviceTick(second, tick);
+            passes.Present(second, source.Get(), 64, 36, real.texture, 64, 36);
+            queue.Commit(second, real.drawable.Get(), [packet, &done] { ++done; }, .97 / 120);
+        });
+    }
     packet.reset();
     Expect(!lifetime.expired() && done == 0,
-           "pair retains its source while both presents wait for the render tick");
+           "submitted images retain the source even when the real acquisition is skipped");
     Encoder render{device};
     render.CommandBuffer();
     const u64 submitted = render.Submit();
@@ -491,7 +499,8 @@ void TestFramePair(Device& device, PresentPasses& passes, PresentQueue& queue) {
     // Completion handlers release captured state just after notifying WaitIdle.
     for (int n = 0; !lifetime.expired() && n < 100; ++n)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    Expect(done == 2 && lifetime.expired(), "both images complete before source retirement");
+    Expect(done == (present_real ? 2 : 1) && lifetime.expired(),
+           "source retires after every submitted image completes");
 }
 
 void TestEventWait(Device& device, PresentQueue& queue) {
@@ -670,7 +679,8 @@ int main() {
             PresentQueue queue{device};
             TestPresentLetterbox(device, passes, queue);
             TestSnapshot(device, passes, queue);
-            TestFramePair(device, passes, queue);
+            TestFramePair(device, passes, queue, true);
+            TestFramePair(device, passes, queue, false);
             TestEventWait(device, queue);
             TestAutoreleaseLoop(device, passes, queue);
         }

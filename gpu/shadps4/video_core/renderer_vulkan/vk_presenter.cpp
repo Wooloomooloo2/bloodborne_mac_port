@@ -105,9 +105,9 @@ Frame* Presenter::FramePool::Take() {
 }
 
 void Presenter::FramePool::Free(Frame* frame) {
-    // Called after the real present completes (both images use the serial
-    // present queue), or immediately for a skipped frame. Render work pins its
-    // own snapshots. Reusing frame->texture needs no interpolation inputs.
+    // Called after all submitted images release their ownership, or immediately
+    // for a skipped frame. Render work pins its own snapshots. Reusing
+    // frame->texture needs no interpolation inputs.
     frame->framegen.reset();
     {
         std::scoped_lock lock{mutex};
@@ -447,39 +447,52 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             std::printf("Presenter: %u drawables (%s)\n", wanted,
                         window.IsFullscreen() ? "full screen" : "window");
         }
-        Metal::Drawable drawable = Metal::NextDrawable(layer);
-        if (!drawable.drawable) {
-            static std::atomic<bool> logged{false};
-            if (!logged.exchange(true)) {
-                LOG_WARNING(Render_Vulkan, "No drawable from the layer: skipping frame(s)");
-            }
-            BbOverlay::Render(nullptr, nullptr, 0, 0, readings());
-            pool->Free(frame);
-            return;
-        }
-        last_present.acquired = NowNs();
-
-        // Acquire both before submitting either. A missing second drawable falls
-        // back to the real frame. Only the real completion frees the pool slot,
-        // after all reads of the pair on this serial present queue.
-        Metal::Drawable intermediate;
-        const bool pair = framegen_active && !is_reusing_frame && frame->framegen &&
-            frame->generated && frame->framegen->interpolated.load(std::memory_order_acquire);
-        if (pair) intermediate = Metal::NextDrawable(layer);
-        const double duration = intermediate.drawable
-            ? BbFrameGen::PresentDuration(frame->framegen->description.interval,
-                                          EmulatorSettings.GetFrameLimit()) : 0;
-
-        if (intermediate.drawable) {
+        Metal::Drawable drawable;
+        std::shared_ptr<Frame> pair_owner;
+        bool generated_presented = false;
+        double duration = 0;
+        // Submit the generated image before asking for the real image's drawable.
+        // Direct scanout keeps drawables in use longer than the compositor. Holding
+        // an unsubmitted real drawable while waiting for a second one exhausts the
+        // three-buffer layer and inserts extra refresh intervals between pairs.
+        Metal::WithAutoreleasePool([&] {
+            drawable = Metal::NextDrawable(layer);
+            if (!drawable.drawable) return;
+            last_present.acquired = NowNs();
+            const bool pair = framegen_active && !is_reusing_frame && frame->framegen &&
+                frame->generated && frame->framegen->interpolated.load(std::memory_order_acquire);
+            if (!pair) return;
+            // Both callbacks pin the pool slot. If the real acquisition fails,
+            // the generated callback still keeps its source from being overwritten.
+            pair_owner = std::shared_ptr<Frame>(frame, [pool = pool](Frame* owned) {
+                pool->Free(owned);
+            });
+            duration = BbFrameGen::PresentDuration(frame->framegen->description.interval,
+                                                   EmulatorSettings.GetFrameLimit());
             void* const cb = present_queue->Begin();
             const auto tick = draw_scheduler.GetTimeline().DeviceTickOf(frame->ready_tick);
             ASSERT_MSG(tick.has_value(), "Generated frame tick was not committed");
             present_queue->WaitForDeviceTick(cb, *tick);
             pp_pass.Passes().Present(cb, frame->generated.Get(), frame->width, frame->height,
-                intermediate.texture, intermediate.width, intermediate.height);
-            BbOverlay::Render(cb, intermediate.texture, intermediate.width, intermediate.height,
-                              readings());
-            present_queue->Commit(cb, intermediate.drawable.Get(), {}, duration, on_displayed);
+                drawable.texture, drawable.width, drawable.height);
+            BbOverlay::Render(cb, drawable.texture, drawable.width, drawable.height, readings());
+            present_queue->Commit(cb, drawable.drawable.Get(), [pair_owner] {}, duration,
+                                  on_displayed);
+            generated_presented = true;
+            // Drain autoreleased Metal references too, before the next acquisition.
+            drawable = {};
+        });
+        if (generated_presented) drawable = Metal::NextDrawable(layer);
+        if (!drawable.drawable) {
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true)) {
+                LOG_WARNING(Render_Vulkan, "No drawable from the layer: skipping frame(s)");
+            }
+            if (!generated_presented) {
+                BbOverlay::Render(nullptr, nullptr, 0, 0, readings());
+                pool->Free(frame);
+            }
+            return;
         }
 
         void* const command_buffer = present_queue->Begin();
@@ -500,7 +513,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         // The settings menu / FPS counter over the presented image, before the snapshot (which
         // shows it) and the commit. UI time advances once per real/generated pair;
         // the FPS readings come from independent render/presentation measurements.
-        if (intermediate.drawable) {
+        if (generated_presented) {
             BbOverlay::Replay(command_buffer, drawable.texture);
         } else {
             BbOverlay::Render(command_buffer, drawable.texture, drawable.width, drawable.height,
@@ -514,9 +527,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         }
         present_queue->Commit(
             command_buffer, drawable.drawable.Get(),
-            [pool = pool, frame, snapshot, path = std::move(snapshot_path),
+            [pool = pool, frame, pair_owner, snapshot, path = std::move(snapshot_path),
              width = drawable.width, height = drawable.height] {
-                pool->Free(frame);
+                if (!pair_owner) pool->Free(frame);
                 if (snapshot && *snapshot) {
                     // Off the completion thread: it is serial, and the PNG takes ~150 ms that
                     // later presents would wait behind.
@@ -528,7 +541,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                         std::fflush(stdout);
                     }).detach();
                 }
-            }, intermediate.drawable ? duration : PacingSeconds(), on_displayed);
+            }, generated_presented ? duration : PacingSeconds(), on_displayed);
         last_present.submitted = NowNs();
         last_present.presented = last_present.submitted;
     });
