@@ -3,6 +3,7 @@
 #include "bbport_settings.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -26,7 +27,7 @@ bool OwnedKey(const std::string& key) {
     static constexpr const char* owned[] = {
         "upscaler", "preset", "sharpen", "sharpness", "jitter", "reactive", "object_motion",
         "reactive_scale", "reactive_threshold", "reactive_max", "debug_view", "show_fps",
-        "frame_pacing",
+        "frame_pacing", "hdr", "hdr_highlights", "hdr_paper_white", "hdr_peak",
         "model_lod", "output_res",
         "live_resolution", "shader_compile", "renderer",
         "mouse_look", "mouse_sensitivity", "mouse_invert_y"};
@@ -80,6 +81,14 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "frame_pacing") {
         v.frame_pacing = i != 0;
+    } else if (key == "hdr") {
+        v.hdr = i != 0;
+    } else if (key == "hdr_paper_white") {
+        v.hdr_paper_white = std::isfinite(f) ? Clamp(f, 0.5f, 2.0f) : 1.0f;
+    } else if (key == "hdr_peak") {
+        v.hdr_peak = std::isfinite(f) && f > 0.0f ? Clamp(f, 1.0f, 16.0f) : 0.0f;
+    } else if (key == "hdr_highlights") {
+        // Obsolete highlight-recovery setting; removed when the ini is saved.
     } else if (key == "mouse_look") {
         v.mouse_look = i != 0;
     } else if (key == "mouse_sensitivity") {
@@ -125,6 +134,9 @@ std::array<int, 2> OutputSize() {
 
 void Load() {
     auto& v = Get();
+    v.hdr = false;
+    v.hdr_paper_white = 1.0f;
+    v.hdr_peak = 0.0f;
     for (int e = 0; e < EffectCount; ++e) {
         v.effects[e] = Effects[e].default_on;
     }
@@ -185,6 +197,7 @@ void Load() {
     // reads it.
     v.requested_upscaler = v.upscaler.load();
     v.startup_preset = v.preset;
+    v.startup_hdr = v.hdr;
     v.startup_upscaler = v.upscaler;
     v.startup_object_motion = v.object_motion;
     for (int e = 0; e < EffectCount; ++e) {
@@ -255,6 +268,14 @@ int RenderPreset() {
         v.upscaler == UpscalerTaa ? NativeAA : v.preset.load();
 }
 
+bool NativeHdrSupported() {
+    const auto& s = Get();
+    const auto* fixed = std::getenv("BB_RENDER_RES");
+    return OutputSize() == std::array<int,2>{1920,1080} && s.preset == NativeAA &&
+        !s.ultrawide_width && !(fixed && fixed[0]) &&
+        (s.upscaler == UpscalerMetalFx || s.upscaler == UpscalerFsr3 || s.upscaler == UpscalerTaa);
+}
+
 bool ResolutionNeedsRestart() {
     const auto& v = Get();
     // TAA needs the live path (native guest targets): run.sh selects it on restart.
@@ -304,6 +325,8 @@ void Save() {
                  int(v.mouse_look.load()), v.mouse_sensitivity.load(),
                  int(v.mouse_invert_y.load()));
     // Read by patches.py at start.
+    std::fprintf(file, "hdr=%d\nhdr_paper_white=%.2f\nhdr_peak=%.2f\n", int(v.hdr.load()),
+                 v.hdr_paper_white.load(), v.hdr_peak.load());
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));
     }

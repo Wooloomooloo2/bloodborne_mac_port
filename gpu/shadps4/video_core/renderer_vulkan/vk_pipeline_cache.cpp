@@ -24,6 +24,7 @@
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/runtime_info.h"
+#include "shader_recompiler/native_hdr.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -581,6 +582,24 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
             bc.color_dst_factor == AmdGpu::BlendControl::BlendFactor::DstColor;
     }
 
+    // Separate native HDR exports; original SDR targets and guest descriptors stay intact.
+    // Formats are in StageSpecialization, keeping HDR and SDR cache entries distinct.
+    const bool hdr_tone = BbSettings::Get().startup_hdr && BbSettings::NativeHdrSupported() &&
+        !EmulatorSettings.IsPatchShaders() && !skip_cb_binding &&
+        regs.ps_program.Address<u32*>() &&
+        Shader::NativeHdrToneShader(AmdGpu::GetParams(regs.ps_program).hash) &&
+        regs.color_buffers[0] && !(regs.color_buffers[1] && regs.color_target_mask.GetMask(1)) &&
+        !(regs.color_buffers[2] && regs.color_target_mask.GetMask(2)) &&
+        regs.color_buffers[0].NumSamples() == 1 && !db_enabled;
+    if (hdr_tone) {
+        for (u32 cb : {1u, 2u}) {
+            auto& target = key.color_buffers[cb];
+            target = {};
+            target.data_format = AmdGpu::DataFormat::Format16_16_16_16;
+            target.num_format = AmdGpu::NumberFormat::Float;
+            target.swizzle = AmdGpu::IdentityMapping;
+        }
+    }
     // Compile and bind shader stages
     if (!RefreshGraphicsStages(sel)) {
         return false;
@@ -666,6 +685,13 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         key.num_samples = std::max(key.num_samples, color_samples);
     }
 
+    if (hdr_tone && (key.mrt_mask & 6u) == 6u) {
+        for (u32 cb : {1u, 2u}) {
+            key.write_masks[cb] = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                                  vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA;
+            key.color_samples[cb] = 1;
+        }
+    }
     if (sel.motion) {
         constexpr u32 mv = Shader::MotionVectors::Output;
         key.motion_vectors = 1;
@@ -733,6 +759,12 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
 
     const auto* fs_info = sel.infos[static_cast<u32>(SwStage::Fragment)];
     key.mrt_mask = fs_info ? fs_info->mrt_mask : 0u;
+    if (fs_info && Shader::NativeHdrToneShader(fs_info->pgm_hash)) {
+        key.mrt_mask &= 1u;
+        const auto* module = sel.modules[static_cast<u32>(SwStage::Fragment)];
+        if (key.color_buffers[1].data_format == AmdGpu::DataFormat::Format16_16_16_16 &&
+            module && (module->OutputMask() & 7u) == 7u) key.mrt_mask |= 6u;
+    }
     key.num_color_attachments = std::bit_width(key.mrt_mask);
 
     switch (regs.stage_enable.raw) {
@@ -823,6 +855,13 @@ std::unique_ptr<Metal::ShaderModule> PipelineCache::CompileModule(
 
     const auto ir_program = Shader::TranslateProgram(code, pools, info, runtime_info, profile);
     auto spv = Shader::Backend::SPIRV::EmitSPIRV(profile, runtime_info, ir_program, binding);
+    if (Shader::NativeHdrToneShader(info.pgm_hash)) {
+        // Info is shared by every permutation. Extra exports belong to the selected
+        // module, not the guest's persistent shader metadata or its SDR permutations.
+        info.mrt_mask &= 1u;
+        info.stores.flags[Shader::Info::AttributeFlags::Index(Shader::IR::Attribute::RenderTarget1)] = 0;
+        info.stores.flags[Shader::Info::AttributeFlags::Index(Shader::IR::Attribute::RenderTarget2)] = 0;
+    }
     DumpShader(spv, info.pgm_hash, info.hw_stage, perm_idx, "spv");
 
     // The SPIR-V is kept; its Metal forms compile when a pipeline is built (MSL disk cache).
@@ -836,6 +875,16 @@ std::unique_ptr<Metal::ShaderModule> PipelineCache::CompileModule(
                                                         perm_hash);
     RegisterShaderBinary(std::move(spv), info.pgm_hash, perm_idx);
     return module;
+}
+
+const GraphicsPipeline* PipelineCache::HdrUiPipeline(const GraphicsPipeline& source) {
+    if (!source.SupportsHdrUi()) return nullptr;
+    auto& variant = hdr_ui_pipelines[&source];
+    if (!variant) variant = std::make_unique<GraphicsPipeline>(*factory, profile, source);
+    // Preserve the complete original UI while a new MRT variant builds, or if it
+    // fails. Never skip a guest draw or stall the render thread for HDR compilation.
+    if (!variant->IsReady() || variant->Failed() || !variant->Render()) return nullptr;
+    return variant.get();
 }
 
 PipelineCache::Result PipelineCache::GetProgram(PipelineSelection& sel, HwStage hw_stage,

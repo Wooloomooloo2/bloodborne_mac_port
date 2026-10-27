@@ -360,4 +360,84 @@ ZeroInputsRewrite ZeroUnwrittenInputs(std::span<const u32> spirv, u64 locations)
     return result;
 }
 
+ZeroInputsRewrite DuplicateFragmentOutput(std::span<const u32> spirv) {
+    ZeroInputsRewrite result;
+    Module m;
+    if (!Parse(spirv, m)) { result.error = m.error; return result; }
+    const auto fail = [&](const char* reason) {
+        result.error = reason;
+        return result;
+    };
+    if (OutputLocations(spirv) != std::optional<u64>{1})
+        return fail("HDR UI requires exactly one colour output at location zero");
+    u32 output = 0, pointer = 0, vector = 0, scalar = 0, entry = 0, entries = 0;
+    for (const auto& [id, var] : m.variables) {
+        if (var.storage == StorageOutput && m.location.contains(id) && m.location.at(id) == 0) {
+            if (output || !m.pointers.contains(var.type)) return fail("ambiguous UI output");
+            output = id; pointer = var.type; vector = m.pointers.at(pointer).pointee;
+        }
+    }
+    bool float32 = false;
+    for (const auto& in : m.instructions) {
+        const auto* w = spirv.data() + in.offset;
+        if (in.op == OpEntryPoint) {
+            ++entries;
+            if (in.words < 4 || w[1] != 4) return fail("not a fragment entry point");
+            entry = w[2];
+        }
+        if (in.op == 23 && in.words == 4 && w[1] == vector && w[3] == 4) scalar = w[2];
+        if (in.op == OpDecorate && in.words >= 4 && w[1] == output &&
+            w[2] == 32 && w[3] != 0) return fail("dual-source UI output");
+    }
+    for (const auto& in : m.instructions) {
+        const auto* w = spirv.data() + in.offset;
+        if (in.op == 22 && in.words == 3 && w[1] == scalar && w[2] == 32) float32 = true;
+    }
+    if (!output || !float32 || entries != 1) return fail("UI output is not a sole float4");
+    u32 bound = spirv[3];
+    const u32 black = bound++, white = bound++;
+    auto& out = result.spirv;
+    out.assign(spirv.begin(), spirv.begin() + kHeaderWords);
+    bool decorated = false, globals = false, in_entry = false;
+    u32 returns = 0;
+    for (const auto& in : m.instructions) {
+        const auto* w = spirv.data() + in.offset;
+        if (!decorated && in.op >= 19 && in.op <= 39) {
+            out.insert(out.end(), {(4u << 16) | OpDecorate, black, DecorationLocation, 1,
+                                   (4u << 16) | OpDecorate, white, DecorationLocation, 2});
+            decorated = true;
+        }
+        if (in.op == 54) { // OpFunction: globals must precede every function.
+            if (!globals) {
+                out.insert(out.end(), {(4u << 16) | OpVariable, pointer, black, StorageOutput,
+                                       (4u << 16) | OpVariable, pointer, white, StorageOutput});
+                globals = true;
+            }
+            in_entry = in.words >= 3 && w[2] == entry;
+        }
+        if (in.op == OpEntryPoint) {
+            const auto at = out.size();
+            out.insert(out.end(), w, w + in.words);
+            out[at] = ((in.words + 2) << 16) | OpEntryPoint;
+            out.push_back(black); out.push_back(white);
+            continue;
+        }
+        if (in_entry && in.op == 253) { // OpReturn; discarded fragments never reach this.
+            const u32 value = bound++;
+            out.insert(out.end(), {(4u << 16) | OpLoad, vector, value, output,
+                                   (3u << 16) | OpStore, black, value,
+                                   (3u << 16) | OpStore, white, value});
+            ++returns;
+        }
+        out.insert(out.end(), w, w + in.words);
+        if (in.op == 56) in_entry = false;
+    }
+    if (!decorated || !globals || !returns) {
+        result.spirv.clear(); result.error = "incomplete UI entry point"; return result;
+    }
+    out[3] = bound;
+    result.ok = true;
+    return result;
+}
+
 } // namespace Metal

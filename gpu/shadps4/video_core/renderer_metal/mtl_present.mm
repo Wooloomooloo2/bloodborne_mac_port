@@ -134,7 +134,9 @@ void ConfigureLayer(Device& device, void* layer, const LayerConfig& config) {
     CAMetalLayer* l = (__bridge CAMetalLayer*)layer;
     l.device = (__bridge id<MTLDevice>)device.NativeDevice();
     l.pixelFormat = MTLPixelFormat(config.pixel_format);
-    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    l.wantsExtendedDynamicRangeContent = config.extended_range;
+    CGColorSpaceRef srgb = CGColorSpaceCreateWithName(
+        config.extended_range ? kCGColorSpaceExtendedLinearSRGB : kCGColorSpaceSRGB);
     l.colorspace = srgb;
     CGColorSpaceRelease(srgb);
     l.maximumDrawableCount = config.max_drawables;

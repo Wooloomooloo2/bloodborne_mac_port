@@ -51,6 +51,11 @@ public:
                      std::span<const Metal::ShaderModule* const, MaxShaderStages> modules,
                      SerializationSupport& sdata, bool preloading);
     ~GraphicsPipeline();
+    /// Runtime-only one-pass UI variant: original SDR plus two float blend accumulators.
+    GraphicsPipeline(Metal::PipelineFactory& factory, const Shader::Profile& profile,
+                     const GraphicsPipeline& source);
+    bool SupportsHdrUi() const;
+    bool WritesFragmentColor() const;
 
     const std::optional<const Shader::Gcn::FetchShaderData>& GetFetchShader() const noexcept {
         return fetch_shader;

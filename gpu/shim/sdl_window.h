@@ -54,6 +54,7 @@ private:
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
     SDL_Window* window{};
+    u64 next_hdr_poll{};
 #if defined(__APPLE__)
     void* metal_view{}; // SDL_MetalView
 #endif

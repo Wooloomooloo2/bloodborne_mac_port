@@ -48,12 +48,18 @@ public:
     [[nodiscard]] u64 Hash() const noexcept {
         return hash;
     }
+    [[nodiscard]] u64 OutputMask() const noexcept { return output_mask; }
+    /// Runtime-only fragment variant for one-pass HDR UI accumulation; null if unsupported.
+    const ShaderModule* NativeHdrUi() const;
 
 private:
     friend class PipelineFactory;
 
     std::vector<u32> spirv;
     u64 hash;
+    u64 output_mask{};
+    mutable std::once_flag hdr_ui_once;
+    mutable std::unique_ptr<ShaderModule> hdr_ui;
     mutable std::once_flag plain_once;
     mutable std::unique_ptr<CompiledShader> plain;
     mutable std::once_flag rect_once; ///< the RectList rewrite of a vertex shader

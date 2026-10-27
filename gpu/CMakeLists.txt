@@ -217,6 +217,7 @@ if (APPLE)
         shadps4/video_core/renderer_metal/mtl_order.cpp
         shadps4/video_core/renderer_metal/mtl_depth_stencil.mm
         shadps4/video_core/renderer_metal/mtl_present.mm
+        shadps4/video_core/renderer_metal/mtl_hdr.mm
         shadps4/video_core/renderer_metal/mtl_render_pipeline.mm
         shadps4/video_core/renderer_metal/mtl_scale.mm
         shadps4/video_core/renderer_metal/mtl_specialize.cpp
@@ -226,6 +227,13 @@ if (APPLE)
     add_library(bbmetal_core STATIC ${METAL_CORE_SOURCES})
     target_include_directories(bbmetal_core PRIVATE shim shadps4 ${SHADER_INCLUDE})
     target_compile_features(bbmetal_core PRIVATE cxx_std_20)
+    add_executable(mtl-hdr-test EXCLUDE_FROM_ALL ../tests/test_mtl_hdr.mm
+        shim/common/logging/log.cpp shim/common/assert.cpp)
+    target_include_directories(mtl-hdr-test PRIVATE shim shadps4)
+    target_compile_options(mtl-hdr-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    set_source_files_properties(../tests/test_mtl_hdr.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(mtl-hdr-test PRIVATE bbmetal_core fmt::fmt
+        "-framework Metal" "-framework AppKit" "-framework QuartzCore" "-framework ImageIO")
     target_link_libraries(bbmetal_core PRIVATE fmt::fmt)
     set_target_properties(bbmetal_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
     foreach(source IN LISTS METAL_CORE_SOURCES)
@@ -237,9 +245,10 @@ if (APPLE)
     file(GLOB METAL_SOURCES CONFIGURE_DEPENDS shadps4/video_core/renderer_metal/*.cpp
          shadps4/video_core/renderer_metal/*.mm)
     list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_object.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer_barriers.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_compiled_shader.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_counters.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_device.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_draw_core.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_encoder.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_order.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_depth_stencil.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_present.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_render_pipeline.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_scale.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_specialize.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_texture.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_timeline.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/vk_to_mtl.mm)
+    list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_hdr.mm)
     target_sources(bbgpu PRIVATE ${METAL_SOURCES})
     target_link_libraries(bbgpu PRIVATE bbmetal_core "-framework Metal" "-framework QuartzCore"
-        "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation")
+        "-framework CoreGraphics" "-framework ImageIO" "-framework Foundation" "-framework AppKit")
     foreach(source IN LISTS METAL_SOURCES)
         if (source MATCHES "\\.mm$")
             set_source_files_properties(${source} PROPERTIES COMPILE_OPTIONS
@@ -300,6 +309,11 @@ add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
 add_executable(motion-shader-test EXCLUDE_FROM_ALL ../tests/test_motion_shaders.cpp ../tests/test_gpu_runtime_stubs.cpp)
+add_executable(native-hdr-shader-test EXCLUDE_FROM_ALL ../tests/test_native_hdr_shader.mm ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(native-hdr-shader-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(native-hdr-shader-test PRIVATE bbgpu)
+target_compile_options(native-hdr-shader-test PRIVATE -UNDEBUG)
+target_link_options(native-hdr-shader-test PRIVATE -Wl,-export_dynamic)
 target_include_directories(motion-shader-test PRIVATE shim shadps4 third_party/gcn/include)
 target_link_libraries(motion-shader-test PRIVATE bbgpu)
 add_executable(ui-composition-test EXCLUDE_FROM_ALL ../tests/test_ui_composition.cpp)
