@@ -171,6 +171,18 @@ struct LauncherView: View {
                     }
                     Toggle("Show FPS", isOn: $model.settings.showFPS)
                 }
+                Section("Screen-space lighting") {
+                    Picker("Additional lighting", selection: $model.settings.screenLighting) {
+                        ForEach(ScreenLighting.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    if model.settings.screenLighting != .off {
+                        Slider(value: $model.settings.screenLightingAO, in: 0...1) { Text("Extra occlusion") }
+                        Slider(value: $model.settings.screenLightingGI, in: 0...2) { Text("Indirect light") }
+                    }
+                    Text("Adds contact shading and bounced light from visible surfaces. Uses more GPU time; the game's SSAO stays separate.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Section("Locations") {
                     FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
                               problem: model.checkingGame ? nil : model.gameProblem,

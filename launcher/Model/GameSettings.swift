@@ -23,6 +23,14 @@ enum Upscaler: String, CaseIterable, Identifiable {
     static let launcherChoices: [Upscaler] = [.off, .fsr3, .metalfx, .taa]
 }
 
+enum ScreenLighting: String, CaseIterable, Identifiable {
+    case off, low, high
+    var id: String { rawValue }
+    var label: String {
+        switch self { case .off: "Off"; case .low: "Low"; case .high: "High" }
+    }
+}
+
 enum FrameCap: Int, CaseIterable, Identifiable {
     case fps30 = 30, fps40 = 40, fps60 = 60, fps90 = 90, fps120 = 120
     var id: Int { rawValue }
@@ -118,6 +126,9 @@ struct GameSettings: Equatable {
     var sharpen = true
     var sharpness = 0.3
     var showFPS = false
+    var screenLighting = ScreenLighting.off
+    var screenLightingAO = 0.5
+    var screenLightingGI = 0.7
     var metalHUD = false
     /// bbport.ini mouse_look (PR #20): the mouse turns the camera after a click in the window,
     /// and the arrow keys are the d-pad.
@@ -159,6 +170,13 @@ struct GameSettings: Equatable {
         if let v = flag("sharpen") { sharpen = v }
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
         if let v = flag("show_fps") { showFPS = v }
+        if let v = ini["screen_lighting"].flatMap(ScreenLighting.init(rawValue:)) { screenLighting = v }
+        if let v = ini["screen_lighting_ao"].flatMap(Double.init), v.isFinite {
+            screenLightingAO = min(max(v, 0), 1)
+        }
+        if let v = ini["screen_lighting_gi"].flatMap(Double.init), v.isFinite {
+            screenLightingGI = min(max(v, 0), 2)
+        }
         if let v = flag("metal_hud") { metalHUD = v }
         if let v = flag("mouse_look") { mouseLook = v }
         for effect in Self.effects {
@@ -195,6 +213,9 @@ struct GameSettings: Equatable {
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
+        ini["screen_lighting"] = screenLighting.rawValue
+        ini["screen_lighting_ao"] = String(format: "%.2f", screenLightingAO)
+        ini["screen_lighting_gi"] = String(format: "%.2f", screenLightingGI)
         ini["metal_hud"] = metalHUD ? "1" : "0"
         ini["mouse_look"] = mouseLook ? "1" : "0"
         for effect in Self.effects {
