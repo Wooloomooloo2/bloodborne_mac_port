@@ -856,6 +856,17 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
+- **Fixed for 0.5.10: the old launcher stayed open after an update (#96, 2026-10-27).** AppKit
+  refuses to quit while a sheet is attached: `NSApp.terminate` returns without asking the
+  delegate, so 0.5.9-test1 stayed on "Installing…" (⌘Q dead too) beside the new copy. Reproduced
+  with the real 0.5.9-test1 → 0.5.9 update in a scratch folder. #87 (after 0.5.9) hides the
+  windows first, which takes the sheet down; `Updater.install` now also `exit(0)`s if terminate
+  still returns. Verified: the old copy exits ~7 s after Install, the new one opens alone.
+  *Still open:* the fix runs in the *old* copy, so updating **from** 0.5.9 to 0.5.10 shows the
+  bug once more (say so in the 0.5.10 notes: quit the old window with Force Quit). Also, ⌘Q is
+  ignored whenever a launcher sheet is open (any sheet, not only updates): standard AppKit, but
+  players read it as a hang; consider ending the sheet in `applicationShouldTerminate`'s path.
+
 - **Local apps from `make_app.sh` never get Game Mode (2026-10-26).** Its `bbgpu-host*` are
   symlinks into `out/`, so macOS sees anonymous processes outside the bundle and gamepolicyd only
   recognises the launcher (packaged apps: all three processes, "Plist category type"). Copy or

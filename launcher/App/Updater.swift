@@ -99,8 +99,14 @@ final class Updater: ObservableObject {
             status = .failed("The update is installed; open Bloodborne again to use it (\(error.localizedDescription)).")
             return
         }
-        for window in NSApp.windows { window.orderOut(nil) } // nothing left on screen while quitting
+        // Nothing left on screen while quitting. Hiding also takes down this update sheet: AppKit
+        // refuses to quit while a sheet is attached (terminate returns without asking the
+        // delegate), which left 0.5.9-test1 open on "Installing…" beside the new copy (#96).
+        for window in NSApp.windows { window.orderOut(nil) }
         NSApp.terminate(nil)
+        // terminate returns only when the quit was refused. The settings were saved before the
+        // install (LauncherModel.installUpdate) and the new copy is in place, so leave anyway.
+        exit(0)
     }
 
     /// Downloads `update`, checks it and puts it in place of the app at `bundle`.
