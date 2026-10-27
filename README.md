@@ -15,9 +15,9 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
-## Status (2026-10-26)
+## Status (2026-10-27)
 
-**Current version: [mac-v0.5.9](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.9)** (download the app, or build it as below).
+**Current version: [mac-v0.5.10](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.10)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -30,8 +30,31 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
 
 **Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
 @evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
-The opening-movie freeze and crash are fixed in 0.5.8, and the slowdowns on 16-18 GB Macs (#69)
-in 0.5.9. Online play (#9) is still in progress.
+The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
+in 0.5.9, and 0.5.10 adds rebindable controls. Online play (#9) is still in progress.
+
+### New in 0.5.10: rebindable controls, a crash fix, choose the display
+
+- **Rebindable keys and mouse buttons.** The launcher has a new **Controls** page: every action
+  (movement, camera, buttons, d-pad, Options, touch pad) can take keys or mouse buttons, two per
+  action, and the mouse wheel can be bound too. There is a **walk** key (Left Alt by default:
+  movement keys push the stick half way), a vertical mouse speed, and mouse sensitivity now goes
+  up to 10. The defaults are the 0.5.9 layout, so nothing changes until you rebind something.
+- **Fixed: the GPU process crash in fights** (#74; "signal 11 in StageSpecialization", seen
+  fighting Ebrietas and in the Forbidden Woods). The game sometimes leaves a resource table
+  empty; the port read through it and crashed. It now reads zeros there, as the PS4's GPU does.
+- **Choose the display the game opens on** (#60): with a second display connected, the launcher
+  shows a **Display** picker. Full screen opens there too. If that display isn't connected, the
+  game opens on the main one.
+- **5120×2160 (21:9)** native resolution (#93), under **Ultrawide or 16:10** in the launcher
+  (60 FPS on an M4 Max in Central Yharnam). Below 24 GB of memory the launcher warns, as for
+  3440×1440.
+- **The mouse cursor hides** after 3 seconds without moving over the game window (#93), and
+  comes back as soon as you move or click.
+- **Updates no longer leave the old launcher open** (#96): after **Install Update**, the old
+  copy stayed on "Installing…" beside the new one. This is fixed in 0.5.10's updater, so it
+  takes effect from the *next* update: when updating from 0.5.9, the old window can still stay
+  open once. Quit it with ⌥⌘Esc (Force Quit); the update itself is installed.
 
 ### New in 0.5.9: 16-18 GB Macs run at full speed
 
@@ -395,7 +418,7 @@ the log.
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
 - **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
-- Rebindable keys and mouse buttons (launcher **Controls** page), and a faster, more direct mouse camera.
+- A faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
@@ -793,12 +816,12 @@ Thank you to everyone who sent pull requests:
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
 @satperm, @IlyaDylko (keyboard sprint #61, long-session FPS #55), @wgorecodes (stuck game #71,
-preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9), @Sah-D (#47),
+preferred display #60), @Frosty2804 (16:10, #75), @lifeos-creator (M3 Pro, #53/#69, tested 0.5.9; the updater, #96), @Sah-D (#47),
 @ulhaas, @Ohaq2108 and @rozenstein94 (the opening-movie freeze, #46), @khhan0703 (the opening-movie crash, #84, tested 0.5.9), @Didjus (#18),
 @PensionPlanning (#19), @muharremsedona6034gm-hub (#22), @Walltor (#25), @AmberUpraity,
 @VanDung-dev, @douglasrlee, @jefer9011 and @mariuszparowa666 (GPU stalls, fixed in 0.5.4.2),
 @zhouhaoyaomei-ship-it, @SimonKabb and @juliotwo (the memmove crash, fixed in 0.5.5), @ELLDev
-(#74), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
+and @GChaucer (the GPU crash in fights, #74), @brewboi (5120×2160 and the cursor, #93), @danielsirbubusiness (#83, tested 0.5.9), @g3rro333333333, @rwv7p56n9s-cmyk, @LICHTYYYVVV and @vtsilva77.
 
 Each third-party component keeps its own license file in its directory.
 

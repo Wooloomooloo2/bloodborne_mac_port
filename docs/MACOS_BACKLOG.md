@@ -856,7 +856,7 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 3. Mac GUI
 
-- **Fixed for 0.5.10: the old launcher stayed open after an update (#96, 2026-10-27).** AppKit
+- **Fixed in 0.5.10: the old launcher stayed open after an update (#96, 2026-10-27).** AppKit
   refuses to quit while a sheet is attached: `NSApp.terminate` returns without asking the
   delegate, so 0.5.9-test1 stayed on "Installing…" (⌘Q dead too) beside the new copy. Reproduced
   with the real 0.5.9-test1 → 0.5.9 update in a scratch folder. #87 (after 0.5.9) hides the
