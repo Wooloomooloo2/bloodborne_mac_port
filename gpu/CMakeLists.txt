@@ -291,6 +291,14 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(shader-userdata-test EXCLUDE_FROM_ALL ../tests/test_shader_userdata.cpp
+    shadps4/shader_recompiler/frontend/fetch_shader.cpp
+    shadps4/shader_recompiler/frontend/decode.cpp
+    shadps4/shader_recompiler/frontend/format.cpp
+    shim/common/assert.cpp shim/common/logging/log.cpp)
+target_include_directories(shader-userdata-test PRIVATE shim shadps4)
+target_compile_options(shader-userdata-test PRIVATE -UNDEBUG)
+target_link_libraries(shader-userdata-test PRIVATE fmt::fmt Boost::headers magic_enum::magic_enum)
 add_executable(draw-pipe-wait-test EXCLUDE_FROM_ALL ../tests/test_draw_pipe_wait.cpp
     shim/common/logging/log.cpp)
 target_include_directories(draw-pipe-wait-test PRIVATE shim shadps4)
