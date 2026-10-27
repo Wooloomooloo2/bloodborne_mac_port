@@ -310,9 +310,6 @@ bool TemporalUpscaler::OnFrameStart() {
 }
 
 void TemporalUpscaler::OnDispatch(u64 cs_hash) {
-    if (cs_hash == trigger_hash && scene_color && !hdr_scene_valid && BbSettings::Get().startup_hdr) {
-        CaptureHdr(scene_color, true);
-    }
     if (cs_hash != trigger_hash || done_this_frame || failed || Scaled()) {
         return;
     }
@@ -914,10 +911,6 @@ void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
 
 void TemporalUpscaler::OnDraw(u64 vs_hash, VideoCore::ImageId color,
                               VideoCore::ImageId depth, bool native_viewport) {
-    if (BbSettings::Get().startup_hdr && hdr_scene_valid && !hdr_ui_valid && color &&
-        (vs_hash == ui_trigger_vs || UiComposition::MovieShader(vs_hash))) {
-        CaptureHdr(color, false);
-    }
     // bbport: color draws only; depth-only draws (reported since #17) leave 1080p as before.
     if (!Scaled() && color && vs_hash == ui_trigger_vs) done_this_frame = true;
     if (Scaled() && ui_phase && !color && depth && depth != ui_depth &&
@@ -1152,56 +1145,6 @@ void TemporalUpscaler::RunScaled() {
         ui_color = ldr_target;
         ui_depth = camera_motion.Depth();
     }
-}
-
-void TemporalUpscaler::CaptureHdr(VideoCore::ImageId id, bool scene) {
-    auto& image = texture_cache.GetImage(id);
-    // UI-free copies are linear. A plain RGBA8 guest target is sampled via its sRGB twin.
-    VideoCore::ImageViewInfo view;
-    view.format = image.info.pixel_format;
-    if (!scene) {
-        if (view.format == vk::Format::eR8G8B8A8Unorm) view.format = vk::Format::eR8G8B8A8Srgb;
-        else if (view.format == vk::Format::eB8G8R8A8Unorm) view.format = vk::Format::eB8G8R8A8Srgb;
-        else if (view.format != vk::Format::eR8G8B8A8Srgb && view.format != vk::Format::eB8G8R8A8Srgb) return;
-    }
-    scheduler.EndRendering();
-    void* input = nullptr;
-    u32 w = image.info.size.width, h = image.info.size.height;
-    if (scene && ReducedScene(image)) {
-        const auto proxy = scene_targets.Read(id, view);
-        input = proxy.texture;
-        w = scene_targets.Size().width; h = scene_targets.Size().height;
-    } else {
-        runtime.AccessImage(&image, false);
-        input = image.FindView(view).Texture();
-    }
-    if (!input || !w || !h) return;
-    auto& target = scene ? hdr_scene : hdr_hudless;
-    auto& width = scene ? hdr_scene_width : hdr_ui_width;
-    auto& height = scene ? hdr_scene_height : hdr_ui_height;
-    if (!target || w != width || h != height) {
-        target = CreateTexture(device, vk::Format::eR16G16B16A16Sfloat, w, h, true, false,
-                               false, scene ? "HDR scene capture" : "HDR UI-free capture");
-        width = w; height = h;
-    }
-    scheduler.Record([this, source = Metal::Object::Retain(input),
-                      output = Metal::Object::Retain(target.Get())](Metal::Encoder& e) mutable {
-        scale.ScaleColor(e, source.Get(), output.Get(), Metal::ScaleFilter::Linear);
-        e.KeepAlive(std::move(source)); e.KeepAlive(std::move(output));
-    });
-    scheduler.GetDynamicState().Invalidate();
-    (scene ? hdr_scene_valid : hdr_ui_valid) = true;
-}
-
-TemporalUpscaler::HdrCaptures TemporalUpscaler::TakeHdrCaptures() {
-    HdrCaptures result;
-    if (hdr_scene_valid && hdr_ui_valid) {
-        result = {Metal::Object::Retain(hdr_scene.Get()), Metal::Object::Retain(hdr_hudless.Get())};
-        static bool logged = false;
-        if (!logged) { std::printf("HDR: matched scene and UI-free captures\n"); logged = true; }
-    }
-    hdr_scene_valid = hdr_ui_valid = false;
-    return result;
 }
 
 void* TemporalUpscaler::Mirror(void* texture, vk::Format texture_format,

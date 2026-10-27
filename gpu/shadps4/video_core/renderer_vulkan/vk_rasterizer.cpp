@@ -24,6 +24,7 @@
 #include "video_core/renderer_vulkan/vk_depth_attachment.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+#include "shader_recompiler/native_hdr.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
 #include "bbport_threads.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -75,6 +76,7 @@ Rasterizer::Rasterizer(Metal::Device& device_, Scheduler& scheduler_, Runtime& r
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(device, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
+    native_hdr = std::make_unique<NativeHdr>(device, scheduler);
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -1046,6 +1048,7 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if ((camera_motion->Enabled() || object_motion->Enabled()) && regs.color_buffers[0] &&
         FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
         scene_started = false;
+        native_hdr->OnDisplay(regs.color_buffers[0].Address());
         camera_motion->OnDisplayPass(cb_descs[0].first);
         if (upscaler->OnFrameStart()) {
             object_motion->InvalidateHistory();
@@ -1064,6 +1067,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
 
     SetDrawEncoders(*pipeline);
     PrepareRenderState(pipeline);
+    const auto* hdr_ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    native_hdr->OnDraw(pipeline->GetStage(Shader::SwStage::Vertex).pgm_hash,
+                       hdr_ps ? hdr_ps->pgm_hash : 0);
     // bbport: one color target, or none with a depth target (Scaleform's stencil masks).
     if (const u32 mrt_mask = pipeline->GetGraphicsKey().mrt_mask;
         upscaler->Enabled() && (std::popcount(mrt_mask) == 1 || (mrt_mask == 0 && db_desc.first))) {
@@ -1083,7 +1089,27 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     if (!bound) {
         return;
     }
-    const auto state = BeginRendering(pipeline);
+    auto state = BeginRendering(pipeline);
+    const GraphicsPipeline* render_pipeline = pipeline;
+    if (native_hdr->InUi()) {
+        const auto& blend = pipeline->GetGraphicsKey().blend_controls[0];
+        using F = AmdGpu::BlendControl::BlendFactor;
+        const auto dependent_alpha = [](F f) {
+            return f == F::DstAlpha || f == F::OneMinusDstAlpha || f == F::SrcAlphaSaturate ||
+                f == F::Src1Color || f == F::InvSrc1Color || f == F::Src1Alpha || f == F::InvSrc1Alpha;
+        };
+        if (blend.enable && (blend.color_func != AmdGpu::BlendControl::BlendFunc::Add ||
+            dependent_alpha(blend.color_src_factor) || dependent_alpha(blend.color_dst_factor) ||
+            blend.color_dst_factor == F::DstColor || blend.color_dst_factor == F::OneMinusDstColor))
+            native_hdr->RejectUi();
+    }
+    if (native_hdr->InUi() && state.num_colors && pipeline->WritesFragmentColor()) {
+        if (const auto* hdr_ui = pipeline_cache.HdrUiPipeline(*pipeline)) {
+            if (native_hdr->UiState(state)) render_pipeline = hdr_ui;
+        } else {
+            native_hdr->RejectUi();
+        }
+    }
 
     if (!inputs_resolved) {
         ResolveVertexBuffers(pipeline, draw_prepared);
@@ -1214,9 +1240,9 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // waits for it as late as possible (failed: the draw helper skips and counts it).
     scheduler.RecordDraw(
         [=, runs = &scheduler.GetDrawRuns()](Metal::Encoder& e) {
-            runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
+            runs->Draw(e, DrawPipelines(*render_pipeline), draw_state, resources, draw_args);
         },
-        IsTessellated(*pipeline));
+        IsTessellated(*render_pipeline));
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
         FrameCapture::Draw(vs_info.pgm_hash, ps ? ps->pgm_hash : 0, num_indices, num_instances);
@@ -1277,6 +1303,7 @@ void Rasterizer::DrawIndirectRecord(const GraphicsPipeline* pipeline, bool is_in
         FrameCapture::Poll();
         scheduler.PopPendingOperations();
     }
+    if (native_hdr->InUi()) native_hdr->RejectUi(); // indirect UI capture is not admitted
     const VAddr count_address = indirect.count;
     const u32 stride = indirect.stride;
     const u32 max_count = indirect.max_count;
@@ -1558,6 +1585,9 @@ bool Rasterizer::HelperEligible(const Pipeline* pipeline) const {
         if (!stage) {
             continue;
         }
+        // Grading capture updates command-thread HDR state; other stages retain
+        // the existing optional texture-binding helper.
+        if (native_hdr->Enabled() && stage->pgm_hash == 0xed4c7668) return false;
         // Mip arrays make the descriptor layout depend on the T#s.
         for (const auto& image : stage->images) {
             if (image.mip_fallback_mode != Shader::MipStorageFallbackMode::None) {
@@ -2201,6 +2231,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     memory->IsValidGpuMapping(ring->address, 0)) {
                     camera_motion->OnConstants(reinterpret_cast<const float*>(ring->address));
                 }
+                if (ring->size >= 852 * sizeof(float) &&
+                    memory->IsValidGpuMapping(ring->address, 0) &&
+                    memory->ClampRangeSize(ring->address, ring->size) == ring->size)
+                    native_hdr->Constants(stage.pgm_hash, reinterpret_cast<const void*>(ring->address), ring->size);
                 push_data.AddOffset(binding.buffer, 0);
             }
             const Metal::BufferRef ring_ref = constant_ring->Handle();
@@ -2273,6 +2307,10 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
         } else {
             const auto vsharp =
                 prepared ? prepared->buffer_sharps[buffer_index] : desc.GetSharp(stage);
+            if (vsharp.GetSize() >= 852 * sizeof(float) &&
+                memory->IsValidGpuMapping(vsharp.base_address, 0) &&
+                memory->ClampRangeSize(vsharp.base_address, vsharp.GetSize()) == vsharp.GetSize())
+                native_hdr->Constants(stage.pgm_hash, reinterpret_cast<const void*>(vsharp.base_address), vsharp.GetSize());
             if (vsharp.GetSize() == 864 && gbuffer_draw &&
                 memory->IsValidGpuMapping(vsharp.base_address, 0)) {
                 camera_motion->OnConstants(reinterpret_cast<const float*>(vsharp.base_address));
@@ -2605,6 +2643,11 @@ void Rasterizer::BindTextures(const Shader::Info& stage, const PreparedStage* pr
                 upscaler->RedirectSampled(image_id, image_view.info, texture);
             }
             image_infos.push_back({.texture = texture});
+            if (stage.pgm_hash == 0xed4c7668) {
+                if (binding_index == 0)
+                    native_hdr->GradingInput(image_view.info.mapping.r == vk::ComponentSwizzle::eB);
+                if (binding_index == 1) native_hdr->GradingLut(texture);
+            }
             if (set_ok && binding_index < resolved.size()) {
                 resolved[binding_index] = {image_id, image_view.Texture(), image.backing,
                                            desc.view_info.range};
@@ -2725,6 +2768,7 @@ Rasterizer::BeginSignature Rasterizer::MakeBeginSignature(const GraphicsPipeline
 
 bool Rasterizer::BindTexturesFromSet(const Shader::Info& stage, const PreparedStage* prepared,
                                      TextureSet*& slot) {
+    if (native_hdr->Enabled() && stage.pgm_hash == 0xed4c7668) return false;
     const u32 count = static_cast<u32>(stage.images.size());
     if (!prepared || count == 0 || count > TextureSet::MaxImages ||
         BbToggle::Disabled(BbToggle::TextureSetMemo) || FrameCapture::Active()) {
@@ -3141,6 +3185,9 @@ RenderState Rasterizer::BeginRenderingFull(const GraphicsPipeline* pipeline) {
     if (key.motion_vectors) {
         object_motion->Attach(state, state.width, state.height);
     }
+    if (native_hdr->Enabled() && key.mrt_mask == 7u &&
+        Shader::NativeHdrToneShader(pipeline->GetStage(Shader::SwStage::Fragment).pgm_hash))
+        native_hdr->Attach(state);
     // bbport: draws with no pixel shader and no attachments (vertex shaders that only write
     // memory) produce no fragments anyone can see, but the render area stayed at the device
     // maximum, 16384x16384: Apple's tiler walked ~260k tiles for each such pass, ~0.3 ms apiece,

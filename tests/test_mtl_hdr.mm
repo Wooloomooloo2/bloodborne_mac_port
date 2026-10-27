@@ -45,43 +45,99 @@ std::vector<float> Read(Device& device, Encoder& encoder, void* texture, u32 w, 
 void Run(Device& device) {
     HdrPasses hdr(device);
     constexpr u32 w=64,h=36;
-    std::vector<u8> pixels(w*h*4,84); // sRGB ~0.2
-    std::vector<__fp16> clean(w*h*4, __fp16(Linear(84.0f/255.0f)));
-    std::vector<__fp16> scene=clean;
-    for (u32 i=0;i<w*h;++i) { pixels[i*4+3]=255; clean[i*4+3]=scene[i*4+3]=1; }
-    // Large lamp (not an edge), an opaque HUD element, and an invalid scene sample.
-    for (u32 y=10;y<26;++y) for (u32 x=24;x<40;++x) {
-        for (u32 c=0;c<3;++c) {
-            pixels[(y*w+x)*4+c]=218;
-            clean[(y*w+x)*4+c]=__fp16(Linear(218.0f/255.0f));
-            scene[(y*w+x)*4+c]=4;
-        }
-    }
-    for (u32 c=0;c<3;++c) { pixels[(18*w+8)*4+c]=255; scene[c]=__fp16(std::numeric_limits<float>::infinity()); }
+    std::vector<u8> pixels(w*h*4,84);
+    std::vector<__fp16> light(w*h*4, __fp16(0.18f)), bloom(w*h*4, __fp16(0));
+    for (u32 i=0;i<w*h;++i) { pixels[i*4+3]=255; light[i*4+3]=0; }
+    for (u32 y=10;y<26;++y) for (u32 x=24;x<40;++x)
+        for (u32 c=0;c<3;++c) light[(y*w+x)*4+c]=64;
+    // Both highlights quantise to the same SDR white. Native HDR must retain their difference.
+    for (u32 c=0;c<3;++c) { light[(5*w+5)*4+c]=16; light[(5*w+10)*4+c]=32; }
+    for (u32 c=0;c<3;++c) { bloom[(5*w+15)*4+c]=1.2f; bloom[(5*w+20)*4+c]=3; }
+    light[0]=__fp16(std::numeric_limits<float>::infinity());
+    for (u32 c=0;c<3;++c) light[4+c]=0;
     auto frame=Upload(device,MTLPixelFormatBGRA8Unorm,w,h,pixels.data(),w*4);
-    auto before=Upload(device,MTLPixelFormatRGBA16Float,w,h,scene.data(),w*8);
-    auto hudless=Upload(device,MTLPixelFormatRGBA16Float,w,h,clean.data(),w*8);
+    auto before=Upload(device,MTLPixelFormatRGBA16Float,w,h,light.data(),w*8);
+    auto bloom_image=Upload(device,MTLPixelFormatRGBA16Float,w,h,bloom.data(),w*8);
+    std::vector<u8> game_ui(w*h*4,0);
+    for (u32 c=0;c<4;++c) game_ui[(18*w+8)*4+c]=255;
+    for (u32 c=0;c<4;++c) game_ui[(18*w+12)*4+c]=128;
+    auto game_overlay=Upload(device,MTLPixelFormatBGRA8Unorm,w,h,game_ui.data(),w*4);
     auto output=CreateTexture(device,{.pixel_format=MTLPixelFormatRGBA16Float,.width=w,.height=h,
         .shader_write=true},"HDR test output",nullptr);
-    auto convert=[&](float headroom,float highlights,bool captures) {
+    auto convert=[&](float headroom,float white=1.0f,float peak=0.0f) {
         Encoder e(device);
-        hdr.Convert(e,frame.Get(),captures?before.Get():nullptr,captures?hudless.Get():nullptr,
-                    output.Get(),headroom,highlights);
+        NativeHdrParams p;
+        p.headroom=headroom; p.paper_white=white; p.peak=peak; p.has_ui=1;
+        hdr.ConvertNative(e,before.Get(),bloom_image.Get(),nullptr,game_overlay.Get(),output.Get(),p);
         return Read(device,e,output.Get(),w,h);
     };
-    const auto bright=convert(3,0.5f,true);
-    Check(bright[(18*w+32)*4] > 2.5f,"lamp recovers brightness above SDR white");
-    Check(std::abs(bright[(18*w+8)*4]-1) < 0.005f,"game HUD stays at SDR white");
-    Check(std::abs(bright[(18*w+50)*4]-Linear(84.0f/255.0f)) < 0.005f,"midtones retain SDR luminance");
-    for (float value:bright) Check(std::isfinite(value)&&value>=0&&value<=3.001f,"finite bounded HDR output");
-    for (const auto& result : {convert(1,0.5f,true),convert(3,0,false),convert(3,0,true),
-                             convert(3,0.5f,false),convert(NAN,0.5f,true)}) {
-        for (u32 i=0;i<w*h;++i) for (u32 c=0;c<3;++c) {
-            Check(std::abs(result[i*4+c]-Linear(pixels[i*4+c]/255.0f)) < 0.005f,
-                  "SDR fallback/no captures/zero strength matches sRGB decode");
-        }
+    const auto bright=convert(4);
+    Check(bright[(18*w+32)*4]>3.9f,"native lamp reaches HDR peak");
+    Check(bright[4]==0 && bright[5]==0 && bright[6]==0,"black stays black");
+    Check(bright[(5*w+10)*4]-bright[(5*w+5)*4]>0.01f,
+          "different scene highlights survive identical clipped SDR whites");
+    Check(bright[(5*w+20)*4]>bright[(5*w+15)*4]+0.05f,
+          "bloom above the old SDR clamp retains different intensities");
+    Check(std::abs(bright[(18*w+8)*4]-1)<0.005f,"opaque game UI stays at SDR white");
+    const float midtone=bright[(18*w+50)*4];
+    Check(std::abs(bright[(18*w+12)*4]-(128.0f/255.0f+midtone*127.0f/255.0f))<0.005f,
+          "translucent game UI uses actual coverage and linear composition");
+    const auto sdr=convert(1);
+    Check(std::abs(sdr[(18*w+50)*4]-midtone)<0.005f,"HDR shoulder preserves dark midtones");
+    for (float value:bright) Check(std::isfinite(value)&&value>=0&&value<=4.001f,"finite bounded HDR output");
+    const auto capped=convert(8,1,2);
+    Check(capped[(18*w+32)*4]>1.99f&&capped[(18*w+32)*4]<=2.005f,"explicit peak cap is respected");
+    const auto white=convert(4,1.5f);
+    Check(white[(18*w+50)*4]>midtone*1.45f,"paper white changes scene reference brightness");
+    Check(std::abs(white[(18*w+8)*4]-1)<0.005f,"paper white does not brighten UI");
+    {
+        id<MTLDevice> native=(__bridge id<MTLDevice>)device.NativeDevice();
+        MTLTextureDescriptor* desc=[MTLTextureDescriptor new];
+        desc.textureType=MTLTextureType3D; desc.pixelFormat=MTLPixelFormatRGBA32Float;
+        desc.width=desc.height=desc.depth=2; desc.storageMode=MTLStorageModeShared;
+        id<MTLTexture> lut=[native newTextureWithDescriptor:desc];
+        float texels[32]{};
+        for (u32 i=0;i<8;++i) { texels[i*4]=1; texels[i*4+3]=1; }
+        [lut replaceRegion:MTLRegionMake3D(0,0,0,2,2,2) mipmapLevel:0 slice:0
+                 withBytes:texels bytesPerRow:32 bytesPerImage:64];
+        Encoder e(device);
+        NativeHdrParams p; p.headroom=4; p.has_lut=1;
+        hdr.ConvertNative(e,before.Get(),bloom_image.Get(),(__bridge void*)lut,nullptr,output.Get(),p);
+        const auto graded=Read(device,e,output.Get(),w,h);
+        Check(graded[(18*w+32)*4]>3.9f && graded[(18*w+32)*4+1]==0 && graded[(18*w+32)*4+2]==0,
+              "game 3D grading preserves HDR excursion and RGB colour");
     }
-    convert(3,0.5f,true);
+    {
+        std::vector<__fp16> black(w*h*4, __fp16(0)), white_layer(w*h*4, __fp16(1));
+        for (u32 i=0;i<w*h;++i) { black[i*4+3]=0; white_layer[i*4+3]=0; }
+        for (u32 c=0;c<3;++c) {
+            // Additive UI must retain A=1, B=0.2 even though its coverage alpha is 0.5.
+            black[(18*w+16)*4+c]=0.2f; white_layer[(18*w+16)*4+c]=1.2f;
+            // A multiply layer cannot be represented by the coverage alpha alone.
+            white_layer[(18*w+20)*4+c]=0.5f;
+        }
+        black[(18*w+16)*4+3]=black[(18*w+20)*4+3]=0.25f;
+        // A red premultiplied UI pixel in the guest's BGR target layout.
+        black[(18*w+8)*4+2]=0.5f; black[(18*w+8)*4+3]=0.5f;
+        white_layer[(18*w+8)*4]=white_layer[(18*w+8)*4+1]=0.5f;
+        auto b=Upload(device,MTLPixelFormatRGBA16Float,w,h,black.data(),w*8);
+        auto wt=Upload(device,MTLPixelFormatRGBA16Float,w,h,white_layer.data(),w*8);
+        NativeHdrParams p; p.headroom=4; p.has_ui=1; p.flags=1;
+        Encoder e(device);
+        hdr.ConvertNative(e,before.Get(),bloom_image.Get(),nullptr,b.Get(),output.Get(),p,wt.Get());
+        auto result=Read(device,e,output.Get(),w,h);
+        Check(result[(18*w+16)*4]>midtone*1.8f,"additive game UI retains its additive blend");
+        Check(result[(18*w+20)*4]<midtone*0.35f,"multiply game UI retains its transmission");
+        Check(result[(18*w+8)*4]>0.5f && result[(18*w+8)*4+2]<0.1f,
+              "guest BGR UI is composited in the correct colour order");
+    }
+    {
+        Encoder copy(device);
+        hdr.CopyFrame(copy,frame.Get(),output.Get(),false);
+        const auto fallback=Read(device,copy,output.Get(),w,h);
+        Check(std::abs(fallback[4]-Linear(84.0f/255.0f))<0.005f,"missing native scene decodes SDR fallback");
+    }
+    convert(4);
     constexpr u32 tw=80,th=60;
     std::vector<u8> ui(tw*th*4,0);
     for (u32 y=0;y<4;++y) for (u32 x=0;x<4;++x) for (u32 c=0;c<4;++c) ui[(y*tw+x)*4+c]=255;
@@ -96,7 +152,7 @@ void Run(Device& device) {
     Check(std::abs(presented[(2*tw+2)*4]-1)<0.005f,"port overlay stays at SDR white");
     Check(presented[(2*tw+40)*4]==0,"letterbox remains black");
     Check(std::abs(presented[(10*tw+10)*4] -
-          (128.0f/255.0f + Linear(84.0f/255.0f)*(127.0f/255.0f))) < 0.005f,
+          (128.0f/255.0f + midtone*(127.0f/255.0f))) < 0.005f,
           "translucent host UI composites at SDR brightness in linear light");
     Check(presented[(30*tw+40)*4]>1.9f&&presented[(30*tw+40)*4]<2.005f,
           "present adapts to reduced display headroom");

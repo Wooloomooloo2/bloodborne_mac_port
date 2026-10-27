@@ -135,6 +135,46 @@ GraphicsPipeline::GraphicsPipeline(
     });
 }
 
+bool GraphicsPipeline::SupportsHdrUi() const {
+    const auto* fs = modules[u32(Shader::SwStage::Fragment)];
+    return key.mrt_mask == 1 && fs && fs->NativeHdrUi();
+}
+
+bool GraphicsPipeline::WritesFragmentColor() const {
+    const auto* fs = modules[u32(Shader::SwStage::Fragment)];
+    return fs && fs->OutputMask();
+}
+
+GraphicsPipeline::GraphicsPipeline(Metal::PipelineFactory& factory, const Shader::Profile& profile,
+                                   const GraphicsPipeline& source)
+    : Pipeline{factory, profile}, key{source.key}, fetch_shader{source.fetch_shader},
+      modules{source.modules}, attributes{source.attributes} {
+    stages = source.stages;
+    constexpr u32 fs = u32(Shader::SwStage::Fragment);
+    modules[fs] = source.modules[fs]->NativeHdrUi();
+    ASSERT(modules[fs]); // PipelineCache admits the module before constructing this variant.
+    for (u32 cb : {1u, 2u}) {
+        key.color_buffers[cb] = {};
+        key.color_buffers[cb].data_format = AmdGpu::DataFormat::Format16_16_16_16;
+        key.color_buffers[cb].num_format = AmdGpu::NumberFormat::Float;
+        key.color_buffers[cb].swizzle = AmdGpu::IdentityMapping;
+        auto& blend = key.blend_controls[cb];
+        blend = key.blend_controls[0];
+        if (blend.enable) {
+            blend.separate_alpha_blend = 1;
+            blend.alpha_src_factor = AmdGpu::BlendControl::BlendFactor::One;
+            blend.alpha_dst_factor = AmdGpu::BlendControl::BlendFactor::OneMinusSrcAlpha;
+            blend.alpha_func = AmdGpu::BlendControl::BlendFunc::Add;
+        }
+        key.write_masks[cb] = key.write_masks[0] | vk::ColorComponentFlagBits::eA;
+        key.color_samples[cb] = key.color_samples[0];
+    }
+    key.mrt_mask = 7;
+    key.num_color_attachments = 3;
+    key.cb_shader_mask.raw |= 0xff0u;
+    BuildAsync([this, debug_str = GetDebugString()] { Build(false, debug_str); });
+}
+
 void GraphicsPipeline::Build(bool clip_emulation_fragment, const std::string& debug_str) {
     for (u32 i = 0; i < key.num_color_attachments; i++) {
         const AttachmentBlend blend = AttachmentBlendState(key, i);

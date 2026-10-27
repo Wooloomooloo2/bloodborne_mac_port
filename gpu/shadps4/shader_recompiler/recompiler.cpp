@@ -11,6 +11,7 @@
 #include "shader_recompiler/ir/program.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/recompiler.h"
+#include "shader_recompiler/native_hdr.h"
 
 namespace Shader {
 
@@ -143,6 +144,7 @@ IR::Program TranslateProgram(const std::span<const u32>& code, Pools& pools, Inf
     if (info.sw_stage == SwStage::Fragment && profile.needs_integer_interpolation_fix) {
         Shader::Optimization::InterpolatedIntegerPass(program);
     }
+    Shader::ExportNativeHdr(program, runtime_info);
     Shader::Optimization::CollectShaderInfoPass(program, profile);
     Shader::IR::DumpProgram(program, info);
 

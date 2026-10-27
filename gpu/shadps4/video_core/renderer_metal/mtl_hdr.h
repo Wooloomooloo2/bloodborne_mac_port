@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Metal EDR presentation. Scene highlight recovery follows lKaniel/bloodborne-server
-// at 8d5e54f (hdr_exposure.comp, hdr_gain.comp, hdr_highlight.glsl); see docs/HDR.md.
+// Scene-based HDR tone mapping and Metal EDR output. See docs/HDR.md for provenance.
 #pragma once
 
 #include <memory>
@@ -18,15 +17,21 @@ struct DisplayRange {
 /// Window thread only. `window` is the SDL window's native NSWindow, never a guest pointer.
 DisplayRange QueryDisplayRange(void* window);
 
+struct NativeHdrParams {
+    float headroom{1.0f}, paper_white{1.0f}, peak{}, gamma{0.45454545f};
+    float matrix[12]{1,0,0,0, 0,1,0,0, 0,0,1,0};
+    u32 has_lut{}, has_ui{}, ui_linear{}, flags{}; // bit 0: BGR UI; bit 1: BGR LUT input
+};
+static_assert(sizeof(NativeHdrParams) == 80);
+
 class HdrPasses {
 public:
     explicit HdrPasses(Device& device);
     ~HdrPasses();
-    /// Draw queue: SDR frame (gamma encoded) -> linear RGBA16Float. Missing captures give
-    /// ordinary SDR luminance. Exposure is recomputed per frame, so cuts never reuse it.
-    /// All textures must remain alive through GPU completion.
-    void Convert(Encoder& encoder, void* frame, void* scene, void* hudless, void* output,
-                 float headroom, float highlights);
+    void ConvertNative(Encoder& encoder, void* lighting, void* bloom, void* lut, void* ui,
+                       void* output, const NativeHdrParams& params, void* ui_white = nullptr);
+    /// Copy immutable linear HDR output, or decode the complete SDR fallback frame.
+    void CopyFrame(Encoder& encoder, void* source, void* output, bool native);
     void ClearOverlay(void* command_buffer, void* texture);
     /// Present queue: letterboxed linear scene + a premultiplied sRGB overlay -> EDR layer.
     /// The overlay remains at SDR brightness; current headroom is applied again at present.
