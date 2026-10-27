@@ -251,6 +251,32 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 - **0.6 = MetalFX frame generation (#64)**, pre-releases only until well tested. Online play (#9)
   is still in progress, not tied to 0.6. PR #77 (adaptive timing) is not wanted for now.
 
+## State as of 2026-10-27 (0.5.9 Latest; master ce518e8, pushed)
+
+- **0.5.9** is the full Latest release (CI publishes pre-releases titled with the bare tag:
+  set title/notes and `--prerelease=false --latest` by hand, always `-R Wooloomooloo2/bloodborne_mac_port`).
+- **Controls (merged, pushed; docs/DESIGN_INPUT.md):** `bind_<action>=` keys in bbport.ini
+  (`src/runtime_bindings.c`, SDL scancode/mouse names, defaults = 0.5.9 layout + Left Alt walk),
+  wheel through the shared block (version 7), `mouse_vertical`, sensitivity to 10, launcher
+  Controls page (`launcher/App/ControlsView.swift`, `Model/Bindings.swift`, `Model/KeyCodes.swift`;
+  tests/test_pad.c checks names/defaults against SDL and the C table). User looked at the page,
+  not yet played with it. **Next:** mouse speed retune (calibrate turn rate per stick value with
+  `BB_PAD_FILE rx=`, needs ~5 min on the Mac), then a ≤1-day direct-camera spike. The in-game
+  hint names the game's "Camera speed" option: unverified that Bloodborne has it.
+- **Preferred display (#60):** local branch `preferred-display` (8548d64, launcher Display picker,
+  `BB_DISPLAY` UUID → SDL display), tested full screen on the built-in display; not merged/pushed.
+- **PRs:** #64 (frame gen, evill33t): works at 120 Hz/ProMotion, real FPS drops to 40 at 144/160 Hz
+  (PresentDuration on fixed-rate displays); launcher switch added (6a1149c); needs a temporal
+  upscaler, so not in 16:10 (user wants MetalFX on 16:10: experiment proposed, not approved).
+  #90 (MetalFX Spatial): user tested, temporal better in motion, Spatial ok as an option; asked to
+  fix tests/test_mtl_overlay.mm (fixed click coordinates) and split out native motion. #87 merged.
+  #78 online: told to test as an online fork (#9 closed).
+- **Pending (not approved yet):** launcher/in-game hover hints from one text table; 8 GB Mac
+  simulation (backlog); renderer PR benchmark batch (#39 #58 #59 #65 #67 #68); #64 pacing A/B.
+- Launcher test runs: open with `--env BB_FRAME_STATS=1`, or the scratch watchdog (waits for
+  "Frame stats" lines) never arms. Worktree `../bb-fg` (branches test-90/test-fg/test-master)
+  is scratch. `gpu/third_party/fsr-vulkan` shows a submodule change that isn't ours: don't commit.
+
 ## Next steps (in order)
 
 1. **Native arm64 GPU process** (docs/DESIGN_NATIVE_GPU_PROCESS.md): M0 spike passed (1.75× on
