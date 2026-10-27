@@ -168,7 +168,7 @@ void Load() {
     v.ultrawide_width = v.ultrawide_height = 0;
     if (const char* wide = std::getenv("BB_ULTRAWIDE_RES"); wide && wide[0]) {
         constexpr std::array<int, 2> sizes[] = {
-            {2560, 720}, {3840, 1080}, {5120, 1440}, {2560, 1080}, {3440, 1440},
+            {2560, 720}, {3840, 1080}, {5120, 1440}, {2560, 1080}, {3440, 1440}, {5120, 2160},
             {1280, 800}, {1920, 1200}, {2560, 1600}};
         for (const auto& size : sizes) {
             if (wide == std::to_string(size[0]) + "x" + std::to_string(size[1])) {

@@ -201,6 +201,7 @@ ULTRAWIDE_PATCHES = {
     '5120x1440': 'Resolution Patch 5120x1440 (32:9)',
     '2560x1080': 'Resolution Patch 2560x1080 (21:9)',
     '3440x1440': 'Resolution Patch 3440x1440 (21:9)',
+    '5120x2160': 'Resolution Patch 5120x2160 (21:9)',
     '1280x800': 'Resolution Patch 1280x800 (16:10)',
     '1920x1200': 'Resolution Patch 1920x1200 (16:10)',
     '2560x1600': 'Resolution Patch 2560x1600 (16:10)',
