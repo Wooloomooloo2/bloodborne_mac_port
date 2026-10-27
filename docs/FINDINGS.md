@@ -2114,3 +2114,21 @@ when the movie begins. Unstressed it reaches the Contract screen at ~150 s at 60
 Gameplay cost: benchmark route 60.0 FPS, 11 frames over 33 ms (master 2-10); the new hook never
 waited during the route (no wait lines), so that is run-to-run noise.
 
+
+## 2026-10-27: GPU process crash in StageSpecialization (#74), 5120x2160 (#93)
+
+**#74** (Ebrietas fight, also Forbidden Woods; 0.5.4.5-0.5.7, with and without mods): ~100 "SRT
+walker load N faulted" warnings, then signal 11 at address 0x8 in `Shader::StageSpecialization`.
+In the 0.5.7 library the faulting instruction (`+0x2c0`, `ldr x10, [x9, #0x8]`) is
+`Info::ReadUdReg` for a vertex attribute's V#: the table pointer in user data is **0**. The SRT
+walker survives such reads (fault recovery), `ReadUdReg` on the GPU thread did not. GCN reads
+through faulting addresses return zero, so table pointers below 64 KiB now read zeros in
+`ReadUdReg`, `ReadTessConstantBuffer` and the walker. The walker no longer marks such loads
+zeroed for good either (that kept the shader's tables at zero after the game filled them in).
+Not reproduced in game here (no save at Ebrietas); test_srt_walker covers the walker side.
+Throughput benchmark, native 1080p, M4 Max: ~105 FPS uncapped as before, no walker warnings.
+
+**5120x2160** (21:9, the "Resolution Patch 5120x2160" already in patches/Bloodborne.xml): the
+throughput benchmark (Central Yharnam) renders the scene at 5120x2160 with the HUD in place,
+60-61 FPS on the M4 Max, 7168 MiB resident buffers, no texture allocation failures in 40 s
+standing. The launcher warns below 24 GB as for 3440x1440.
