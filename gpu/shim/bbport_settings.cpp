@@ -29,7 +29,7 @@ bool OwnedKey(const std::string& key) {
         "frame_pacing",
         "model_lod", "output_res",
         "live_resolution", "shader_compile", "renderer",
-        "mouse_look", "mouse_sensitivity", "mouse_invert_y"};
+        "mouse_look", "mouse_sensitivity", "mouse_vertical", "mouse_invert_y"};
     for (const char* k : owned) {
         if (key == k) {
             return true;
@@ -83,7 +83,9 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     } else if (key == "mouse_look") {
         v.mouse_look = i != 0;
     } else if (key == "mouse_sensitivity") {
-        v.mouse_sensitivity = Clamp(f, 0.1f, 5.0f);
+        v.mouse_sensitivity = Clamp(f, 0.1f, 10.0f);
+    } else if (key == "mouse_vertical") {
+        v.mouse_vertical = Clamp(f, 0.25f, 4.0f);
     } else if (key == "mouse_invert_y") {
         v.mouse_invert_y = i != 0;
     } else if (key == "model_lod") {
@@ -295,14 +297,14 @@ void Save() {
                  "upscaler=%s\npreset=%d\nsharpen=%d\nsharpness=%.2f\njitter=%d\n"
                  "reactive=%d\nobject_motion=%d\nreactive_scale=%.2f\nreactive_threshold=%.2f\nreactive_max=%.2f\n"
                  "debug_view=%d\nshow_fps=%d\nframe_pacing=%d\nmouse_look=%d\n"
-                 "mouse_sensitivity=%.2f\nmouse_invert_y=%d\n",
+                 "mouse_sensitivity=%.2f\nmouse_vertical=%.2f\nmouse_invert_y=%d\n",
                  UpscalerName(saved_upscaler), v.preset.load(), int(v.sharpen.load()),
                  v.sharpness.load(), int(v.jitter.load()), int(v.reactive.load()),
                  int(v.object_motion.load()),
                  v.reactive_scale.load(), v.reactive_threshold.load(), v.reactive_max.load(),
                  v.debug_view.load(), int(v.show_fps.load()), int(v.frame_pacing.load()),
                  int(v.mouse_look.load()), v.mouse_sensitivity.load(),
-                 int(v.mouse_invert_y.load()));
+                 v.mouse_vertical.load(), int(v.mouse_invert_y.load()));
     // Read by patches.py at start.
     for (int e = 0; e < EffectCount; ++e) {
         std::fprintf(file, "%s=%d\n", Effects[e].key, int(v.effects[e].load()));

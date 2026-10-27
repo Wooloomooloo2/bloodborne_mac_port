@@ -837,10 +837,13 @@ void DisplayTab(BbSettings::Values& s) {
 
     BeginCard("Mouse");
     Toggle("Mouse camera", s.mouse_look);
-    SliderRow("Sensitivity", s.mouse_sensitivity, 0.2f, 4.0f);
+    SliderRow("Sensitivity", s.mouse_sensitivity, 0.1f, 10.0f);
+    SliderRow("Vertical speed", s.mouse_vertical, 0.25f, 4.0f,
+              "How fast the camera turns up and down, relative to left and right.");
     Toggle("Invert vertical", s.mouse_invert_y);
-    HintBelow("Click in the game window to use the mouse; Cmd gives the cursor back. Left click "
-              "R1, right click L2, middle click R3 (lock on), side buttons R2 and L1.");
+    HintBelow("Click in the game window to use the mouse; Cmd gives the cursor back. Buttons and "
+              "keys: the launcher's Controls page. Turning still too slow? Raise Camera speed in "
+              "the game's own options.");
     EndCard();
 }
 

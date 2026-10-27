@@ -395,7 +395,7 @@ the log.
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
 - **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
-- Rebindable keys (an `input.ini`, from #21's ideas) and the keyboard/mouse list in the launcher made editable.
+- Rebindable keys and mouse buttons (launcher **Controls** page), and a faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
 
@@ -699,7 +699,8 @@ saves and settings as the Finder launcher.
   same settings before the game starts.
 - **Full screen:** ⌃⌘F or the green window button.
 - **Input:** game controllers (through SDL), the keyboard, and the mouse for the camera (turn on
-  **Mouse camera**). The launcher's **Controls** section lists the bindings.
+  **Mouse camera**). The launcher's **Controls** page rebinds keys, mouse buttons and the wheel
+  (two slots per action, a walk key) and sets the mouse speed; changes apply at the next start.
 - **First launch and new areas** compile shaders, so the first minutes stutter a little; later
   sessions load them from the cache at start. The first launch after a rebuild takes ~20 s to
   open the window.

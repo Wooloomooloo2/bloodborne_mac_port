@@ -8,9 +8,8 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
-    private enum Page: Hashable { case general, advanced }
+    private enum Page: Hashable { case general, advanced, controls }
     @State private var page = Page.general
-    @State private var showingControls = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +21,7 @@ struct LauncherView: View {
             Picker("", selection: $page) {
                 Text("General").tag(Page.general)
                 Text("Advanced").tag(Page.advanced)
+                Text("Controls").tag(Page.controls)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -31,6 +31,7 @@ struct LauncherView: View {
                 switch page {
                 case .general: general
                 case .advanced: advanced
+                case .controls: ControlsView(model: model)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -177,26 +178,6 @@ struct LauncherView: View {
                               choose: model.chooseGameFolder, reset: model.resetGameFolder)
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
-                }
-                Section("Controls") {
-                    HStack {
-                        Toggle("Mouse camera", isOn: $model.settings.mouseLook)
-                            .help(model.settings.mouseLook
-                                  ? "Click in the game window to turn the camera with the mouse; \u{2318} gives the cursor back. The arrow keys are the d-pad (menus, weapons, items)."
-                                  : "Off: the arrow keys turn the camera. Controllers always work.")
-                        Spacer()
-                        Button("Keyboard and Mouse…") { showingControls = true }
-                            .popover(isPresented: $showingControls, arrowEdge: .bottom) {
-                                Form {
-                                    ForEach(Controls.rows(mouseLook: model.settings.mouseLook), id: \.0) { row in
-                                        LabeledContent(row.0, value: row.1)
-                                    }
-                                }
-                                .formStyle(.grouped)
-                                .frame(width: 440)
-                                .fixedSize(horizontal: false, vertical: true)
-                            }
-                    }
                 }
             }
             .formStyle(.grouped)

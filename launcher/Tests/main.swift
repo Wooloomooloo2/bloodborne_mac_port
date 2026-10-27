@@ -132,6 +132,46 @@ do {
     check(GameSettings(ini: file).preset == 3, "reload sees the menu's change")
 }
 
+// Bindings and mouse (src/runtime_bindings.c reads the same keys; tests/test_pad.c checks the
+// defaults and key names against it and SDL).
+do {
+    let defaults = GameSettings(ini: IniFile())
+    check(defaults.bindings.isDefault && defaults.mouseSensitivity == 1 && defaults.mouseVertical == 1 && !defaults.mouseInvertY && defaults.cameraKeysDpad, "default controls")
+    var untouched = IniFile(text: "upscaler=off\n")
+    defaults.apply(to: &untouched)
+    check(!untouched.text.contains("bind_") && untouched["camera_keys_dpad"] == nil, "defaults write no bind_ keys")
+    check(untouched["mouse_sensitivity"] == "1.00" && untouched["mouse_vertical"] == "1.00" && untouched["mouse_invert_y"] == "0", "mouse keys written")
+
+    let cross = Bindings.actions.first { $0.key == "bind_cross" }!
+    let dpadDown = Bindings.actions.first { $0.key == "bind_dpad_down" }!
+    let r1 = Bindings.actions.first { $0.key == "bind_r1" }!
+    let read = GameSettings(ini: IniFile(text: "bind_cross= k , mouse left,Bogus,Left GUI\r\nbind_dpad_down=\nmouse_sensitivity=40\nmouse_vertical=0.5\ncamera_keys_dpad=0\n"))
+    check(read.bindings[cross] == ["K", "Mouse Left"], "names canonical; unknown and Cmd dropped")
+    check(read.bindings[dpadDown] == [], "empty value unbinds")
+    check(read.mouseSensitivity == 10 && read.mouseVertical == 0.5 && !read.cameraKeysDpad, "mouse values read, clamped")
+    check(read.bindings.others(using: "Mouse Left", besides: cross) == [r1], "shared input reported")
+    var file = IniFile(text: "# header\n")
+    read.apply(to: &file)
+    check(file["bind_cross"] == "K,Mouse Left" && file["bind_dpad_down"] == "" && file["bind_r1"] == nil && file["camera_keys_dpad"] == "0", "only changes written")
+    check(GameSettings(ini: file).bindings == read.bindings, "bindings round trip")
+
+    var b = Bindings()
+    b.set(r1, slot: 1, to: "Mouse Left") // already in slot 0: moved, not duplicated
+    check(b[r1] == ["3", "Mouse Left"], "no duplicate within an action")
+    b = Bindings()
+    b.set(r1, slot: 0, to: "G")
+    check(b[r1] == ["G", "3"], "replace a slot")
+    b.set(r1, slot: 5, to: "H")
+    check(b[r1] == ["G", "3", "H"], "past the end appends")
+    b.set(r1, slot: 0, to: nil)
+    check(b[r1] == ["3", "H"] && !b.isDefault, "clear a slot")
+    var restored = IniFile(text: "bind_r1=G\n")
+    Bindings().apply(to: &restored)
+    check(restored["bind_r1"] == nil, "back to the default removes the key")
+    check(KeyCodes.name(keyCode: 0x0D) == "W" && KeyCodes.keyCode(name: "Left Shift") == 0x38 && KeyCodes.name(keyCode: 0x3F) == nil, "key codes")
+    check(Bindings.canonical("left gui") == nil && Bindings.canonical("wheel up") == "Wheel Up", "reserved and mouse names")
+}
+
 // Shell quoting and launch.conf (review focus 1: spaces, quotes; bash must source it).
 do {
     let tricky = ["/Users/a/Library/Application Support/Bloodborne", "/Volumes/My Drive/Hunter's saves", "/tmp/$HOME `x` \\ \"q\""]
@@ -875,4 +915,4 @@ if failures > 0 {
     print("FAIL: launcher model, \(failures) failed")
     exit(1)
 }
-print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes, benchmark, mods and cheats)")
+print("PASS: launcher model (ini, resolutions, settings, launch.conf, saves, launch plan, crash report, updates, session logs, native crashes, benchmark, mods and cheats, controls)")

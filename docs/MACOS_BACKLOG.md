@@ -940,6 +940,18 @@ Each item: what was done for now, what the refinement is, and where it lives.
     the default layout in the README.
   - Split mode: mouse events live in the GPU host's window; extend the shared block's keyboard
     bridge (`bbgpu_split_keyboard`) with mouse deltas and buttons.
+  *2026-10-27 (branch `input-bindings`, docs/DESIGN_INPUT.md):* rebindable keys and mouse buttons
+  (`bind_*` in bbport.ini, `src/runtime_bindings.c`), the wheel, a walk key, a launcher Controls
+  page, vertical mouse speed. Still open, in order:
+  - **Mouse too slow (player feedback):** the mouse is a right stick, so it can never turn faster
+    than the stick at full deflection (reached at 650 points/s). Calibrate turn rate per stick
+    value with the pad file (`rx=`), linearise the curve with that table, shorten the 33 ms speed
+    window, then a test build for players.
+  - **Direct camera (spike, about a day):** find the camera's yaw/pitch in game memory and add the
+    mouse motion to them while the camera is free (not locked on, not in cutscenes or menus);
+    stick fallback otherwise. No speed ceiling, 1:1 feel.
+  - Rebinding in the in-game menu (today: the launcher, applied at the next start); controller
+    button remapping on the same model.
 
 - **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
   (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the

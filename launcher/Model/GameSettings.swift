@@ -122,6 +122,15 @@ struct GameSettings: Equatable {
     /// bbport.ini mouse_look (PR #20): the mouse turns the camera after a click in the window,
     /// and the arrow keys are the d-pad.
     var mouseLook = false
+    /// bbport.ini mouse_sensitivity (0.1-10), mouse_vertical (0.25-4, vertical speed relative to
+    /// horizontal), mouse_invert_y: the in-game menu's Mouse card too.
+    var mouseSensitivity = 1.0
+    var mouseVertical = 1.0
+    var mouseInvertY = false
+    /// bbport.ini camera_keys_dpad (src/runtime_bindings.c): with the mouse camera, the camera keys
+    /// press the d-pad.
+    var cameraKeysDpad = true
+    var bindings = Bindings()
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
     var gameTiming = GameTiming.fixed
@@ -161,6 +170,11 @@ struct GameSettings: Equatable {
         if let v = flag("show_fps") { showFPS = v }
         if let v = flag("metal_hud") { metalHUD = v }
         if let v = flag("mouse_look") { mouseLook = v }
+        if let v = ini["mouse_sensitivity"].flatMap(Double.init) { mouseSensitivity = min(max(v, 0.1), 10) }
+        if let v = ini["mouse_vertical"].flatMap(Double.init) { mouseVertical = min(max(v, 0.25), 4) }
+        if let v = flag("mouse_invert_y") { mouseInvertY = v }
+        if let v = flag("camera_keys_dpad") { cameraKeysDpad = v }
+        bindings = Bindings(ini: ini)
         for effect in Self.effects {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
@@ -197,6 +211,11 @@ struct GameSettings: Equatable {
         ini["show_fps"] = showFPS ? "1" : "0"
         ini["metal_hud"] = metalHUD ? "1" : "0"
         ini["mouse_look"] = mouseLook ? "1" : "0"
+        ini["mouse_sensitivity"] = String(format: "%.2f", mouseSensitivity)
+        ini["mouse_vertical"] = String(format: "%.2f", mouseVertical)
+        ini["mouse_invert_y"] = mouseInvertY ? "1" : "0"
+        ini["camera_keys_dpad"] = cameraKeysDpad ? nil : "0"
+        bindings.apply(to: &ini)
         for effect in Self.effects {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }
