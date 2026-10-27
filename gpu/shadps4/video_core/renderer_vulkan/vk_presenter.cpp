@@ -267,16 +267,14 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     pp_pass.Render(draw_scheduler, std::move(input), Metal::Object::Retain(frame->texture.Get()),
                    frame->width, frame->height, pp_settings);
 
-    auto captures = rasterizer->GetUpscaler().TakeHdrCaptures();
     if (hdr_passes) {
-        const float headroom = BbSettings::Get().hdr_headroom;
-        const float highlights = BbSettings::Get().hdr_highlights;
+        auto native_frame = rasterizer->GetNativeHdr().TakeFrame(cpu_address);
+        const bool native = bool(native_frame);
         draw_scheduler.Record([passes = hdr_passes.get(),
-            source = Metal::Object::Retain(frame->texture.Get()),
+            source = native ? std::move(native_frame) : Metal::Object::Retain(frame->texture.Get()),
             output = Metal::Object::Retain(frame->hdr_texture.Get()),
-            scene = std::move(captures.scene), hudless = std::move(captures.hudless),
-            headroom, highlights](Metal::Encoder& e) mutable {
-            passes->Convert(e, source.Get(), scene.Get(), hudless.Get(), output.Get(), headroom, highlights);
+            native](Metal::Encoder& e) mutable {
+            passes->CopyFrame(e, source.Get(), output.Get(), native);
         });
     }
 

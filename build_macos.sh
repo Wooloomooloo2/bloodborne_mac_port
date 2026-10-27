@@ -145,6 +145,9 @@ if [[ ${1:-} == --test ]]; then
             -framework Metal -framework AppKit -framework QuartzCore -framework ImageIO -framework Foundation -o out/mtl-hdr-test
         out/mtl-hdr-test
         MTL_DEBUG_LAYER=1 out/mtl-hdr-test
+        cmake --build out/gpu-arm64 --target native-hdr-shader-test >/dev/null
+        out/gpu-arm64/native-hdr-shader-test
+        MTL_DEBUG_LAYER=1 out/gpu-arm64/native-hdr-shader-test
         # Metal-native M5: the scale helper (scaled colour copies, depth resample and clear).
         /usr/bin/clang++ -arch arm64 -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET -std=c++20 -fobjc-arc -O2 -g \
             -Wall -Wextra -Werror -Igpu/shim -Igpu/shadps4 -I"$ARM64_PREFIX/include" tests/test_mtl_scale.mm gpu/shim/common/logging/log.cpp gpu/shim/common/assert.cpp out/gpu-arm64/libbbmetal_core.a -L"$ARM64_PREFIX/lib" -lfmt \

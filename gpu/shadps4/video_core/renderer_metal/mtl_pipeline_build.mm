@@ -29,9 +29,20 @@ const ShaderModule* ModuleOf(Modules modules, Stage stage) {
 } // namespace
 
 ShaderModule::ShaderModule(std::vector<u32> spirv_, u64 hash_)
-    : spirv{std::move(spirv_)}, hash{hash_} {}
+    : spirv{std::move(spirv_)}, hash{hash_}, output_mask{OutputLocations(spirv).value_or(0)} {}
 
 ShaderModule::~ShaderModule() = default;
+
+const ShaderModule* ShaderModule::NativeHdrUi() const {
+    std::call_once(hdr_ui_once, [&] {
+        auto rewritten = DuplicateFragmentOutput(spirv);
+        if (rewritten.ok)
+            hdr_ui = std::make_unique<ShaderModule>(std::move(rewritten.spirv), hash ^ 0x48445255494d5254ull);
+        else
+            LOG_WARNING(Render, "HDR UI shader {:#x}: {}", hash, rewritten.error);
+    });
+    return hdr_ui.get();
+}
 
 PipelineFactory::PipelineFactory(Device& device, std::filesystem::path cache_dir)
     : compiler{device, std::move(cache_dir)}, psos{device, compiler.CacheDir()},

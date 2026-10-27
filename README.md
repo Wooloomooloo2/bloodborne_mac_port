@@ -694,9 +694,11 @@ saves and settings as the Finder launcher.
 
 ### In the game
 
-**Experimental HDR presentation:** enable it in the launcher's Display section or the in-game
-Display page, then restart. Highlight strength is live; SDR displays keep normal brightness.
-See [HDR presentation](docs/HDR.md) for behaviour, source credits and validation limits.
+**Experimental scene-based HDR:** enable HDR in the launcher's Display section or the in-game
+Display page, then restart. Native HDR currently requires 1080p Native AA with MetalFX,
+FSR 3.1 or TAA; other modes explicitly retain SDR output. It uses exposed floating-point lighting
+and bloom before SDR tone mapping, with separate game UI composition, live paper-white/peak
+calibration and display-range status. Unknown scenes retain SDR output. See [HDR](docs/HDR.md) for behaviour and validation limits.
 
 - **Settings overlay:** `⌘,` (or L3 + R3 on a controller): FPS, resolution, upscaler (MetalFX,
   FSR 3.1 or off), shader compile mode. Some changes need a restart. The launcher shows the

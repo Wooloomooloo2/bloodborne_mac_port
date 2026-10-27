@@ -78,7 +78,8 @@ struct Values {
     std::atomic<bool> frame_pacing{false};
     /// EDR presentation is selected at launch; highlight strength is live.
     std::atomic<bool> hdr{false};
-    std::atomic<float> hdr_highlights{0.5f};
+    std::atomic<float> hdr_paper_white{1.0f}, hdr_peak{0.0f};
+    std::atomic<bool> hdr_scene_active{false};
     std::atomic<float> hdr_headroom{1.0f}, hdr_potential{1.0f};
     bool startup_hdr = false;
     /// Mouse look (bbport_mouse.cpp): bbport.ini mouse_look, mouse_sensitivity, mouse_invert_y.
@@ -141,6 +142,7 @@ void ChooseUpscaler(int upscaler);
 bool FixedRenderSession();
 int RenderPreset();
 bool ResolutionNeedsRestart();
+bool NativeHdrSupported();
 /// Writes the file (menu changes).
 void Save();
 

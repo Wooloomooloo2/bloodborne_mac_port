@@ -138,10 +138,6 @@ public:
     };
     bool DisplayOverride(VAddr address, Display& display);
 
-    struct HdrCaptures { Metal::Object scene, hudless; };
-    /// Draw queue only, once per flip. Consumes validity so menus/loading cannot reuse a scene.
-    HdrCaptures TakeHdrCaptures();
-
     /// One frame of the resolve step (all textures id<MTLTexture>, unretained, alive until the
     /// GPU has run the frame). Render size: `reactive`; output size: `output`.
     /// `color`, `depth` and `motion` hold the scene in their top-left width x height: exactly
@@ -165,10 +161,6 @@ public:
     };
 
 private:
-    void CaptureHdr(VideoCore::ImageId image, bool scene);
-    Metal::Object hdr_scene, hdr_hudless;
-    u32 hdr_scene_width{}, hdr_scene_height{}, hdr_ui_width{}, hdr_ui_height{};
-    bool hdr_scene_valid{}, hdr_ui_valid{};
     void Run();
     void RunScaled();
     void RunUiOnly(VideoCore::ImageId color, VideoCore::ImageId depth);

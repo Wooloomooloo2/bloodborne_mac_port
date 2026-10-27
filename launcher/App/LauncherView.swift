@@ -156,9 +156,19 @@ struct LauncherView: View {
                     .disabled(model.settings.ultrawide || !model.settings.upscaler.usesPreset)
                     LabeledContent("Renders", value: "\(model.settings.renderSize) → \(model.settings.displayOutput)")
                     Toggle("HDR presentation (experimental)", isOn: $model.settings.hdr)
-                        .help("Uses the display's available HDR range. Applies next launch; SDR displays retain normal brightness.")
+                        .help("Requires 1080p Native AA with MetalFX, FSR 3.1 or TAA. Applies next launch; other modes retain SDR output.")
                     if model.settings.hdr {
-                        Slider(value: $model.settings.hdrHighlights, in: 0...1) { Text("HDR highlights") }
+                        Text("Native HDR: 1080p Native AA with MetalFX, FSR 3.1 or TAA.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Slider(value: $model.settings.hdrPaperWhite, in: 0.5...2) { Text("HDR paper white") }
+                            .help("Scene reference brightness relative to desktop white. Game UI stays at desktop white.")
+                        Toggle("Automatic HDR peak", isOn: Binding(
+                            get: { model.settings.hdrPeak == 0 },
+                            set: { model.settings.hdrPeak = $0 ? 0 : 4 }))
+                        if model.settings.hdrPeak > 0 {
+                            Slider(value: $model.settings.hdrPeak, in: 1...16) { Text("HDR peak limit") }
+                                .help("Multiple of desktop white, limited by available display headroom.")
+                        }
                     }
                     if model.settings.upscaler != .off {
                         Toggle("Sharpening", isOn: $model.settings.sharpen)

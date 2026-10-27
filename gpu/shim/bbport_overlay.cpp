@@ -643,11 +643,25 @@ int current_tab = TabDisplay;
 std::atomic<bool> gamepad_in_use{false}; // last menu input came from a pad: show L1/R1 hints
 
 void DisplayTab(BbSettings::Values& s) {
-    BeginCard("HDR presentation", int(s.hdr != s.startup_hdr));
+    BeginCard("HDR", int(s.hdr != s.startup_hdr));
     Toggle("HDR (experimental)", s.hdr, int(s.hdr != s.startup_hdr));
-    SliderRow("Highlights", s.hdr_highlights, 0.0f, 1.0f, "Recover scene highlights within the display's available brightness range.");
-    Note(s.hdr_potential > 1.0f ? "Display supports HDR; available brightness adapts automatically."
-                              : "This display currently offers SDR brightness. HDR falls back to SDR luminance.");
+    SliderRow("Paper white", s.hdr_paper_white, 0.5f, 2.0f,
+              "Scene reference brightness relative to desktop white. UI stays at desktop white.");
+    bool automatic_peak = s.hdr_peak == 0.0f;
+    if (ToggleRow("Automatic peak brightness", &automatic_peak))
+        Store(s.hdr_peak, automatic_peak ? 0.0f : std::max(s.hdr_headroom.load(), 1.0f), true);
+    if (!automatic_peak)
+        SliderRow("Peak limit", s.hdr_peak, 1.0f, 16.0f,
+                  "Peak as a multiple of desktop white; limited by current display headroom.");
+    char headroom[80];
+    std::snprintf(headroom, sizeof(headroom), "%.2fx available / %.2fx potential",
+                  s.hdr_headroom.load(), s.hdr_potential.load());
+    ValueRow("Display range", headroom);
+    Note(!s.startup_hdr ? "HDR applies after restarting the game."
+        : !BbSettings::NativeHdrSupported()
+        ? "Native HDR requires 1080p Native AA with MetalFX, FSR 3.1 or TAA; using SDR."
+        : s.hdr_scene_active ? "Rendering HDR from scene lighting and bloom."
+                             : "SDR fallback: waiting for a supported scene.");
     EndCard();
     const char* wide = std::getenv("BB_ULTRAWIDE_RES");
     const bool native_wide = wide && wide[0];
