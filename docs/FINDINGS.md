@@ -2186,9 +2186,7 @@ out/render-guard-test /private/path/to/prepared/eboot.elf
 ```
 
 `build_macos.sh --test` also runs this fixture when `BB_RENDER_GUARD_ELF` is set;
-otherwise it explicitly reports a skip. The private image used for local
-verification had SHA-256
-`cec1b276e7f9e4db978e57f524f41fbaac594530a3437b002e23f3fab14b4f86`.
+otherwise it explicitly reports a skip.
 Hopper via REA corroborated the dispatcher control flow; the differential test
 executes the original dispatcher instructions rather than the decompiler output.
 
