@@ -63,7 +63,10 @@ bb_native_ultrawide() { # a patch name validated by patches.py, or empty for 16:
         unset BB_RENDER_RES BB_OUTPUT_RES BB_AUTO_RENDER_RES
         wide_w=${BB_ULTRAWIDE_RES%x*}
         wide_h=${BB_ULTRAWIDE_RES#*x}
-        if (( wide_w * wide_h > 1920 * 1080 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
+        if (( wide_w * wide_h > 3840 * 2160 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
+            # patches.py also enlarges the first graphics heap by 1665 MiB above 4K (#93).
+            export BB_DMEM_MB=8192 BB_ULTRAWIDE_AUTO_DMEM=1
+        elif (( wide_w * wide_h > 1920 * 1080 )) && [[ -z ${BB_DMEM_MB:-} ]]; then
             export BB_DMEM_MB=6144 BB_ULTRAWIDE_AUTO_DMEM=1
         fi
         # Complete resolution patch, retail first heap, bounded second texture pool.

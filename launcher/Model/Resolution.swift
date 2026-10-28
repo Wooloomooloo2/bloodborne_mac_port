@@ -43,10 +43,17 @@ enum Resolution {
         }
         return "\(size) · \(aspect)"
     }
-    /// Native 1440p/2160p ultrawide and 2560x1600 add large targets/textures to the 7 GiB GPU arena.
+    /// Native 1440p/2160p ultrawide and 2560x1600 add large targets/textures to the 7 GiB GPU arena
+    /// (9 GiB at 5120x2160, whose first graphics heap is enlarged too: scripts/patches.py; warned
+    /// below 32 GB).
     static func ultrawideMemoryWarning(_ size: PixelSize, memoryBytes: UInt64) -> String? {
-        guard memoryBytes < 24 * 1024 * 1024 * 1024,
-              [PixelSize(3440, 1440), PixelSize(5120, 1440), PixelSize(5120, 2160), PixelSize(2560, 1600)].contains(size) else { return nil }
+        let gib: UInt64 = 1024 * 1024 * 1024
+        if size == PixelSize(5120, 2160) {
+            guard memoryBytes < 32 * gib else { return nil }
+            return "5120 × 2160 needs about 9 GB of graphics memory. On Macs with less than 32 GB of memory expect slowdowns, missing textures or crashes. 3440 × 1440 is the same shape and much lighter."
+        }
+        guard memoryBytes < 24 * gib,
+              [PixelSize(3440, 1440), PixelSize(5120, 1440), PixelSize(2560, 1600)].contains(size) else { return nil }
         return "This resolution may exceed available graphics memory on Macs with less than 24 GB of memory, causing slowdowns or crashes. Try a smaller resolution of the same shape if this happens."
     }
     /// Upscaler quality levels (bbport_settings.cpp PresetName / PresetScale).
