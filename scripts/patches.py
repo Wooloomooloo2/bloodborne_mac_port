@@ -222,7 +222,9 @@ def ultrawide_writes(xml, name, app_version, segments):
     Keep the fallback globals and scene MOV/NOP overrides together. Preserve the
     first graphics heap; increase only the smaller pool from 886 to 1536 MiB above
     1080p pixel count. Retail capacity failed combat texture allocations (error 9).
-    launch_settings.sh supplies 6144 MiB DMEM for the extra 650 MiB.
+    launch_settings.sh supplies 6144 MiB DMEM for the extra 650 MiB. Above 4K (5120x2160)
+    the render targets outgrow the retail first heap too (no level geometry, then a null
+    texture crash, #93): it gets the community patch's 3952 MiB and 8192 MiB DMEM.
     """
     heaps = [(0x04B36DDA - EBOOT_BASE, 0x04B36DDC - EBOOT_BASE),
              (0x04B36DE2 - EBOOT_BASE, 0x04B36DE4 - EBOOT_BASE)]
@@ -238,6 +240,8 @@ def ultrawide_writes(xml, name, app_version, segments):
     if width * height > 1920 * 1080:
         # Full 32-bit pool size; the community's two-byte write starts two bytes later.
         writes.append((0x04B36DE0 - EBOOT_BASE, struct.pack('<I', 1536 * 1024 * 1024)))
+    if width * height > 3840 * 2160:
+        writes.append((0x04B36DD8 - EBOOT_BASE, struct.pack('<I', 3952 * 1024 * 1024)))
     return writes
 
 

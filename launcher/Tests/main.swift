@@ -423,11 +423,17 @@ do {
 // High-resolution ultrawide selection on memory-constrained Macs.
 do {
     let gib: UInt64 = 1024 * 1024 * 1024
-    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440), PixelSize(5120, 2160)] {
+    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440)] {
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 16 * gib) != nil, "16 GB wide memory warning")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 24 * gib) == nil, "24 GB boundary")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
     }
+    // 5120x2160 has a 9 GiB GPU arena (#93): warned up to 32 GB, with its own text.
+    let big = PixelSize(5120, 2160)
+    check(Resolution.ultrawideMemoryWarning(big, memoryBytes: 24 * gib)?.contains("9 GB") == true
+          && Resolution.ultrawideMemoryWarning(big, memoryBytes: 16 * gib) != nil, "5120x2160 below 32 GB")
+    check(Resolution.ultrawideMemoryWarning(big, memoryBytes: 32 * gib) == nil
+          && Resolution.ultrawideMemoryWarning(big, memoryBytes: 36 * gib) == nil, "32 GB boundary")
     check(Resolution.ultrawideMemoryWarning(PixelSize(3840, 1080), memoryBytes: 16 * gib) == nil, "1080p wide selection")
     check(Resolution.ultrawideMemoryWarning(PixelSize(2560, 1600), memoryBytes: 16 * gib) != nil
           && Resolution.ultrawideMemoryWarning(PixelSize(1920, 1200), memoryBytes: 16 * gib) == nil, "16:10 memory warning")

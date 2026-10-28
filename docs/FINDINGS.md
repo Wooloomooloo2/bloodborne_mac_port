@@ -2133,6 +2133,24 @@ throughput benchmark (Central Yharnam) renders the scene at 5120x2160 with the H
 60-61 FPS on the M4 Max, 7168 MiB resident buffers, no texture allocation failures in 40 s
 standing. The launcher warns below 24 GB as for 3440x1440.
 
+## 2026-10-28: 5120x2160 drew no level and crashed on load (#93)
+
+The 0.5.10 entry above was wrong: the 60 FPS at 5120x2160 came from a frame with no level in it.
+A screenshot of the same run shows the characters, items, HUD and sky, but no buildings or
+ground. The reporter (M5 Max, 36 GB, macOS 27.2) saw missing textures or a crash 9 s into
+loading: signal 11 at guest 0x2166b8a, reading +0x38 of a null texture. The caller (0xef6d81)
+creates one of the character renderer's textures with 0x2165c10, reports the error through
+0xee5de0(6), and carries on with the null.
+
+Cause: the ultrawide presets keep the retail first graphics heap (2287 MiB, 0x04B36DD8) and
+enlarge only the texture pool (886 → 1536 MiB, 6144 MiB DMEM). That holds up to 4K's pixel count;
+5120x2160 has a third more, and its render targets do not fit.
+
+Fix: above 3840x2160 pixels (only 5120x2160 today), patches.py also writes the community
+patch's 3952 MiB first heap, and launch_settings.sh asks for 8192 MiB DMEM (9 GiB GPU arena,
+about 2 GB more than the other ultrawide sizes). Central Yharnam then draws the level: 2190
+draws/frame instead of 1660, about 48 FPS uncapped on the M4 Max (GPU busy 20.9 ms/frame).
+
 ## 2026-10-28: absent graphics bind record (#99)
 
 The 0.5.10 report faults in the **x86-64 game process**, at guest offset
