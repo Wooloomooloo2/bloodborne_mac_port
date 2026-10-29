@@ -105,6 +105,8 @@ const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, s
 int runtime_install_mac_settings(unsigned char *image, uint64_t image_size);
 int runtime_install_exit_menu(unsigned char *image, uint64_t image_size);
 void runtime_mac_settings_pad(uint32_t *buttons);
+/* Return a context leaked by 1.09's failed Havok buffer upload. */
+int runtime_install_havok_guard(unsigned char *image, uint64_t image_size);
 void runtime_context_lock_stats(void);
 /* The hook name while another thread holds the context lock, else NULL (diagnostics). */
 const char *runtime_context_lock_other(void);

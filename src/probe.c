@@ -956,6 +956,7 @@ int main(int argc, char **argv) {
     runtime_install_exit_menu(image, size);
     runtime_install_context_lock(image, size);
     runtime_install_render_guard(image, size);
+    runtime_install_havok_guard(image, size);
     protect(thunks, round_page((import_count + 1) * 32), 5);
     protect(image, round_page(size), 0);
     int executable_entry = 0;
