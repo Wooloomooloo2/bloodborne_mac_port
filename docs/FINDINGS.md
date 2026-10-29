@@ -2217,3 +2217,51 @@ The fixture does not execute the real finalizer or Gnm writers. It proves the
 routing and observed dispatch equivalence, not long-session gameplay stability,
 visual correctness after an absent bind, or a fix for the missing resource's
 origin. The reporter's 101-minute Hunter's Dream session has not been reproduced.
+
+## 2026-10-29: GPU watchdog counted CPU delays as a GPU stall (#106)
+
+The 0.5.11 report on an M4 with 16 GB exits after 87 min 49 s: tick 475858 is
+reported committed, 475857 complete, with no progress for 3002 ms. This is the
+native GPU host's watchdog exit (75), followed by the guest process stopping.
+It is distinct from the null-pointer faults in #97/#99. The last archive write
+had taken about 8 s; earlier writes took about 13 s. The window had become
+occluded earlier. Neither observation by itself establishes a GPU deadlock.
+
+Two false-timeout paths reproduce with the original `Metal::Device` on real Metal:
+
+- `Commit` publishes its tick before calling Metal's `commit`. Holding the CPU
+  before forwarding that call arms the watchdog for work Metal has not received.
+- The watchdog reads only `gpu_tick`, which advances in a CPU completion handler.
+  Blocking an earlier completion handler leaves that counter behind after the
+  GPU has already signaled the command buffer's final shared event. The old
+  watchdog then exits even though the GPU completed the work.
+
+The watchdog now reads the existing GPU shared event as well as the handler
+counter, and arms a new tick after Metal's `commit` returns. Only the watchdog
+uses the event to observe progress: `KnownGpuTick`, `IsFree`, `Wait`, resource
+retirement and the existing failure handler keep their completion-handler
+semantics. The watchdog retains the shared event through its detached thread's
+lifetime. Its 3000 ms default, zero-to-disable setting and late-wake handling are
+unchanged. A timeout now logs both the GPU event and handler counters.
+
+Apple documents that [GPU event signals follow the preceding GPU commands](https://developer.apple.com/documentation/metal/about-synchronization-events)
+and that [completion handlers run on an undefined CPU thread and should not block](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/Cmd-Submiss/Cmd-Submiss.html).
+This makes the existing final signal an independent progress observation, without
+changing when the renderer can reuse resources.
+
+`tests/test_mtl_watchdog.mm` executes isolated child processes with a shortened
+200 ms watchdog deadline. Before the fix, both delayed-handler and delayed-commit
+cases exit 75; after the fix, they survive 700 ms delays. The handler case also
+checks that resources remain in flight until the handler is released. Idle and
+disabled-watchdog cases survive. A real unsatisfied GPU event wait still exits 75,
+including when queued after a completed GPU signal with a delayed handler. Event
+waits have a bounded rescue and each child has a parent-enforced timeout. No game
+files are required. `build_macos.sh --test` runs the fixture normally and with
+Metal validation alongside the existing native Metal tests.
+
+The supplied log has no GPU-event counter or command-buffer state at failure.
+These regressions prove watchdog defects compatible with the report; they do not
+prove which path triggered that session, nor exclude a genuine GPU stall there.
+The 87-minute session and the reporter's 16 GB/macOS 27.2 environment have not been
+reproduced. The new counter diagnostic distinguishes delayed CPU bookkeeping
+from missing GPU signals in subsequent reports.

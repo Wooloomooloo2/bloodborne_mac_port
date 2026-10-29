@@ -55,13 +55,20 @@ void Device::StartWatchdog() {
     if (limit_ms == 0) {
         return;
     }
-    std::thread([shared = counters, limit_ms] {
+    // Keep the event alive until this detached observer exits. A completed GPU signal can
+    // precede CPU completion handlers (including TrackGpuTime and resource retirement).
+    id<MTLSharedEvent> event = impl->event;
+    std::thread([shared = counters, event, limit_ms] {
         using Clock = std::chrono::steady_clock;
         u64 last_known = 0;
         Clock::time_point since = Clock::now(), last_check = since;
         while (!shared->stop_watchdog.load(std::memory_order_acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            const u64 known = shared->gpu_tick.load(std::memory_order_acquire);
+            const u64 handlers = shared->gpu_tick.load(std::memory_order_acquire);
+            const u64 signaled = event.signaledValue;
+            // Observe GPU progress without retiring resources early. The handler counter
+            // still covers failed command buffers that never execute their event signal.
+            const u64 known = std::max(handlers, signaled);
             const u64 committed = shared->committed.load(std::memory_order_acquire);
             const Clock::time_point now = Clock::now();
             // A late wake-up (system sleep, the process stopped) is not a GPU stall.
@@ -80,10 +87,12 @@ void Device::StartWatchdog() {
                 std::fprintf(stderr,
                              "STOP: GPU watchdog: tick %llu committed, %llu complete, no progress "
                              "for %lld ms; exiting so the GPU does not stall WindowServer "
-                             "(BB_GPU_WATCHDOG_MS)\n",
+                             "(BB_GPU_WATCHDOG_MS; GPU event %llu, handlers %llu)\n",
                              static_cast<unsigned long long>(committed),
                              static_cast<unsigned long long>(known),
-                             static_cast<long long>(stalled));
+                             static_cast<long long>(stalled),
+                             static_cast<unsigned long long>(signaled),
+                             static_cast<unsigned long long>(handlers));
                 std::fflush(stderr);
                 _exit(75);
             }
@@ -228,7 +237,6 @@ u64 Device::ResidentBytes() const {
 u64 Device::Commit(void* command_buffer) {
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)command_buffer;
     const u64 tick = current_tick.fetch_add(1, std::memory_order_acq_rel);
-    counters->committed.store(tick, std::memory_order_release);
     [cmd encodeSignalEvent:impl->event value:tick];
     // Before the tick handler: when Wait(tick) returns, this command buffer's time is counted.
     TrackGpuTime(command_buffer);
@@ -246,6 +254,9 @@ u64 Device::Commit(void* command_buffer) {
         shared->gpu_tick.notify_all();
     }];
     [cmd commit];
+    // Commit can spend time on the CPU before Metal receives the buffer. Do not arm the
+    // GPU watchdog for that interval. Commit callers are serialized (Device's contract).
+    counters->committed.store(tick, std::memory_order_release);
     return tick;
 }
 
