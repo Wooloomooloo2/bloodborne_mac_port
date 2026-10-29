@@ -2217,3 +2217,58 @@ The fixture does not execute the real finalizer or Gnm writers. It proves the
 routing and observed dispatch equivalence, not long-session gameplay stability,
 visual correctness after an absent bind, or a fix for the missing resource's
 origin. The reporter's 101-minute Hunter's Dream session has not been reproduced.
+
+## 2026-10-29: Havok upload context-pool leak; candidate for the Rom hang (#110)
+
+The supplied 0.5.11 log ends with **guest hang status 76**, after 751 frames and
+30 seconds without a new frame. The main thread and all five Havok workers have
+`thread_yield <- 0x1067fc5 <- 0x75b25e <- 0x76a8e5 <- 0x420965` in their
+stacks. GXRenderThread and its workers are asleep. This is not the GPU watchdog
+status 75 investigated for #106.
+
+The original 1.09 function at `0x1067f60` borrows a graphics context through
+`0x1056920`, storing its node at `this + 0x120`. When none is available it yields
+at `0x1067fc0` and tries again. Its resource-validation failure (`0x1068001`)
+and buffer-mapping failure (`0x106803f`) bypass the return-to-pool operation at
+`0x1068075`. Success calls the synchronized release at `0x1056990` and clears
+the active node. Both error paths return 1 while retaining the borrow.
+
+An opt-in fixture executing the original upload, pool getter, take and release
+instructions reproduces this leak for each error independently: fail twice with
+a two-entry pool and the next call spins until an isolated child's alarm stops
+it. Resource operations are controlled stubs; the fixture does not establish
+which resource or error occurred in the reported game session. A focused Hopper
+analysis of copied function bytes corroborates the branches and cleanup path;
+the full game image and its resources are not distributed.
+
+`runtime_havok_guard.c` wraps the checked 1.09 entry. After a failed call it
+returns a newly retained node through the game's release operation and clears
+that owner's active slot. It preserves the error result, leaves successful
+calls and early exits alone, and refuses cleanup for a previously active owner
+or a changed pool identity. Entry, getter, borrow, failure exits and release
+instruction windows must match before installation. `BB_HAVOK_POOL_GUARD=0`
+disables it. The first eight recovered borrows are logged.
+
+**Status: candidate, not a confirmed fix for #110.** The report lacks pool state
+and validation/mapping results; it does not prove these error paths exhausted
+the pool. The log also applies external `60 FPS++` and
+`[FPS-MODE]: 60FPS -803F- Cloth Physics` alongside built-in `Uncap FPS++`, plus
+`lower specific renders`. Their exact external XML contents were not supplied,
+so patch interaction remains another hypothesis. Do not claim that disabling
+those patches or this cleanup repairs the Rom transition without retesting it.
+A save immediately before the failing transition and a run with external
+patches disabled are needed for that comparison.
+
+Validation: original-code Rosetta fixture covers both baseline hangs, repeated
+failure cleanup followed by success, unchanged successful owner state, null
+pool/resource early exits, a pre-existing active owner, replaced pool identity,
+disabled guard and nine mismatching instruction windows. The x86-64 runtime
+builds with warnings as errors; its existing runtime tests and the #99
+original-code bind fixture pass. The ARM64 no-op fallback compiles. The complete
+GPU/launcher suite was not rerun because this change adds only a CPU hook.
+
+Two bounded launch attempts (100 and 75 seconds, copied save/cache, Metal
+validation enabled) stayed at the Play Offline title menu despite scripted
+confirm input. No cleanup occurrence or Metal error was logged. These provide
+startup/menu coverage only, not Havok gameplay or post-Rom coverage. All 56
+monitored source asset hashes and the source save-seed hashes were unchanged.

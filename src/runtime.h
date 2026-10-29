@@ -100,6 +100,8 @@ void *runtime_low_alloc(size_t size);
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size);
 /* Guard 1.09's deferred graphics bind against an absent resource record (#99). */
 int runtime_install_render_guard(unsigned char *image, uint64_t image_size);
+/* Return a context leaked by 1.09's failed Havok buffer upload. */
+int runtime_install_havok_guard(unsigned char *image, uint64_t image_size);
 void runtime_context_lock_stats(void);
 /* The hook name while another thread holds the context lock, else NULL (diagnostics). */
 const char *runtime_context_lock_other(void);

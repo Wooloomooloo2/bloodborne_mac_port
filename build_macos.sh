@@ -92,6 +92,8 @@ if [[ ${1:-} == --test ]]; then
     out/runtime-test
     "$CC" "${cflags[@]}" -I. -Isrc tests/test_render_guard.c src/runtime_render_guard.c -o out/render-guard-test
     out/render-guard-test
+    "$CC" "${cflags[@]}" -I. -Isrc tests/test_havok_guard.c src/runtime_havok_guard.c -o out/havok-guard-test
+    out/havok-guard-test
     "$CC" "${cflags[@]}" -Isrc tests/test_file_mods.c -o out/file-mods-test
     out/file-mods-test
     "$CC" "${cflags[@]}" "${includes[@]}" -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test
