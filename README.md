@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-10-27)
+## Status (2026-10-29)
 
-**Current version: [mac-v0.5.10](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.10)** (download the app, or build it as below).
+**Current version: [mac-v0.5.11](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.11)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -35,7 +35,23 @@ highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion 
 **Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
 @evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
-in 0.5.9, and 0.5.10 adds rebindable controls. Online play (#9) is still in progress.
+in 0.5.9, 0.5.10 adds rebindable controls, and 0.5.11 fixes 5120×2160 and a crash after long
+sessions. Online play (#9) is still in progress.
+
+### New in 0.5.11: 5120×2160 fixed, a long-session crash fixed
+
+- **5120×2160 now draws the level** (#93). In 0.5.10 the game ran out of its own graphics memory
+  at this size: the city had no buildings or ground, or the game crashed while loading. It now
+  gets a bigger graphics heap and about 2 GB more memory, at this resolution only (about 50 FPS
+  uncapped on an M4 Max in Central Yharnam). The launcher warns on Macs with less than 32 GB.
+- **Fixed: the crash in the Hunter's Dream after long sessions** (#99, #101, #102; "signal 11 at
+  guest offset 0x2169edc", after about 90 minutes). The game queued a render bind for a resource
+  that was gone; it now skips that one bind instead of crashing (#100, from
+  [@evill33t](https://github.com/evill33t)).
+- **Fewer GPU-process crashes from stale graphics data** (#98, from @evill33t): if a draw reads
+  graphics data the game has already freed, the renderer reads zeros instead of crashing. If
+  0.5.11 runs slower than 0.5.10 on your Mac, please open an issue with your Mac and settings.
+- **Video guide:** Andrew Tsai's [guide to this port](https://www.youtube.com/watch?v=_QgmfFyZbYo).
 
 ### New in 0.5.10: rebindable controls, a crash fix, choose the display
 
@@ -51,8 +67,7 @@ in 0.5.9, and 0.5.10 adds rebindable controls. Online play (#9) is still in prog
   shows a **Display** picker. Full screen opens there too. If that display isn't connected, the
   game opens on the main one.
 - **5120×2160 (21:9)** native resolution (#93), under **Ultrawide or 16:10** in the launcher
-  (60 FPS on an M4 Max in Central Yharnam). Below 24 GB of memory the launcher warns, as for
-  3440×1440.
+  (it did not draw the level until 0.5.11).
 - **The mouse cursor hides** after 3 seconds without moving over the game window (#93), and
   comes back as soon as you move or click.
 - **Updates no longer leave the old launcher open** (#96): after **Install Update**, the old
@@ -814,8 +829,9 @@ Thank you to everyone who sent pull requests:
   - The About panel and update check (#23).
   - Dated session logs and crash reports (#40).
 - **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
-- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82) and MetalFX
-  frame generation (#64, in progress).
+- **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82), the
+  long-session crash guard (#100) and stale descriptor hardening (#98), and MetalFX frame
+  generation (#64, in progress).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
