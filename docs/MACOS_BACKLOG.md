@@ -565,6 +565,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 2. Performance
 
+- **Watch after 0.5.11: performance reports against #98 (2026-10-29, owner).** #98 guards
+  GPU-thread descriptor reads with a local fault recovery (`gpu/shim/bbport_guest_memory.h`):
+  about 2.4 ns more per read on an M4 Max, estimated ~0.1% of a 60 FPS frame on slower Macs, and
+  the A/B (native 1080p uncapped) showed no cost. If players report lower FPS after 0.5.11, A/B
+  0.5.10 against 0.5.11 on the benchmark route first; the guard can be skipped for reads whose
+  table pointer is already known valid.
+
 - **16–18 GB Macs on macOS 27 run at 5–17 FPS (2026-10-25, top priority, the 0.5.x hotfix).**
   Not GPU-bound: the GPU idles ~60% of each frame (FINDINGS "the slow Macs are 16–18 GB Macs on
   macOS 27"). Needs a slow Mac to test: the kernel log for `required > max`, raising
