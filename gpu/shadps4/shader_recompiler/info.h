@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 #include <boost/container/static_vector.hpp>
+#include "bbport_guest_memory.h"
 #include "common/assert.h"
 #include "common/types.h"
 #include "shader_recompiler/backend/bindings.h"
@@ -213,18 +214,26 @@ struct Info : InfoPersistent {
 
     template <typename T>
     T ReadUdReg(u32 ptr_index, u32 dword_offset) const noexcept {
-        T data;
+        T data{};
         const auto ud = UserData();
-        const u32* base = ud.data();
-        if (ptr_index != IR::NumScalarRegs) {
-            std::memcpy(&base, &ud[ptr_index], sizeof(base));
-            base = reinterpret_cast<const u32*>(VAddr(base) & 0xFFFFFFFFFFFFULL);
-            if (VAddr(base) < MinTableAddress) [[unlikely]] {
-                std::memset(&data, 0, sizeof(T));
-                return data;
+        const size_t byte_offset = size_t{dword_offset} * sizeof(u32);
+        if (ptr_index == IR::NumScalarRegs) {
+            if (byte_offset <= ud.size_bytes() && sizeof(T) <= ud.size_bytes() - byte_offset) {
+                std::memcpy(&data, ud.data() + dword_offset, sizeof(T));
             }
+            return data;
         }
-        std::memcpy(&data, base + dword_offset, sizeof(T));
+        if (ptr_index >= ud.size() ||
+            sizeof(VAddr) > (ud.size() - ptr_index) * sizeof(u32)) {
+            return data;
+        }
+        VAddr base;
+        std::memcpy(&base, ud.data() + ptr_index, sizeof(base));
+        base &= 0xFFFFFFFFFFFFULL;
+        if (base < MinTableAddress) [[unlikely]] {
+            return data;
+        }
+        BbGuest::Read(&data, base + byte_offset, sizeof(data));
         return data;
     }
 
@@ -263,9 +272,7 @@ struct Info : InfoPersistent {
             tess_constants = {};
             return;
         }
-        memcpy(&tess_constants,
-               reinterpret_cast<TessellationDataConstantBuffer*>(tess_constants_addr),
-               sizeof(tess_constants));
+        BbGuest::Read(&tess_constants, tess_constants_addr, sizeof(tess_constants));
     }
 
     void Serialize(Serialization::Archive& ar) const;
