@@ -15,6 +15,10 @@ process.
 > This project is not affiliated with or endorsed by Sony Interactive Entertainment,
 > FromSoftware, or AMD.
 
+**Video guide:** Andrew Tsai has made a video guide to this port:
+[watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
+taking the time to make it!
+
 ## Status (2026-10-27)
 
 **Current version: [mac-v0.5.10](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.10)** (download the app, or build it as below).
