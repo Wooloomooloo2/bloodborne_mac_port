@@ -98,7 +98,7 @@ void *runtime_low_map(size_t size, int prot);
 void *runtime_low_alloc(size_t size);
 /* runtime_hooks.c: one lock around the engine paths that share the immediate GX context. */
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size);
-/* Guard 1.09's deferred graphics bind against an absent resource record (#99). */
+/* Guard 1.09's deferred graphics bind/unbind against absent records (#99/#113). */
 int runtime_install_render_guard(unsigned char *image, uint64_t image_size);
 void runtime_context_lock_stats(void);
 /* The hook name while another thread holds the context lock, else NULL (diagnostics). */
