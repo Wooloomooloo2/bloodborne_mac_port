@@ -2247,7 +2247,18 @@ unbind for an unknown record, or decrement a counter whose bind was skipped.
 Non-null records still execute the original instructions. The new entry is
 installed only when its own signature and tail match; an unrecognized unbind
 keeps the existing #99 bind protection. The existing `BB_NULL_BIND_GUARD=0`
-switch disables both. Bind and unbind recoveries have separate bounded logging.
+switch disables all guarded operations. Recoveries have separate bounded logging.
+
+The same object's value callback (`0xe2f190`) can then query the record through
+`0x216a2f0`. A second original-code negative control, with bind and unbind guarded,
+reaches another null access at `0x216a31b`, address 4. The query guard routes a
+missing record through the original type-16 rejection (error 7), before any
+payload access or output write. An intentionally unsupported eight-byte record
+selects that path; it is never a valid graphics resource. Running the original
+query also preserves its optional context flush. Its entry, bounds check/error
+branch and return tail must match; mismatches retain the existing bind/unbind
+guards. The original value callback then returns false, leaves the output alone
+and retains its retryable phase instead of crashing.
 
 Validation under x86-64/Rosetta:
 
@@ -2260,19 +2271,24 @@ Validation under x86-64/Rosetta:
 - Original callbacks with a missing record retain their phase transitions,
   finalize twice and match unsupported records without changing the shader
   counter. A subsequent valid pair on the same context matches the original
-  unsupported-then-valid sequence.
+  unsupported-then-valid sequence. The missing-record value callback fails
+  cleanly after unbind.
+- Twelve representative non-null queries preserve original context, payload,
+  output, call order and return values. Null queries match type-16 rejection
+  with flush on/off and with/without an output pointer.
 - Six cases run the original finalizer's empty-context path and preserve its
   cursor update and return value. Dirty-resource-list finalization and real Gnm
   writers remain outside this fixture's coverage.
 - Disabled/undersized inputs and four shared/bind signature mismatches install
   nothing. Two unbind mismatches preserve the bind guard and leave the unbind
-  unchanged. The runtime builds with warnings as errors; the ARM64 no-op
+  unchanged. Two query mismatches retain bind/unbind protection and leave the
+  query unchanged. The runtime builds with warnings as errors; the ARM64 no-op
   fallback compiles.
 
 The existing runtime fixture and 19 Python patch tests also pass. GPU and
 launcher code did not change; their complete suites were not rerun.
 
-This contains the reported null unbind, completing the #99 null-record handling.
+This contains the reported null unbind and its known deferred query continuation.
 It does not explain why the record disappeared or recreate its graphics state.
 The 91-minute passage route, long-session stability, image correctness after a
 missing record, and performance have not been replayed or measured here.

@@ -15,12 +15,13 @@
 #include <unistd.h>
 #include <sys/ucontext.h>
 
-enum { BIND = 0x2169ec0, UNBIND = 0x216a070, TAIL = 0x216a014, UNBIND_TAIL = 0x216a298, IDENTITY = 0x26a94c0,
+enum { QUERY = 0x216a2f0, QUERY_TAIL = 0x216a717, BIND = 0x2169ec0, UNBIND = 0x216a070, TAIL = 0x216a014, UNBIND_TAIL = 0x216a298, IDENTITY = 0x26a94c0,
        FINISH = 0x26af700, IMAGE_SIZE = 0x6000000, CONTEXT_SIZE = 0xb800, MAX_CASES = 60 };
 typedef uint64_t (ABI *Dispatch)(void *, void *, void *);
+typedef uint32_t (ABI *Query)(void *, void *, const void *, void *, uint32_t, uint8_t);
 typedef struct { uint64_t kind, context, stage, data, extra, flags; } Call;
 typedef struct { uint32_t family, type; uint64_t reserved, data; } Resource;
-typedef struct { unsigned char context[CONTEXT_SIZE]; Call calls[16]; size_t count; uint64_t result, payload[16]; } Result;
+typedef struct { unsigned char context[CONTEXT_SIZE]; Call calls[16]; size_t count; uint64_t result, payload[16], output[4]; } Result;
 static Call calls[16];
 static size_t call_count;
 
@@ -34,6 +35,9 @@ static uint64_t ABI write_3(void *c, uint64_t s, uint64_t d) { record(3,c,s,d); 
 static uint64_t ABI event(void *c, uint64_t s) { record(4,c,s,0); return 0; }
 static uint64_t ABI release_record(void *c, uint64_t s, uint64_t d, uint64_t extra, uint64_t flags) {
     record(6,c,s,d); calls[call_count-1].extra=extra; calls[call_count-1].flags=flags; return 0;
+}
+static uint64_t ABI flush_context(void *c) {
+    record(7,c,0,0);((unsigned char *)c)[0x80]^=0x3c;return 0;
 }
 static uint64_t ABI finish(void *c) {
     record(5,c,0,0);
@@ -72,6 +76,7 @@ static void writers(unsigned char *image) {
     put_jump(image+0x1075da0,(uintptr_t)event);
     put_jump(image+0x26bb6d0,(uintptr_t)release_record);
     put_jump(image+FINISH,(uintptr_t)finish);
+    put_jump(image+0x26afa00,(uintptr_t)flush_context);
 }
 static void begin_capture(unsigned char *context, Resource *resource, unsigned counter, Result *out) {
     memset(out,0,sizeof(*out)); memset(context,0,CONTEXT_SIZE); memset(calls,0,sizeof(calls));
@@ -93,12 +98,18 @@ static void capture(Dispatch dispatch, unsigned char *context, Resource *resourc
 }
 static uint64_t call_pair(unsigned char *image, unsigned char *context, Resource *resource) {
     typedef uint64_t (ABI *Callback)(void *, void *);
-    struct { Resource *record; uint32_t state, pad; } record={resource,0,0};
+    struct { Resource *record; uint32_t state, pad; uint64_t value; } record={resource,0,0,0};
     uint64_t job[2]={0,(uintptr_t)context};
     uint64_t first=((Callback)(image+0xe2f130))(&record,job);
     assert((first&255)==1 && record.state==2);
     uint64_t result=((Callback)(image+0xe2f160))(&record,job);
     assert((result&255)==1 && record.state==1);
+    if(!resource) {
+        typedef uint64_t (ABI *GetValue)(void *,void *,void *);
+        uint64_t output=UINT64_C(0xfedcba9876543210);
+        uint64_t queried=((GetValue)(image+0xe2f190))(&record,job,&output);
+        assert(!(queried&255) && record.state==1 && !record.value && output==UINT64_C(0xfedcba9876543210));
+    }
     return result;
 }
 static void capture_pair(unsigned char *image, unsigned char *context, Resource *resource, unsigned counter, Result *out) {
@@ -116,8 +127,18 @@ static void capture_real_finish(Dispatch dispatch, unsigned char *context, Resou
     if(resource) memcpy(out->payload,(void *)(uintptr_t)resource->data,sizeof(out->payload));
     assert(!call_count && u64(context+0xb4c8)==cursor);
 }
+static void capture_query(Query query, unsigned char *context, Resource *resource, unsigned flush, int with_output, Result *out) {
+    begin_capture(context,resource,0,out);
+    if(resource) memset((void *)(uintptr_t)resource->data,0,sizeof(out->payload));
+    uint64_t output[4];memset(output,0xcc,sizeof(output));
+    out->result=query(context,context+0xb730,resource,with_output?output:NULL,8,(uint8_t)flush);
+    memcpy(out->context,context,CONTEXT_SIZE);memcpy(out->calls,calls,sizeof(calls));out->count=call_count;
+    if(resource)memcpy(out->payload,(void *)(uintptr_t)resource->data,sizeof(out->payload));
+    memcpy(out->output,output,sizeof(output));
+}
 static uintptr_t expected_fault_pc, expected_fault_context;
 static int verify_unbind_registers;
+static uintptr_t expected_fault_address;
 static void fatal(int sig, siginfo_t *info, void *opaque) {
     ucontext_t *context = opaque;
 #if defined(__APPLE__)
@@ -131,7 +152,7 @@ static void fatal(int sig, siginfo_t *info, void *opaque) {
 #endif
     int registers_match=!verify_unbind_registers ||
         (!rax && !rdi && rbx==expected_fault_context && rsi==expected_fault_context+0xb730);
-    _exit(pc == expected_fault_pc && info->si_addr == NULL && registers_match ? 128+sig : 2);
+    _exit(pc == expected_fault_pc && (uintptr_t)info->si_addr == expected_fault_address && registers_match ? 128+sig : 2);
 }
 
 static void expect_null_fault(unsigned char *image, unsigned char *context, unsigned offset, int pair) {
@@ -139,6 +160,7 @@ static void expect_null_fault(unsigned char *image, unsigned char *context, unsi
     pid_t child=fork();assert(child>=0);
     if(!child) {
         expected_fault_pc=(uintptr_t)image+offset;
+        expected_fault_address=offset==0x216a31b?4:0;
         expected_fault_context=(uintptr_t)context;verify_unbind_registers=offset==0x216a08c;
         struct sigaction action={0};action.sa_sigaction=fatal;action.sa_flags=SA_SIGINFO;
         sigemptyset(&action.sa_mask);
@@ -161,13 +183,13 @@ int main(int argc, char **argv) {
     unsigned char *image=mmap(NULL,IMAGE_SIZE,PROT_READ|PROT_WRITE|PROT_EXEC,MAP_PRIVATE|MAP_ANONYMOUS,-1,0);
     assert(image!=MAP_FAILED);
     copy_original(f,image,BIND,0x1b0);copy_original(f,image,UNBIND,0x27c);
-    copy_original(f,image,0xe2f130,0x55);copy_original(f,image,IDENTITY,4);
+    copy_original(f,image,QUERY,0x480);copy_original(f,image,0xe2f130,0xcd);copy_original(f,image,IDENTITY,4);
     copy_original(f,image,FINISH,0x300);fclose(f);
     static uint64_t canary=UINT64_C(0x9988776655443321);
     uintptr_t cookie=(uintptr_t)&canary;memcpy(image+0x53e3be0,&cookie,8);
-    unsigned char original[2][33], original_finish[0x300];
+    unsigned char original[2][33], query_entry[56], original_finish[0x300];
     memcpy(original[0],image+BIND,33);memcpy(original[1],image+UNBIND,33);
-    memcpy(original_finish,image+FINISH,sizeof(original_finish));
+    memcpy(original_finish,image+FINISH,sizeof(original_finish));memcpy(query_entry,image+QUERY,sizeof(query_entry));
     unsigned char *context=malloc(CONTEXT_SIZE);assert(context);
     /* Compile this fixture with origin/master's guard to reproduce the report's
      * exact bind-then-unbind failure before testing the extended guard. */
@@ -175,6 +197,12 @@ int main(int argc, char **argv) {
         assert(runtime_install_render_guard(image,IMAGE_SIZE));writers(image);
         expect_null_fault(image,context,0x216a08c,1);
         puts("PASS: bind-only guard skips the null bind, then the original callback faults at 0x216a08c");
+        return 0;
+    }
+    if(argc>2 && !strcmp(argv[2],"--baseline-query")) {
+        assert(runtime_install_render_guard(image,IMAGE_SIZE));writers(image);
+        expect_null_fault(image,context,0x216a31b,1);
+        puts("PASS: bind/unbind-only guards reach the next original query fault at 0x216a31b, address 4");
         return 0;
     }
     assert(!runtime_install_render_guard(NULL,0));
@@ -193,7 +221,15 @@ int main(int argc, char **argv) {
         unsigned char changed[33];memcpy(changed,image+UNBIND,sizeof(changed));
         assert(runtime_install_render_guard(image,IMAGE_SIZE));
         assert(memcmp(original[0],image+BIND,33) && !memcmp(changed,image+UNBIND,sizeof(changed)));
-        memcpy(image+BIND,original[0],33);image[unbind_offsets[i]]^=1;
+        memcpy(image+BIND,original[0],33);memcpy(image+QUERY,query_entry,sizeof(query_entry));image[unbind_offsets[i]]^=1;
+    }
+    const size_t query_offsets[]={QUERY+55,QUERY_TAIL+4};
+    for(unsigned i=0;i<2;i++) {
+        image[query_offsets[i]]^=1;unsigned char changed[56];memcpy(changed,image+QUERY,sizeof(changed));
+        assert(runtime_install_render_guard(image,IMAGE_SIZE));
+        assert(!memcmp(changed,image+QUERY,sizeof(changed)));
+        assert(memcmp(original[0],image+BIND,33) && memcmp(original[1],image+UNBIND,33));
+        memcpy(image+BIND,original[0],33);memcpy(image+UNBIND,original[1],33);image[query_offsets[i]]^=1;
     }
     writers(image);
     Dispatch dispatch[2]={(Dispatch)(image+BIND),(Dispatch)(image+UNBIND)};
@@ -213,6 +249,13 @@ int main(int argc, char **argv) {
         }
     }
     assert(count==MAX_CASES);
+    const unsigned query_types[]={0,2,16};Result expected_queries[3][2][2];
+    for(unsigned type=0;type<3;type++) {
+        resource.type=query_types[type];
+        for(unsigned flush=0;flush<2;flush++)
+            for(unsigned output=0;output<2;output++)
+                capture_query((Query)(image+QUERY),context,&resource,flush,(int)output,&expected_queries[type][flush][output]);
+    }
     Result expected_pair[3];resource.family=2;
     for(unsigned counter=0;counter<3;counter++)capture_pair(image,context,&resource,counter,&expected_pair[counter]);
     Result expected_followup[3];
@@ -260,6 +303,22 @@ int main(int argc, char **argv) {
     }
     puts("PASS: 120 non-null bind/unbind cases preserve payload, context, writers and return values");
     puts("PASS: missing-record callbacks preserve phase transitions, finalize twice and leave counters unchanged; later valid calls work");
+    for(unsigned type=0;type<3;type++) {
+        resource.type=query_types[type];
+        for(unsigned flush=0;flush<2;flush++) {
+            for(unsigned output=0;output<2;output++) {
+                capture_query((Query)(image+QUERY),context,&resource,flush,(int)output,&result);
+                assert(!memcmp(&result,&expected_queries[type][flush][output],sizeof(result)));
+            }
+        }
+    }
+    for(unsigned flush=0;flush<2;flush++) {
+        for(unsigned output=0;output<2;output++) {
+            capture_query((Query)(image+QUERY),context,NULL,flush,(int)output,&result);
+            assert(result.result==7 && !memcmp(&result,&expected_queries[2][flush][output],sizeof(result)));
+        }
+    }
+    puts("PASS: 12 non-null queries match original behavior; null queries return unsupported, preserve flush and leave outputs untouched");
     memcpy(image+FINISH,original_finish,sizeof(original_finish));
     for(unsigned stage=0;stage<2;stage++) {
         for(unsigned counter=0;counter<3;counter++) {
