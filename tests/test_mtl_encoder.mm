@@ -8,6 +8,7 @@
 #include <mach/mach.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -372,6 +373,11 @@ kernel void copy_constants(device uint* out [[buffer(0)]], constant uint* in [[b
     out[i] = in[i];
 }
 
+kernel void sample_binding(device float4* out [[buffer(0)]],
+                           texture2d<float> image [[texture(100)]], sampler s [[sampler(15)]]) {
+    out[0] = image.sample(s, float2(1.25, 0.5));
+}
+
 struct VOut { float4 pos [[position]]; };
 
 vertex VOut fullscreen(uint vid [[vertex_id]]) {
@@ -440,6 +446,151 @@ void TestCompute() {
     }
     Expect(ok, "Dispatch runs the kernel over the grid");
     Expect(ok2, "state is reapplied on a compute encoder opened after a blit");
+}
+
+void TestResourceBindingCache() {
+    Metal::Device device;
+    Metal::Encoder encoder{device};
+    id<MTLComputePipelineState> sample = Kernel(device, TestLibrary(device), @"sample_binding");
+    id<MTLDevice> dev = (__bridge id<MTLDevice>)device.NativeDevice();
+    id<MTLTexture> a = Texture(device, 2, 1), b = Texture(device, 2, 1);
+    id<MTLBuffer> pixels = SharedBuffer(device, 16);
+    const u32 colors[4] = {0xff0000ffu, 0xff00ff00u, 0xffff0000u, 0xffff0000u};
+    std::memcpy(pixels.contents, colors, sizeof(colors));
+    encoder.CopyBufferToTexture(Ref(pixels), 8, 8, (__bridge void*)a, 0, 0, {}, {2, 1, 1});
+    encoder.CopyBufferToTexture(Ref(pixels, 8), 8, 8, (__bridge void*)b, 0, 0, {}, {2, 1, 1});
+    MTLSamplerDescriptor* desc = [MTLSamplerDescriptor new];
+    desc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+    id<MTLSamplerState> clamp = [dev newSamplerStateWithDescriptor:desc];
+    desc.sAddressMode = MTLSamplerAddressModeRepeat;
+    id<MTLSamplerState> repeat = [dev newSamplerStateWithDescriptor:desc];
+    id<MTLBuffer> out = SharedBuffer(device, 7 * 16), scratch = SharedBuffer(device, 16);
+    encoder.SetComputePipeline((__bridge void*)sample, Metal::Access::None);
+    for (u32 i = 0; i < 32; ++i) {
+        encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out));
+        encoder.SetTexture(Metal::Stage::Compute, 100, (__bridge void*)a);
+        encoder.SetSampler(Metal::Stage::Compute, 15, (__bridge void*)clamp);
+        encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    }
+    const char* stats = std::getenv("BB_ENCODER_STATS");
+    if (stats && stats[0] == '1') {
+        const char* setting = std::getenv("BB_METAL_BINDING_CACHE");
+        const bool cached = !(setting && std::strcmp(setting, "0") == 0);
+        const auto counts = encoder.GetBindingStats();
+        Expect(counts.emitted == (cached ? 3u : 96u) &&
+                   counts.skipped == (cached ? 93u : 0u),
+               "32 repeated dispatches emit 3 cached bindings or 96 reference bindings");
+        std::printf("Resource binding fixture: %llu Metal calls, %llu identical setters skipped\n",
+                    (unsigned long long)counts.emitted, (unsigned long long)counts.skipped);
+    }
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 16));
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 32));
+    encoder.SetSampler(Metal::Stage::Compute, 15, (__bridge void*)repeat);
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 48));
+    encoder.SetTexture(Metal::Stage::Compute, 100, (__bridge void*)b);
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 64));
+    // External kernels overwrite the actual encoder state. Identical setters must
+    // preserve the dirty bits that ComputeEncoder() set for the following dispatch.
+    id<MTLComputeCommandEncoder> external =
+        (__bridge id<MTLComputeCommandEncoder>)encoder.ComputeEncoder(Metal::Access::None);
+    [external setBuffer:scratch offset:0 atIndex:0];
+    [external setTexture:a atIndex:100];
+    [external setSamplerState:clamp atIndex:15];
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 64));
+    encoder.SetTexture(Metal::Stage::Compute, 100, (__bridge void*)b);
+    encoder.SetSampler(Metal::Stage::Compute, 15, (__bridge void*)repeat);
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    encoder.FillBuffer(Ref(scratch), 16, 0);
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 80));
+    encoder.SetTexture(Metal::Stage::Compute, 100, (__bridge void*)b);
+    encoder.SetSampler(Metal::Stage::Compute, 15, (__bridge void*)repeat);
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    device.Wait(encoder.Submit());
+    encoder.SetComputePipeline((__bridge void*)sample, Metal::Access::None);
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 96));
+    encoder.SetTexture(Metal::Stage::Compute, 100, (__bridge void*)b);
+    encoder.SetSampler(Metal::Stage::Compute, 15, (__bridge void*)repeat);
+    encoder.Dispatch({1, 1, 1}, {1, 1, 1});
+    device.Wait(encoder.Submit());
+    const float expected[7][4] = {{0,1,0,1}, {0,1,0,1}, {1,0,0,1}, {0,0,1,1},
+                                {0,0,1,1}, {0,0,1,1}, {0,0,1,1}};
+    Expect(std::memcmp(out.contents, expected, sizeof(expected)) == 0,
+           "buffer offsets, texture/sampler changes, external work, reopen and submit keep GPU results");
+    Expect(device.ErrorCount() == 0, "resource binding cache ran without GPU errors");
+}
+
+void TestInlineBindingCache() {
+    Metal::Device device;
+    Metal::Encoder encoder{device};
+    id<MTLComputePipelineState> copy = Kernel(device, TestLibrary(device), @"copy_constants");
+    id<MTLBuffer> out = SharedBuffer(device, 9 * 32), input = SharedBuffer(device, 32);
+    std::array<u32, 8> values{1,2,3,4,5,6,7,8};
+    const auto original = values;
+    std::memcpy(input.contents, values.data(), 32);
+    encoder.SetComputePipeline((__bridge void*)copy, Metal::Access::None);
+    for (u32 i = 0; i < 32; ++i) {
+        const auto identical = values; // equal bytes at another address
+        encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out));
+        encoder.SetBytes(Metal::Stage::Compute, 1, identical.data(), 32);
+        encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    }
+    const char* stats = std::getenv("BB_ENCODER_STATS");
+    if (stats && stats[0] == '1') {
+        const char* setting = std::getenv("BB_METAL_BINDING_CACHE");
+        const bool cached = !(setting && std::strcmp(setting, "0") == 0);
+        const auto counts = encoder.GetBindingStats();
+        Expect(counts.emitted == (cached ? 2u : 64u) &&
+                   counts.skipped == (cached ? 62u : 0u),
+               "32 repeated inline dispatches emit 2 cached bindings or 64 reference bindings");
+        std::printf("Inline binding fixture: %llu Metal calls, %llu identical setters skipped\n",
+                    (unsigned long long)counts.emitted, (unsigned long long)counts.skipped);
+    }
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 32));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    values[0] = 99; // a reused source pointer must not hide a changed payload
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 64));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 16);
+    encoder.Dispatch({1, 1, 1}, {4, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 96));
+    encoder.SetBuffer(Metal::Stage::Compute, 1, Ref(input));
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 128));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    std::vector<u32> large(2048, 17);
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 160));
+    encoder.SetBytes(Metal::Stage::Compute, 1, large.data(), u32(large.size() * 4));
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 192));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 224));
+    id<MTLComputeCommandEncoder> external =
+        (__bridge id<MTLComputeCommandEncoder>)encoder.ComputeEncoder(Metal::Access::None);
+    const std::array<u32, 8> zero{};
+    [external setBytes:zero.data() length:32 atIndex:1];
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    encoder.EndEncoding();
+    encoder.SetBuffer(Metal::Stage::Compute, 0, Ref(out, 256));
+    encoder.SetBytes(Metal::Stage::Compute, 1, values.data(), 32);
+    encoder.Dispatch({1, 1, 1}, {8, 1, 1});
+    device.Wait(encoder.Submit());
+    const u32* result = static_cast<const u32*>(out.contents);
+    for (u32 row = 0; row < 9; ++row) {
+        for (u32 i = 0; i < 8; ++i) {
+            const u32 expected = row == 5 ? 17 : row == 2 && i >= 4 ? 0 :
+                                 row == 0 || row == 3 ? original[i] : values[i];
+            Expect(result[row * 8 + i] == expected,
+                   "inline identity includes exact bytes, size, buffer/large transitions and reapply");
+        }
+    }
+    Expect(device.ErrorCount() == 0, "inline binding cache ran without GPU errors");
 }
 
 void TestLargeBytes() {
@@ -1611,6 +1762,31 @@ void TestVertexBufferStride() {
     device.Wait(encoder.Submit());
     Expect(Pixel(out, kSize, 5, 5) == kRed && Pixel(out, kSize, 60, 60) == kRed,
            "SetVertexBuffer: attributes are read with the given stride");
+    // The same object and offset, first at stride 32 (a degenerate triangle),
+    // then stride 64 (fullscreen). Stride is part of the binding identity.
+    id<MTLBuffer> strided = SharedBuffer(device, 3 * 64);
+    for (u32 i = 0; i < 3; ++i) {
+        float* v = reinterpret_cast<float*>(static_cast<u8*>(strided.contents) + i * 64);
+        v[0] = pos[i][0]; v[1] = pos[i][1];
+        v[4] = 1; v[7] = 1;
+    }
+    float* middle = reinterpret_cast<float*>(static_cast<u8*>(strided.contents) + 32);
+    middle[0] = 3; middle[1] = -1; middle[4] = 1; middle[7] = 1;
+    encoder.BeginRenderPass(ColorPass(target, true, kBlack));
+    encoder.SetRenderPipeline((__bridge void*)pipeline);
+    FullViewport(encoder);
+    encoder.SetScissor({0, 0, kSize / 2, kSize});
+    encoder.SetVertexBuffer(3, Ref(strided), 32);
+    encoder.Draw(Metal::Primitive::Triangle, 3);
+    encoder.SetScissor({kSize / 2, 0, kSize / 2, kSize});
+    encoder.SetVertexBuffer(3, Ref(strided), 64);
+    encoder.SetVertexBuffer(3, Ref(strided), 64);
+    encoder.Draw(Metal::Primitive::Triangle, 3);
+    encoder.EndRenderPass();
+    out = Readback(device, encoder, target);
+    device.Wait(encoder.Submit());
+    Expect(Pixel(out, kSize, 5, 5) == kBlack && Pixel(out, kSize, 60, 60) == kRed,
+           "same buffer/offset with changed or repeated dynamic stride keeps the right vertices");
     Expect(device.ErrorCount() == 0, "strided vertex buffer ran without errors");
 }
 
@@ -2702,6 +2878,8 @@ int main() {
         TestKeepAlive();
         TestWaitMeansCompleted();
         TestCompute();
+        TestResourceBindingCache();
+        TestInlineBindingCache();
         TestLargeBytes();
         TestClearOnlyPass();
         TestPassReopenKeepsDrawing();
