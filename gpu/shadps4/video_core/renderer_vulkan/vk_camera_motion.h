@@ -8,6 +8,8 @@
 
 #include <array>
 #include <memory>
+#include <span>
+#include "bbport_native_motion.h"
 
 #include "common/types.h"
 #include "video_core/renderer_metal/mtl_host_kernel.h"
@@ -40,6 +42,8 @@ public:
         std::array<float, 2> jitter;
         std::array<float, 2> previous_jitter;
         u32 mode;
+        alignas(8) std::array<float, 2> native_scale{};
+        u32 native_enabled = 0;
     };
 
     /// Encodes camera_motion.comp (`kernel`, BuildHostKernel of CAMERA_MOTION_COMP) over
@@ -47,7 +51,7 @@ public:
     /// into `motion` (RG16Float, ShaderWrite), pixels, previous minus current. `object` is the
     /// object motion texture (read with mode 1; any readable 2D texture otherwise).
     static void Record(Metal::Encoder& encoder, const Metal::HostKernel& kernel, void* depth,
-                       void* motion, void* object, const Params& params);
+                       void* motion, void* object, const Params& params, void* native = nullptr);
 
     CameraMotion(Metal::Device& device, Scheduler& scheduler,
                  VideoCore::TextureCache& texture_cache, Runtime& runtime);
@@ -98,6 +102,11 @@ public:
 
     /// The G-buffer pass (5+ color targets): its depth is the scene depth.
     void OnGBufferPass(VideoCore::ImageId depth);
+    // Called after binding a direct draw; its cleared state was saved before
+    // BeginRendering invalidated the target for the new write.
+    std::shared_ptr<std::atomic<bool>> NativeProducer(VideoCore::ImageId image,
+        const BbNativeMotion::State& prior, u64 vertex, u64 pixel,
+        std::span<const u32> vertex_ud, std::span<const u32> pixel_ud);
 
     /// The pass copying the finished frame (`frame`, the last target drawn) to the display: the
     /// frame's depth and camera are complete. Records the debug overlay, starts a new frame.
@@ -127,7 +136,8 @@ private:
     bool frame_has_camera = false;
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
-    VideoCore::ImageId depth_id{};
+    VideoCore::ImageId depth_id{}, native_candidate{};
+    u64 native_sequence = 0;
 
     Metal::HostKernel overlay_kernel; ///< built at construction when debug_overlay
     /// Debug: the last two finished frames (RGBA8 packed), for the reprojection check.
