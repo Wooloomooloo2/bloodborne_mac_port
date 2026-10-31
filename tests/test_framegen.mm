@@ -154,20 +154,23 @@ void Upload(Metal::Device& device, Metal::Encoder& e, void* texture, const void*
 void SceneDisplay(Metal::Device& device, Metal::Encoder& encoder, BbFrameGen::Generator& generator,
                   const BbFrameGen::FramePtr& frame, void* ui, void* displayed,
                   std::span<const float> curves = {}) {
-    const uint32_t height = curves.empty() ? 1 : uint32_t(curves.size() / 256);
+    // The retail LUT: one 1-row curve per array slice (red, green, blue inputs: slices 2, 1, 0).
+    const uint32_t slices = curves.empty() ? 3 : uint32_t(curves.size() / 256);
     auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatR32Float
-        width:256 height:height mipmapped:NO];
-    d.textureType = MTLTextureType2DArray; d.arrayLength = 1;
+        width:256 height:1 mipmapped:NO];
+    d.textureType = MTLTextureType2DArray; d.arrayLength = slices;
     d.storageMode = MTLStorageModeShared; d.usage = MTLTextureUsageShaderRead;
     auto lut = [Dev(device) newTextureWithDescriptor:d];
-    std::vector<float> values(256);
+    std::vector<float> values(256 * slices);
     for (unsigned i=0; i<256; ++i) {
         const float x = float(i)/255;
-        values[i] = x <= .04045f ? x/12.92f : std::pow((x+.055f)/1.055f,2.4f);
+        for (uint32_t slice = 0; slice < slices; ++slice)
+            values[slice * 256 + i] = x <= .04045f ? x/12.92f : std::pow((x+.055f)/1.055f,2.4f);
     }
     if (!curves.empty()) values.assign(curves.begin(), curves.end());
-    [lut replaceRegion:MTLRegionMake2D(0,0,256,height) mipmapLevel:0 slice:0
-        withBytes:values.data() bytesPerRow:256*4 bytesPerImage:height*256*4];
+    for (uint32_t slice = 0; slice < slices; ++slice)
+        [lut replaceRegion:MTLRegionMake2D(0,0,256,1) mipmapLevel:0 slice:slice
+            withBytes:values.data() + slice * 256 bytesPerRow:256*4 bytesPerImage:256*4];
     auto sd = [MTLSamplerDescriptor new];
     sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear;
     sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
@@ -368,14 +371,14 @@ void Gpu(Metal::Device& device) {
     }
 }
 
-void GammaRows(Metal::Device& device) {
-    // The retail LUT stores channel curves in rows, in one array slice. Distinct
-    // curves and a fourth sentinel row expose bottom-edge clamping or row blending.
-    for (const uint32_t rows : {3u, 4u}) {
+void GammaSlices(Metal::Device& device) {
+    // The retail LUT stores one channel curve per array slice, in reverse channel order.
+    // Distinct curves and a fourth sentinel slice expose a slice or channel mix-up.
+    for (const uint32_t slices : {3u, 4u}) {
         BbFrameGen::Generator generator{device};
         const auto d = Description();
         auto frame = generator.Prepare(d);
-        Expect(bool(frame), "gamma row snapshot allocated");
+        Expect(bool(frame), "gamma slice snapshot allocated");
         if (!frame) return;
         auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
         auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
@@ -387,7 +390,7 @@ void GammaRows(Metal::Device& device) {
         for (size_t p = 0; p < image.size(); p += 4) {
             image[p] = 51; image[p + 1] = 102; image[p + 2] = 153; image[p + 3] = 255;
         }
-        std::vector<float> curves(256 * rows, .95f);
+        std::vector<float> curves(256 * slices, .95f);
         for (uint32_t x = 0; x < 256; ++x) {
             const float coordinate = (x + .5f) / 256.f;
             curves[x] = .1f + .6f * coordinate;
@@ -407,13 +410,14 @@ void GammaRows(Metal::Device& device) {
             d.out_width * 8, d.out_width * d.out_height * 8);
         device.Wait(encoder.Submit());
         const auto* rgb = static_cast<const _Float16*>(pixels.contents);
-        Expect(std::abs(float(rgb[0]) - .22f) < .002f,
-               "red uses the center of gamma LUT row zero");
+        // Input (.2, .4, .6): red = slice 2 (blue), green = slice 1, blue = slice 0 (red).
+        Expect(std::abs(float(rgb[0]) - .35f) < .002f,
+               "red output maps blue input through gamma LUT slice two");
         Expect(std::abs(float(rgb[1]) - .32f) < .002f,
-               "green uses the center of gamma LUT row one");
-        Expect(std::abs(float(rgb[2]) - .35f) < .002f,
-               "blue uses the center of gamma LUT row two");
-        Expect(float(rgb[3]) == 1.f, "gamma row sampling preserves alpha");
+               "green output maps green input through gamma LUT slice one");
+        Expect(std::abs(float(rgb[2]) - .22f) < .002f,
+               "blue output maps red input through gamma LUT slice zero");
+        Expect(float(rgb[3]) == 1.f, "gamma slice sampling preserves alpha");
     }
 }
 
@@ -462,7 +466,7 @@ int main() {
         Metal::Device device;
         if (BbFrameGen::Supported(device)) {
             Gpu(device);
-            GammaRows(device);
+            GammaSlices(device);
             CroppedDisplay(device);
         } else
             std::printf("SKIP: MetalFX frame interpolation unsupported\n");

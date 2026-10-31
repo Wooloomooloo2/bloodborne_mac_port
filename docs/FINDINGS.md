@@ -2596,6 +2596,19 @@ part of this renderer change. Concurrent workload and later framegen-off/on
 throughput varied, so these runs establish bounded crash coverage, not a
 performance comparison. Combat, long sessions, other Macs and 4K remain untested.
 
+**Correction (same day, owner's play test): the LUT is slices, not rows, and the channels are
+reversed.** In the game the bound LUT is 1025x1 with 3 array slices (R32Float; logged from
+`CaptureDisplay` in a diagnostic build), so row-centre sampling in slice zero still gives every channel the slice-zero
+curve. The retail display pass (PS `0x38d65b32`, decompiled from the pipeline cache) is
+`red = LUT[2](blue)`, `green = LUT[1](green)`, `blue = LUT[0](red)`. The generated frames kept
+red and blue in place, so the owner saw wrong colours on every other frame. `scene_gamma` now
+copies that mapping and `CaptureDisplay` rejects a LUT with fewer than 3 slices. The fixture now
+builds a 1-row LUT with one distinct curve per slice (and a fourth sentinel slice); it fails on
+the rows version and passes with the change, with and without Metal validation. A 1080p MetalFX
+Native AA frame-generation run to the benchmark route's measuring stage encoded intermediate frames
+with no errors. Owner's verdict on feel: playable, but noticeably laggier
+than frame generation off; it stays opt-in.
+
 The single-rate FPS counter also retained the worst-case resolution-text width
 reserved for the paired layout. Restore the original content-sized, left-aligned
 single row when generation is inactive, and clear any previous paired width.
