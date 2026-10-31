@@ -10,6 +10,12 @@ struct Achievement: Identifiable, Sendable {
 }
 
 enum AchievementHistory {
+    static func logURL(dataDir: URL, env: [String: String]) -> URL {
+        let userDir = env["BB_USER_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+            ?? dataDir.appendingPathComponent("user")
+        return userDir.appendingPathComponent("trophies.log")
+    }
+
     // Same permissive line format as the C runtime and original pyL1nx tracker.
     // Preserve the earliest timestamp; malformed/unknown records never unlock a trophy.
     static func parse(_ text: String) -> [Int: Date] {

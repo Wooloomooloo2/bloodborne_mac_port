@@ -39,7 +39,7 @@ mutex. Guest trophy calls do not invoke AppKit or ImGui. The GPU library receive
 and a session-only notification mask. The Rosetta game process publishes them into
 `BbGpuShared` with atomic payload access and a sequence counter. The renderer makes at most three attempts
 to read a complete snapshot, keeping its last one when the writer is busy. macOS uses this
-split-process architecture exclusively. Shared-control version 5 rejects mismatched
+split-process architecture exclusively. Shared-control version 8 rejects mismatched
 game/host binaries; rebuild/package both. No frame-generation or renderer changes are required.
 
 ## Original sources and adaptation
@@ -82,3 +82,55 @@ builds, trophy runtime fixture, both shared-memory fixture slices, eight Python 
 launcher build/model tests, settings persistence and offscreen Metal checks.
 These are synthetic/build checks. Real gameplay unlocks, fullscreen/controller hardware,
 VoiceOver and a packaged-app end-to-end session still require live verification.
+
+After merging upstream `master` (`4dbbb0b`), shared-control version 7 retains the benchmark
+and mouse-input fields and appends achievements. Both GPU-library architectures, the game,
+both GPU-host variants and the launcher rebuilt successfully. Trophy runtime and snapshot
+fixtures, shared rings, launcher model and Stop lifecycle tests, tracker/catalog checks,
+runtime/semaphore/pad tests, launch settings, settings persistence with both banner and mouse
+preferences, and the offscreen overlay (plain and Metal validation) passed. The launcher
+achievement browser remains usable during gameplay; its banner preference follows the other
+launch settings and is disabled until the session ends. These checks did not launch the game.
+A subsequent documentation-only merge (`af0fae2`) retains upstream's 0.5.7 release notes.
+
+## Launcher and runtime refresh, 25 October 2026
+
+Merged upstream `master` (`a07284d`), retaining its compact Keyboard and Mouse popover,
+larger launcher window, extra launch.conf variables, runtime ABI checks and renderer
+coordination fixes. Achievements remain a launcher page, usable during gameplay, alongside
+the updated controls. Both the achievement tests and upstream's benchmark/environment
+tests remain in the launcher suite.
+
+The trophy browser now resolves `BB_USER_DIR` from the same effective environment used
+to start the game, including launch.conf assignments. Explicit environment values retain
+precedence; an empty value uses the default user folder, matching `run.sh`. Four model
+checks cover default, configured, overridden and empty folder values.
+
+Both GPU architectures, the full runtime, both native host variants and launcher rebuild
+successfully with LTO disabled. Trophy persistence and both snapshot slices, generated
+catalog and eight tracker tests, launcher model, settings persistence, runtime/pad/launch
+fixtures, seven semaphore tests, six content/module tests, twelve TLS-slot tests and eight
+linker tests pass. Cross-architecture rings, draw-pipe ordering/backpressure and Metal
+encoder/overlay tests (plain and validation layer) also pass.
+
+The existing loader suite has seven passing and seven failing tests, matching the failure
+set reproduced with untouched upstream loader and runtime-service sources using the same
+libraries. Those tests expect unsupported imports to exit 20; the runtime returns zero
+and later reports that the fixture entry returned. Upstream already documents this in
+[TLS_SLOT_CONTRACT.md](TLS_SLOT_CONTRACT.md#validation). No loader-policy change is included.
+These are focused build/fixture checks; gameplay, real-archive artwork, accessibility and
+the packaged app were not retested. The full Ninja-based build/test command was not run.
+
+## Upstream controls refresh, 31 October 2026
+
+The current upstream merge retains the full Controls page, mouse-wheel bindings and
+vertical mouse sensitivity alongside Achievements. Shared-control version 8 keeps the
+upstream mouse-wheel counters and appends the trophy snapshot and artwork path. Both
+game and GPU-host binaries must be rebuilt together.
+
+Both GPU architectures, the runtime, both GPU-host variants and the native launcher
+rebuilt successfully. Trophy persistence, both snapshot slices, cross-architecture rings,
+the production GPU split fixture, settings persistence (including vertical sensitivity
+and achievement banners), launcher models, catalog/tracker and launch-settings checks
+passed. The achievement overlay passed normally and with Metal API Validation. These
+are build/fixture checks; live unlocks and a packaged gameplay session were not rerun.
