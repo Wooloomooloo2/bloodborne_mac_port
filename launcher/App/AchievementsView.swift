@@ -33,6 +33,7 @@ struct AchievementsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Toggle("Show in-game unlock banners", isOn: $model.settings.achievementBanners)
+                    .disabled(model.running)
                     .help("Applies when you start the game. Use Settings → Achievements in game to change the current session.")
                 Spacer()
                 Toggle("Reveal locked descriptions", isOn: $reveal)
