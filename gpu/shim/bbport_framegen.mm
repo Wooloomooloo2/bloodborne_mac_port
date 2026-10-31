@@ -75,9 +75,13 @@ fragment half4 scene_gamma(DisplayVertex in [[stage_in]],
     texture2d<float, access::read> scene [[texture(0)]],
     texture2d_array<float> lut [[texture(1)]], sampler smp [[sampler(0)]]) {
     float4 c = scene.read(uint2(in.position.xy));
-    c.rgb = float3(lut.sample(smp, float2(c.r, 0), 0).r,
-                   lut.sample(smp, float2(c.g, 1), 0).r,
-                   lut.sample(smp, float2(c.b, 2), 0).r);
+    // The three channel curves occupy rows of slice zero. The sampler uses
+    // normalized coordinates: sample row centers, rather than clamping G/B to
+    // the bottom edge with Y=1/2.
+    float row_height = 1.f / float(lut.get_height());
+    c.rgb = float3(lut.sample(smp, float2(c.r, .5f * row_height), 0).r,
+                   lut.sample(smp, float2(c.g, 1.5f * row_height), 0).r,
+                   lut.sample(smp, float2(c.b, 2.5f * row_height), 0).r);
     return half4(c);
 }
 kernel void restore_hud(texture2d<float, access::read> real [[texture(0)]],
