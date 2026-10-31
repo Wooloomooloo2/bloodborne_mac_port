@@ -1,5 +1,24 @@
 # Temporal upscaling and frame generation — frame analysis and plan
 
+## MetalFX startup targets above 1080p (#116, 2026-10-31)
+
+On macOS, MetalFX at outputs above 1920×1080 now selects live resolution changes
+automatically. Guest render targets remain 1920×1080; the host renders at the selected
+preset size and MetalFX reconstructs the requested output. This matches starting with
+upscaling off and enabling MetalFX later, including when `live_resolution=0` was saved.
+
+The old 1440p Quality startup patch creates 1708×960 guest targets. Passing between rooms
+in Forbidden Woods can then make the tonemapped scene uniformly white before MetalFX
+reads it. A local failed-frame dump confirmed constant color channels across the input,
+with valid varying depth. Reinitializing temporal history cannot repair that input.
+
+This is a mitigation of the startup-patched rendering path; its underlying game/post-process
+failure is not yet isolated. The live path keeps guest compute/post at native dimensions
+and adds proxy resolves, so its cost can differ. Gameplay comparison is bounded to the
+reported 1440p Quality route. Lower outputs and other providers retain their existing
+startup selection. Explicit `BB_RENDER_RES` remains available for diagnostics; native wide
+patches keep their existing path. See `FINDINGS.md` for the reproduction and validation limits.
+
 ## Native TAA and missing FSR 4 assets (2026-10-01)
 
 `upscaler=taa` / `BB_UPSCALER=taa` is a separate native-resolution temporal AA
