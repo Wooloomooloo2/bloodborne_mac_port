@@ -2340,3 +2340,53 @@ This contains the reported null unbind and its known deferred query continuation
 It does not explain why the record disappeared or recreate its graphics state.
 The 91-minute passage route, long-session stability, image correctness after a
 missing record, and performance have not been replayed or measured here.
+
+## Forbidden Woods white scene with MetalFX (#116, 2026-10-31)
+
+Reporter: 0.5.10 and 0.5.12, M4 Pro/24 GB, 2560×1440, MetalFX Quality, 60 FPS fixed
+timing, windowed, Sensitive Analog Input and Player No Dead enabled. Starting with
+upscaling off, then enabling MetalFX, does not reproduce the failure.
+
+The supplied captures distinguish two rendering paths. The failed startup session uses
+1708×960 guest targets (the requested scene patch is 1706×960). Both the healthy off
+capture and the healthy MetalFX-enabled-later capture retain 1920×1080 guest targets.
+The latter reconstructs a 1706×960 host proxy into 2560×1440.
+
+Reproduced locally against upstream 50274ee on M4 Max/48 GB, macOS 27.0, with a disposable
+copy of the supplied character. The owner drove the passage next to the lift and confirmed
+the white scene. The local dump passes game_check.py's executable/data check. The supplied
+save namespace was remapped only in the disposable copy, and a diagnostic runtime used the
+existing local DLC-discovery adapter with the supplied installed Old Hunters files. The
+renderer itself was built unchanged from upstream for both cases. Original saves and game
+assets were not edited; all 15 supplied save-file hashes still match.
+
+Failed-frame readbacks from the existing upscaler dump hook:
+
+- The 1708×960 input's three stored color channels are constant 243, 251, 255 across all
+  1,639,680 pixels. Alpha still varies. Color is finite: it is already a flat image before
+  MetalFX, not merely white in the presenter or HUD composition.
+- Depth remains finite and varies from about 0.97377 to 0.99995; motion is finite too.
+- The 2560×1440 MetalFX output follows that white input. No scaler-history or HDR
+  auto-exposure change was made: this path uses the tonemapped input.
+
+With MetalFX enabled from launch and live_resolution=1, the owner reported the repeated
+passage traversal stayed clear. Input and output readbacks contain normal varying scene
+colors. That session ended at the diagnostic runtime's configured 900-second alarm:
+`STOP: watchdog timeout` precedes a SIGBUS during stack collection, about 902 seconds after
+process launch. Treat that as an abnormal diagnostic timeout, not a clean-exit or long-session
+stability pass. The subsequent startup check disables that alarm and stops explicitly.
+
+Mitigation: run.sh automatically selects live resolution changes for MetalFX outputs above
+1080p, including configurations saved with live_resolution=0. This avoids the failing guest
+resolution patch and matches the healthy off-then-on path. Other providers, lower outputs,
+explicit BB_RENDER_RES and native wide patches keep their selection. The exact cause inside
+the startup-patched game/post-processing path remains unresolved; performance and campaign-wide
+coverage are not established by this route. Restart regression coverage also corrects a stale
+FSR expectation: current upstream still patches 1080p Ultra Performance to 640×360.
+
+Validation: the unmodified renderer builds for x86-64 and arm64. All 32 Python restart,
+patch and ultrawide tests, the shell launch-settings checks, bash syntax and diff whitespace
+checks pass. A final launch without live_resolution or BB_LIVE_RES selects native guest
+targets automatically, logs a 1706×960 MetalFX input with 1920×1080 guest camera dimensions,
+and renders the copied gate-position save normally. This final session was stopped explicitly
+with SIGTERM; it is startup/gameplay-image coverage, not a normal in-game shutdown test.

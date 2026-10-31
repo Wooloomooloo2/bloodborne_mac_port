@@ -13,7 +13,8 @@ import unittest
 
 
 class RestartResolutionTests(unittest.TestCase):
-    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False):
+    def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
+                     upscaler='fsr3', output='1280x720'):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -27,7 +28,7 @@ class RestartResolutionTests(unittest.TestCase):
             (out / 'eboot.elf').write_bytes(elf)
             (data / 'eboot.bin').touch()
             config = data / 'bbport.ini'
-            config.write_text('upscaler=fsr3\npreset=1\noutput_res=1280x720\n' + ini_extra)
+            config.write_text(f'upscaler={upscaler}\npreset=1\noutput_res={output}\n' + ini_extra)
             if caps is not None:  # the GPU check next to the probe (live_resolution=auto)
                 tool = data / 'bb-gpu-capabilities'
                 tool.write_text(f'#!/bin/sh\necho {caps}\n')
@@ -55,7 +56,8 @@ class RestartResolutionTests(unittest.TestCase):
             probe.chmod(0o755)
             env = dict(os.environ, BB_PREBUILT='1', BB_PROBE=str(probe), PYTHON=str(python),
                        BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data))
-            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
+            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE',
+                        'BB_UPSCALER'):
                 env.pop(key, None)
             env.pop('BB_LIVE_RES', None)
             if explicit:
@@ -74,10 +76,10 @@ class RestartResolutionTests(unittest.TestCase):
 
     def test_outputs_other_than_1080p_patch_the_render_size_and_restarts_recompute_it(self):
         rows = self.run_restarts()
-        # 720p Quality, 720p Ultra Performance after a restart, then 1080p (live host targets).
-        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', None])
-        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', None])
-        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', None])
+        # FSR 3.1: 720p Quality, 720p Ultra Performance, then 1080p Ultra Performance.
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', '640x360'])
+        self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', '1920x1080'])
+        self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', '1'])
 
     def test_live_resolution_keeps_guest_sizes_native(self):
         rows = self.run_restarts(live=True)
@@ -108,3 +110,36 @@ class RestartResolutionTests(unittest.TestCase):
         rows = self.run_restarts(explicit=True)
         self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['800x450'] * 3)
         self.assertTrue(all(row['BB_AUTO_RENDER_RES'] is None for row in rows))
+
+    def test_metalfx_above_1080p_launch_keeps_guest_targets_native(self):
+        # #116: the 1440p Quality startup patch creates 1708x960 guest targets and the
+        # scene can turn white before MetalFX. Starting off and enabling it later works
+        # because that session uses native guest targets with reduced host proxies.
+        for output in ('2560x1440', '3456x1944', '3840x2160'):
+            with self.subTest(output=output):
+                first = self.run_restarts(upscaler='metalfx', output=output,
+                                          ini_extra='live_resolution=0\n',
+                                          bare_path=output == '2560x1440')[0]
+                self.assertEqual(first, dict(BB_RENDER_RES=None, BB_OUTPUT_RES=None,
+                                             BB_AUTO_RENDER_RES=None))
+
+    def test_metalfx_lower_outputs_keep_existing_startup_behavior(self):
+        for output, render in (('1280x720', '854x480'), ('1920x1080', '1280x720')):
+            with self.subTest(output=output):
+                first = self.run_restarts(upscaler='metalfx', output=output)[0]
+                self.assertEqual(first['BB_RENDER_RES'], render)
+
+    def test_metalfx_guard_reads_trimmed_ini_values(self):
+        first = self.run_restarts(output='2560x1440',
+                                  ini_extra='  upscaler = metalfx \r\n')[0]
+        self.assertIsNone(first['BB_RENDER_RES'])
+
+    def test_metalfx_native_targets_do_not_stick_after_provider_change(self):
+        rows = self.run_restarts(upscaler='metalfx', output='2560x1440')
+        # The next launch selects FSR 3.1 at 720p: keep its existing startup behavior.
+        self.assertEqual([row['BB_RENDER_RES'] for row in rows], [None, '426x240', '640x360'])
+
+    def test_metalfx_explicit_render_override_remains_available(self):
+        first = self.run_restarts(upscaler='metalfx', output='2560x1440', explicit=True)[0]
+        self.assertEqual(first['BB_RENDER_RES'], '800x450')
+        self.assertIsNone(first['BB_AUTO_RENDER_RES'])
