@@ -2380,3 +2380,11 @@ provider solely to load the DLC-dependent benchmark save; that provider is not
 part of this renderer change. Concurrent workload and later framegen-off/on
 throughput varied, so these runs establish bounded crash coverage, not a
 performance comparison. Combat, long sessions, other Macs and 4K remain untested.
+
+The single-rate FPS counter also retained the worst-case resolution-text width
+reserved for the paired layout. Restore the original content-sized, left-aligned
+single row when generation is inactive, and clear any previous paired width.
+The production overlay readback measured 326 pixels before and 186 after at its
+fixed test size, while the paired counter stays at 377 pixels. Normal and Metal
+validation runs check the compact counter, restart-dependent transitions,
+unsupported/refresh-limited fallback, and stable paired columns.

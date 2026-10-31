@@ -1245,13 +1245,13 @@ void FpsCounter() {
                             (framegen_active ? ImGui::CalcTextSize("Displayed").x + gap : 0.0f);
     const float resolution_width =
         ImGui::CalcTextSize("9999x9999 -> 9999x9999  MetalFX").x * .82f;
-    const float width = std::max(row_width, resolution_width) + 22.0f * base_scale +
-                        (framegen_active ? 16.0f * base_scale : 0.0f);
+    const float width = framegen_active
+        ? std::max(row_width, resolution_width) + 38.0f * base_scale : 0.0f;
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - pad,
                                    viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
-    // Reserve digit/frametime space once. Auto height still follows the resolution
-    // line, but changing FPS values cannot resize the box or move either column.
+    // Reserve stable columns for the paired counter. The single counter keeps its
+    // original content-sized layout; zero also clears a previous paired width.
     ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.62f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * base_scale);
@@ -1286,7 +1286,10 @@ void FpsCounter() {
         row("Real", frame_rates.real_fps);
         row("Displayed", frame_rates.displayed_fps);
     } else {
-        row(nullptr, frame_rates.real_fps);
+        ImGui::Text("%.0f FPS", frame_rates.real_fps);
+        ImGui::SameLine();
+        ImGui::TextColored(kSecondary, "%.1f ms",
+                          frame_rates.real_fps > 0 ? 1000.0 / frame_rates.real_fps : 0.0);
     }
     // Scene size from the upscaler or native G-buffer, and the output in effect: a
     // startup-patched session keeps its launch output until restart.

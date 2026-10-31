@@ -216,8 +216,14 @@ int main() {
         s.startup_framegen = true;
         for (int i = 0; i < 4; ++i) Present(t, true);
         const auto framegen_bounds = CounterBounds(t);
+        std::printf("FPS counter widths: single %d, framegen %d pixels\n",
+                    normal_bounds[2] - normal_bounds[0],
+                    framegen_bounds[2] - framegen_bounds[0]);
         Expect(framegen_bounds[2] - framegen_bounds[0] > normal_bounds[2] - normal_bounds[0],
                "framegen reserves a wider FPS counter");
+        Expect((framegen_bounds[2] - framegen_bounds[0]) >
+                   (normal_bounds[2] - normal_bounds[0]) * 1.5f,
+               "framegen off retains the compact legacy counter width");
         Expect(framegen_bounds[3] - framegen_bounds[1] > normal_bounds[3] - normal_bounds[1],
                "framegen adds a second FPS row");
         const auto framegen_counter = counter();
@@ -277,8 +283,9 @@ int main() {
                "disabling framegen restores the single FPS display and normal bounds");
         for (const auto rates : changing_rates) {
             for (int i = 0; i < 4; ++i) Present(t, true, rates);
-            Expect(CounterBounds(t) == normal_bounds,
-                   "single FPS counter bounds stay stable across digit counts and unavailable readings");
+            const auto bounds = CounterBounds(t);
+            Expect(bounds[2] - bounds[0] < framegen_bounds[2] - framegen_bounds[0],
+                   "single FPS counter sizes to its content without reserving paired columns");
         }
         s.show_fps = false;
 
