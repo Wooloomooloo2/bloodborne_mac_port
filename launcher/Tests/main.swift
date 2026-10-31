@@ -151,11 +151,18 @@ do {
 // defaults and key names against it and SDL).
 do {
     let defaults = GameSettings(ini: IniFile())
-    check(defaults.bindings.isDefault && defaults.mouseSensitivity == 1 && defaults.mouseVertical == 1 && !defaults.mouseInvertY && defaults.cameraKeysDpad, "default controls")
+    check(defaults.bindings.isDefault && defaults.mouseSensitivity == 1 && defaults.mouseVertical == 1 && !defaults.mouseInvertY && defaults.cameraKeysDpad && defaults.padMenuCombo, "default controls")
     var untouched = IniFile(text: "upscaler=off\n")
     defaults.apply(to: &untouched)
     check(!untouched.text.contains("bind_") && untouched["camera_keys_dpad"] == nil, "defaults write no bind_ keys")
     check(untouched["mouse_sensitivity"] == "1.00" && untouched["mouse_vertical"] == "1.00" && untouched["mouse_invert_y"] == "0", "mouse keys written")
+    check(untouched["pad_menu_combo"] == "1", "pad_menu_combo written")
+    var noCombo = GameSettings(ini: IniFile(text: "pad_menu_combo=0\n"))
+    check(!noCombo.padMenuCombo, "pad_menu_combo=0 read")
+    noCombo.padMenuCombo = true
+    var comboIni = IniFile(text: "pad_menu_combo=0\n")
+    noCombo.apply(to: &comboIni)
+    check(comboIni["pad_menu_combo"] == "1", "pad_menu_combo turned back on")
 
     let cross = Bindings.actions.first { $0.key == "bind_cross" }!
     let dpadDown = Bindings.actions.first { $0.key == "bind_dpad_down" }!

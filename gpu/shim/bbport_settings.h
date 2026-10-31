@@ -84,6 +84,9 @@ struct Values {
     std::atomic<float> mouse_sensitivity{1.0f};
     std::atomic<float> mouse_vertical{1.0f};
     std::atomic<bool> mouse_invert_y{false};
+    /// L3+R3 on a controller opens this menu (#104: pressed by accident in play). Off, only the
+    /// keyboard shortcut opens it and the game gets both stick clicks. bbport.ini pad_menu_combo; live.
+    std::atomic<bool> pad_menu_combo{true};
     std::atomic<int> active_render_width{1920}, active_render_height{1080};
     // Fixed at launch: native scene/UI patch dimensions, requiring a restart.
     int ultrawide_width = 0, ultrawide_height = 0;

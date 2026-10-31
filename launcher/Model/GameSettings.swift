@@ -130,6 +130,9 @@ struct GameSettings: Equatable {
     /// bbport.ini camera_keys_dpad (src/runtime_bindings.c): with the mouse camera, the camera keys
     /// press the d-pad.
     var cameraKeysDpad = true
+    /// bbport.ini pad_menu_combo (gpu/shim/bbport_settings.h): L3+R3 on a controller opens the
+    /// in-game menu (#104).
+    var padMenuCombo = true
     var bindings = Bindings()
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
@@ -176,6 +179,7 @@ struct GameSettings: Equatable {
         if let v = ini["mouse_vertical"].flatMap(Double.init) { mouseVertical = min(max(v, 0.25), 4) }
         if let v = flag("mouse_invert_y") { mouseInvertY = v }
         if let v = flag("camera_keys_dpad") { cameraKeysDpad = v }
+        if let v = flag("pad_menu_combo") { padMenuCombo = v }
         bindings = Bindings(ini: ini)
         for effect in Self.effects {
             if let v = flag(effect.key) { effects[effect.key] = v }
@@ -218,6 +222,7 @@ struct GameSettings: Equatable {
         ini["mouse_vertical"] = String(format: "%.2f", mouseVertical)
         ini["mouse_invert_y"] = mouseInvertY ? "1" : "0"
         ini["camera_keys_dpad"] = cameraKeysDpad ? nil : "0"
+        ini["pad_menu_combo"] = padMenuCombo ? "1" : "0"
         bindings.apply(to: &ini)
         for effect in Self.effects {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"

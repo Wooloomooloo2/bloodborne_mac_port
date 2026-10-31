@@ -36,6 +36,10 @@ struct ControlsView: View {
                         .disabled(!model.settings.mouseLook)
                         .help("While the mouse turns the camera, the camera keys (the arrow keys by default) scroll menus and switch weapons and items instead.")
                 }
+                Section("Controller") {
+                    Toggle("L3 + R3 opens the in-game menu", isOn: $model.settings.padMenuCombo)
+                        .help("Pressing both sticks in opens the settings menu during play. Turn it off if you press them by accident; \u{2318}, still opens it.")
+                }
                 groups(["Movement", "Camera"])
             }
             .formStyle(.grouped)
