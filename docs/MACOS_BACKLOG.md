@@ -21,6 +21,14 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
+- **The game's AA is lost above 1080p (#115, 2026-10-31).** Above 1920x1080 run.sh uses live
+  resolution changes: the guest's buffers stay at 1080p and host targets are scaled, so the game's
+  own temporal AA (a 1080p post-process) never reaches the picture. Measured at the benchmark stand
+  (window snapshots): at 1080p `effect_game_aa=0` raises edge energy 1.53 -> 1.86; at 4K on and
+  off are identical (1.554). Players see more jagged edges at 4K than at 1080p (BD-Jacek, M3 Max).
+  Workaround: MetalFX at Native AA. *Fix:* above 1080p with the upscaler off, run the port's TAA
+  (or MetalFX Native AA) by default, or scale the game's AA targets with the scene. Check
+  full-screen 4K snapshots (window snapshots are downscaled, which hides jaggies).
 - **8 GB Macs (2026-10-26, owner question).** The owner saw under 6 GB in Activity Monitor at
   540p → 1080p (FSR 3.1). Today an 8 GB Mac stops at start: `buffer_cache.cpp` asserts a 5 GiB
   Metal buffer, and maxBufferLength is ~60% of memory (~4.5 GiB). The `runs` layout (default on

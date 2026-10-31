@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-10-29)
+## Status (2026-10-31)
 
-**Current version: [mac-v0.5.11](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.11)** (download the app, or build it as below).
+**Current version: [mac-v0.5.12](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.12)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -32,11 +32,29 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** 0.5.x is the stable line. **0.6** will be **MetalFX frame generation** (#64, from
-@evill33t): it comes out as pre-releases first and only becomes the default once it's well tested.
+**Releases:** 0.5.12 is the last 0.5.x release. **0.6** will be **MetalFX frame generation** (#64,
+from @evill33t): it comes out as pre-releases first and only becomes the default once it's well
+tested.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
-in 0.5.9, 0.5.10 adds rebindable controls, and 0.5.11 fixes 5120×2160 and a crash after long
-sessions. Online play (#9) is still in progress.
+in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
+sessions, and 0.5.12 fixes that crash's follow-up. Online play (#9) is still in progress.
+
+### New in 0.5.12: the last 0.5.x release
+
+- **Fixed: the crash after long sessions, again** (#113; "signal 11 at guest offset 0x216a08c",
+  after about 90 minutes). 0.5.11 skipped the game's render bind for a resource that was gone,
+  but the game then also released it and asked for its value. Both are now skipped as well
+  (#114, from [@evill33t](https://github.com/evill33t)).
+- **Fewer false "the GPU stopped making progress" exits** (#106): the GPU watchdog now also
+  watches the GPU's own completion signal, so CPU-side delays no longer count as a GPU stall. A
+  real GPU stall still ends the game, so it cannot freeze the Mac's display (#107, from
+  @evill33t).
+- **L3 + R3 can be switched off** (#104): the launcher's **Controls** page and the in-game menu
+  (**Controller**) have a switch for it, for players who press both sticks by accident. ⌘, still
+  opens the menu.
+- **Known:** above 1920×1080 with the upscaler off, the game's own anti-aliasing doesn't reach
+  the picture (#115), so edges can look sharper and more jagged than at 1080p. Until that's
+  fixed, try **MetalFX** with the **Native AA** preset at those resolutions.
 
 ### New in 0.5.11: 5120×2160 fixed, a long-session crash fixed
 
@@ -466,7 +484,7 @@ Details:
   `gpu/shim/ffx_metal/`) and TAA. Planned: zero-copy guest memory on unified memory.
 - Inherited from upstream: high-frame-rate community patches, synthetic motion vectors and
   temporal upscaling (FSR 3.1), a two-stage multi-threaded draw pipeline, and an in-game
-  settings overlay (`⌘,` or `L3 + R3`).
+  settings overlay (`⌘,` or `L3 + R3`; L3 + R3 can be turned off on the Controls page).
 
 ## Download (no building needed)
 
@@ -830,7 +848,8 @@ Thank you to everyone who sent pull requests:
   - Dated session logs and crash reports (#40).
 - **[soulripper13](https://github.com/soulripper13)**: the game's icon in the Dock (#66).
 - **[evill33t](https://github.com/evill33t)**: PS4 runtime safety fixes (#80, #81, #82), the
-  long-session crash guard (#100) and stale descriptor hardening (#98), and MetalFX frame
+  long-session crash guards (#100, #114), stale descriptor hardening (#98), the GPU watchdog
+  fix (#107), and MetalFX frame
   generation (#64, in progress).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
