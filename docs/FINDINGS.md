@@ -2555,3 +2555,43 @@ frame pool peak 8 of 256 KiB (3%), last new peak at frame 212k; 60 FPS and 6-11 
 frame from start to end (no #55-style drift). The owner checked glare and lens flares (no visible
 change) and played 36 min on their own save at 1440p (frame pool peak 7 KiB, normal exit).
 Shipped in 0.5.14.
+
+## 2026-10-31 — Frame-generation gamma rows and absent fragment programs (#64)
+
+The HUD-free scene capture sampled the gamma LUT with normalized Y coordinates
+`0`, `1` and `2`. These are row numbers, not normalized row centers: green and
+blue clamp to the bottom edge instead of selecting their channel curves. Sample
+`0.5 / height`, `1.5 / height` and `2.5 / height` in array slice zero instead.
+The real frame and HUD composition keep their existing paths.
+
+The previous GPU fixture used one LUT row, so clamping every channel to that row
+hid this defect. A new production-path readback uses different red, green and
+blue curves, with both three rows and a fourth sentinel row. It fails on the
+published implementation and passes with the correction, including alpha
+preservation and Metal validation. Existing frame-generation history, motion,
+snapshot-lifetime and cropped-display checks also pass; both GPU architectures
+build.
+
+A separate gameplay test reproduced a GPU-process SIGSEGV with the published
+renderer (`edf3fe4`) and frame generation enabled. At the first gameplay frames,
+`Rasterizer::DrawRecord` called `AmdGpu::GetParams(regs.ps_program)` with address
+zero while checking for the retail display pass. Pipeline selection already
+allows absent shader stages, including fragment-less depth draws. Display-pass
+detection must reject those draws too: check the draw shape, attachments, scissor
+and both program addresses before reading or fingerprinting shader memory.
+
+On M4 Max/macOS 27, at 1080p MetalFX Native AA with a 60 FPS real cap and Metal
+validation, the original framegen-off control completed 60 seconds of measured
+gameplay; framegen on crashed about 17 seconds after launch. The corrected
+renderer completed the same 60-second gameplay window and a separate replay of
+the first 30 seconds of the benchmark route (1,831 game frames). Both enabled
+runs encoded intermediate frames, exited normally and logged no Metal errors.
+The frame-rate, upscaler-support and overlay fixtures also pass, with Metal
+validation for the overlay and framegen GPU cases.
+
+Runs used independent caches and disposable save copies, with unchanged source
+save hashes. The common diagnostic runtime included the existing local DLC-folder
+provider solely to load the DLC-dependent benchmark save; that provider is not
+part of this renderer change. Concurrent workload and later framegen-off/on
+throughput varied, so these runs establish bounded crash coverage, not a
+performance comparison. Combat, long sessions, other Macs and 4K remain untested.
