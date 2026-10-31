@@ -314,3 +314,30 @@ path; it has not been tried on macOS, where FSR 4 is not expected to work.)
 **Correction to the A/B above ("the frame is CPU-bound").** Those measurements ran while 12
 hung shadPS4 processes each occupied a core. On an idle system: "host copies" 1.6%, GPU wait
 ~41% — the frame is GPU-bound, so async compute for FSR makes sense again.
+
+## 2026-10-26: MetalFX Spatial
+
+MetalFX temporal remains the default and recommended choice: its history reduces
+shimmer and flicker in motion, particularly on thin distant lines. Spatial is an
+extra, lighter GPU option, with more shimmer in motion. The launcher and in-game
+selector explain this tradeoff beside the choice.
+
+MetalFX Spatial is selectable in the launcher and in-game upscaler selector
+(`upscaler=metalfx_spatial`, or `BB_UPSCALER=metalfx_spatial`). It scales the current
+scene without temporal history, jitter, or motion-vector generation. HDR and
+tonemapped inputs use the corresponding MetalFX color mode; scene alpha is
+preserved by the existing merge and HUD composition stays at output resolution.
+The saved jitter setting remains available when returning to a temporal provider.
+GPU support is queried independently from temporal MetalFX. Aligned guest targets
+are cropped into a cached input texture because the spatial API requires exact
+descriptor dimensions. Saved choices survive fallback on unsupported devices.
+
+The spatial implementation was ported from `evill33t/bloodborne_mac`
+(`bbacb95c3338efcd627c0edaec05ff7534e555da`). No game shader binaries or captures are
+distributed. Native object velocity reuse is excluded from this change and needs
+its own gameplay comparison before being proposed separately.
+
+Focused CMake targets: `metalfx-test`, `overlay-test` and `upscaler-support-test`.
+Spatial GPU fixtures cover HDR and padded tonemapped inputs alongside the temporal
+cases, normally and with `MTL_DEBUG_LAYER=1`. The overlay fixture covers selecting
+and saving both temporal and spatial MetalFX with all five segments present.

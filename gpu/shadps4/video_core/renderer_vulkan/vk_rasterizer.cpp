@@ -68,7 +68,8 @@ Rasterizer::Rasterizer(Metal::Device& device_, Scheduler& scheduler_, Runtime& r
     // the upscaler's resources): unavailable providers fall back -- MetalFX only where our device
     // has the temporal scaler, FSR 3.1 on Apple7 and later (the FidelityFX Metal back end) -- and
     // the fallback is never saved.
-    BbSettings::ConfigureUpscalerSupport(BbMetalFx::Supported(device), FfxMetal::Supported(device));
+    BbSettings::ConfigureUpscalerSupport(BbMetalFx::Supported(device), FfxMetal::Supported(device),
+                                         BbMetalFx::SpatialSupported(device));
     // Object motion first: it fixes the buffer addresses the motion shader variants embed.
     object_motion = std::make_unique<ObjectMotion>(device, scheduler);
     camera_motion = std::make_unique<CameraMotion>(device, scheduler, texture_cache, runtime);

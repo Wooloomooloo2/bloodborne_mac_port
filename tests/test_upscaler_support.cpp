@@ -52,6 +52,16 @@ int main() {
     unsetenv("BB_UPSCALE_PRESET");
     unsetenv("BB_RENDER_RES");
     auto& s = Get();
+    ConfigureUpscalerSupport(false, false, true);
+    ChooseUpscaler(UpscalerSpatial);
+    assert(s.upscaler == UpscalerSpatial && UpscalerAvailable(UpscalerSpatial));
+    Save(); Load();
+    ConfigureUpscalerSupport(false, false, true);
+    assert(s.upscaler == UpscalerSpatial && s.requested_upscaler == UpscalerSpatial);
+    ConfigureUpscalerSupport(false, false, false);
+    assert(s.upscaler != UpscalerSpatial && s.requested_upscaler == UpscalerSpatial);
+    assert(FallbackUpscaler(UpscalerSpatial, false, false, Performance, true) == UpscalerSpatial);
+    assert(FallbackUpscaler(UpscalerSpatial, false, false, Performance, false) == UpscalerOff);
     ChooseUpscaler(UpscalerTaa);
     s.preset = Performance;
     assert(RenderPreset() == NativeAA && s.preset == Performance);

@@ -5,7 +5,8 @@
 // does into the drawable. Hidden, nothing is drawn (the target keeps its contents); the FPS
 // counter draws in the top-right corner only; Cmd+, opens the menu (drawn over the middle, the
 // game's input captured, text input consumed) and Escape closes it; with fsr3 saved and MetalFX
-// running, clicking the MetalFX segment saves MetalFX. Runs plain and under
+// running, clicking the MetalFX segment saves MetalFX, and Spatial saves independently.
+// Runs plain and under
 // MTL_DEBUG_LAYER=1 (build_macos.sh --test). Links libbbgpu (the overlay, ImGui and its Metal
 // backend).
 #import <Foundation/Foundation.h>
@@ -84,6 +85,36 @@ SDL_Event Key(SDL_Keycode key, SDL_Keymod mod, bool down) {
     event.key.down = down;
     event.key.scancode = key == SDLK_COMMA ? SDL_SCANCODE_COMMA : SDL_SCANCODE_ESCAPE;
     return event;
+}
+
+void Click(Target& target, float x, float y) {
+    SDL_Event mouse{};
+    mouse.type = SDL_EVENT_MOUSE_MOTION;
+    mouse.motion.x = x;
+    mouse.motion.y = y;
+    BbOverlay::HandleEvent(mouse);
+    Present(target, true);
+    for (const bool down : {true, false}) {
+        mouse = {};
+        mouse.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+        mouse.button.button = SDL_BUTTON_LEFT;
+        mouse.button.down = down;
+        mouse.button.x = x;
+        mouse.button.y = y;
+        BbOverlay::HandleEvent(mouse);
+        Present(target, true);
+    }
+}
+
+bool SavedUpscalerIs(const char* config, const char* upscaler) {
+    char text[4096] = {};
+    FILE* file = std::fopen(config, "r");
+    const size_t n = file ? std::fread(text, 1, sizeof(text) - 1, file) : 0;
+    if (file) std::fclose(file);
+    text[n] = 0;
+    char line[64];
+    std::snprintf(line, sizeof(line), "\nupscaler=%s\n", upscaler);
+    return std::strstr(text, line) != nullptr;
 }
 
 } // namespace
@@ -168,7 +199,7 @@ int main() {
             std::fclose(file);
         }
         BbSettings::Load();
-        BbSettings::ConfigureUpscalerSupport(true);
+        BbSettings::ConfigureUpscalerSupport(true, false, true);
         Expect(s.upscaler == BbSettings::UpscalerMetalFx &&
                    s.requested_upscaler == BbSettings::UpscalerFsr3,
                "fsr3 runs as MetalFX");
@@ -177,40 +208,35 @@ int main() {
         for (int i = 0; i < 3; ++i) {
             Present(t, true);
         }
-        // The MetalFX segment of the Display tab at this size (drawable pixels; window id 0
-        // means density 1).
-        constexpr float mx = 1862.0f, my = 354.0f;
-        SDL_Event mouse{};
-        mouse.type = SDL_EVENT_MOUSE_MOTION;
-        mouse.motion.x = mx;
-        mouse.motion.y = my;
-        BbOverlay::HandleEvent(mouse);
-        Present(t, true);
-        for (const bool down : {true, false}) {
-            mouse = {};
-            mouse.type = down ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-            mouse.button.button = SDL_BUTTON_LEFT;
-            mouse.button.down = down;
-            mouse.button.x = mx;
-            mouse.button.y = my;
-            BbOverlay::HandleEvent(mouse);
-            Present(t, true);
-        }
+        // Five segments: Off, FSR 3.1, TAA, MetalFX, Spatial. Drawable pixels at density 1.
+        constexpr float metalfx_x = 1710.0f, spatial_x = 1862.0f, upscaler_y = 354.0f;
+        Click(t, metalfx_x, upscaler_y);
         Expect(s.requested_upscaler == BbSettings::UpscalerMetalFx &&
                    s.upscaler == BbSettings::UpscalerMetalFx,
                "click on the running MetalFX makes it the choice");
         // The menu saves 0.3 s after the last change, on a present.
         usleep(400 * 1000);
         Present(t, true);
-        {
-            char text[4096] = {};
-            FILE* file = std::fopen(config, "r");
-            const size_t n = file ? std::fread(text, 1, sizeof(text) - 1, file) : 0;
-            if (file) std::fclose(file);
-            text[n] = 0;
-            Expect(std::strstr(text, "\nupscaler=metalfx\n") != nullptr,
-                   "the saved ini says upscaler=metalfx");
-        }
+        Expect(SavedUpscalerIs(config, "metalfx"), "the saved ini says upscaler=metalfx");
+
+        // The adjacent Spatial segment has its own saved value; returning to temporal keeps
+        // the user's jitter preference for the renderer to resume using.
+        s.jitter = true;
+        Click(t, spatial_x, upscaler_y);
+        Expect(s.requested_upscaler == BbSettings::UpscalerSpatial &&
+                   s.upscaler == BbSettings::UpscalerSpatial,
+               "click on Spatial makes it the choice");
+        usleep(400 * 1000);
+        Present(t, true);
+        Expect(SavedUpscalerIs(config, "metalfx_spatial"),
+               "the saved ini says upscaler=metalfx_spatial");
+        Click(t, metalfx_x, upscaler_y);
+        Expect(s.requested_upscaler == BbSettings::UpscalerMetalFx &&
+                   s.upscaler == BbSettings::UpscalerMetalFx && s.jitter,
+               "returning from Spatial selects temporal and keeps jitter enabled");
+        usleep(400 * 1000);
+        Present(t, true);
+        Expect(SavedUpscalerIs(config, "metalfx"), "returning to temporal saves metalfx");
         BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true));
     }
     std::remove(config);

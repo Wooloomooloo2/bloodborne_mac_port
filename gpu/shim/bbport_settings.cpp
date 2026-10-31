@@ -199,12 +199,13 @@ void Load() {
     v.startup_live_resolution = v.live_resolution;
 }
 
-void ConfigureUpscalerSupport(bool metalfx, bool fsr3) {
+void ConfigureUpscalerSupport(bool metalfx, bool fsr3, bool spatial) {
     auto& v = Get();
+    v.spatial_supported = spatial;
     v.metalfx_supported = metalfx;
     v.fsr3_supported = fsr3;
     const int requested = v.requested_upscaler;
-    const int runs = FallbackUpscaler(requested, metalfx, fsr3, v.preset);
+    const int runs = FallbackUpscaler(requested, metalfx, fsr3, v.preset, spatial);
     if (runs != requested) {
         std::printf("Upscaler: %s %s; using %s (the saved choice is kept)\n",
                     UpscalerName(requested),
@@ -218,15 +219,18 @@ void ConfigureUpscalerSupport(bool metalfx, bool fsr3) {
 
 bool UpscalerAvailable(int upscaler) {
     const auto& v = Get();
-    return FallbackUpscaler(upscaler, v.metalfx_supported, v.fsr3_supported, NativeAA) ==
+    return FallbackUpscaler(upscaler, v.metalfx_supported, v.fsr3_supported, NativeAA, v.spatial_supported) ==
            upscaler;
 }
 
-int FallbackUpscaler(int requested, bool metalfx, bool fsr3, int preset) {
+int FallbackUpscaler(int requested, bool metalfx, bool fsr3, int preset, bool spatial) {
     switch (requested) {
     case UpscalerOff:
     case UpscalerTaa:
         return requested;
+    case UpscalerSpatial:
+        if (spatial) return requested;
+        break;
     case UpscalerMetalFx:
         if (metalfx) return requested;
         break;
@@ -245,7 +249,7 @@ int FallbackUpscaler(int requested, bool metalfx, bool fsr3, int preset) {
 void ChooseUpscaler(int upscaler) {
     auto& v = Get();
     v.requested_upscaler = upscaler;
-    v.upscaler = FallbackUpscaler(upscaler, v.metalfx_supported, v.fsr3_supported, v.preset);
+    v.upscaler = FallbackUpscaler(upscaler, v.metalfx_supported, v.fsr3_supported, v.preset, v.spatial_supported);
 }
 
 bool FixedRenderSession() {
@@ -412,7 +416,7 @@ const char* PresetName(int preset) {
 }
 
 const char* UpscalerName(int upscaler) {
-    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "metalfx"};
+    static constexpr const char* names[UpscalerCount] = {"off", "fsr3", "fsr4", "fsr411", "taa", "metalfx", "metalfx_spatial"};
     return names[std::clamp(upscaler, 0, UpscalerCount - 1)];
 }
 
