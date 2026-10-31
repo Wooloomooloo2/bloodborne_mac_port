@@ -64,10 +64,11 @@ fallback therefore affect the displayed reading. Both rates use bounded one-seco
 cadence windows and expire after a pause; the milliseconds are frame intervals,
 not GPU execution times. The generated/real pair replays the same counter snapshot.
 Presentation callbacks are requested only while frame generation is active and
-the FPS counter or settings menu is visible. The counter reserves a fixed width
-with extra room when frame generation is active, and right-aligns the FPS and
-millisecond columns so changing digit counts
-cannot resize the box or shift the columns.
+the FPS counter or settings menu is visible. While frame generation is active,
+the counter reserves a fixed wider layout and right-aligns the FPS and millisecond
+columns so changing digit counts cannot resize the box or shift the columns.
+With generation off or unavailable, the single-rate counter uses its original
+content-sized width.
 
 The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
 tonemapped scene/UI boundary. A second pass identifies changes made by the HUD.
@@ -160,8 +161,8 @@ pause/resume, the original off-path interval average, and concurrent updates.
 The overlay fixture verifies the single-rate
 counter and settings footer with frame generation off or unavailable, restart-dependent
 display changes, independent displayed FPS with frame generation on, identical replay over a
-generated/real pair, and stable counter bounds across changing digit counts and
-unavailable readings in both modes.
+generated/real pair, stable paired-counter bounds across changing digit counts and
+unavailable readings, and the compact single-counter width when generation is inactive.
 
 The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
 through GPU completion, three-set bounded-pool fallback, unpresented-buffer lease
