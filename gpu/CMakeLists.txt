@@ -219,11 +219,18 @@ if (APPLE)
         shadps4/video_core/renderer_metal/mtl_present.mm
         shadps4/video_core/renderer_metal/mtl_render_pipeline.mm
         shadps4/video_core/renderer_metal/mtl_scale.mm
+        shadps4/video_core/renderer_metal/mtl_screen_lighting.mm
         shadps4/video_core/renderer_metal/mtl_specialize.cpp
         shadps4/video_core/renderer_metal/mtl_texture.mm
         shadps4/video_core/renderer_metal/mtl_timeline.cpp
         shadps4/video_core/renderer_metal/vk_to_mtl.mm)
     add_library(bbmetal_core STATIC ${METAL_CORE_SOURCES})
+    add_executable(screen-lighting-test EXCLUDE_FROM_ALL ../tests/test_screen_lighting.mm
+        shim/common/logging/log.cpp shim/common/assert.cpp)
+    target_include_directories(screen-lighting-test PRIVATE shim shadps4)
+    target_compile_options(screen-lighting-test PRIVATE -UNDEBUG -fobjc-arc)
+    target_link_libraries(screen-lighting-test PRIVATE bbmetal_core fmt::fmt
+        "-framework Metal" "-framework Foundation")
     target_include_directories(bbmetal_core PRIVATE shim shadps4 ${SHADER_INCLUDE})
     target_compile_features(bbmetal_core PRIVATE cxx_std_20)
     target_link_libraries(bbmetal_core PRIVATE fmt::fmt)
@@ -237,6 +244,7 @@ if (APPLE)
     file(GLOB METAL_SOURCES CONFIGURE_DEPENDS shadps4/video_core/renderer_metal/*.cpp
          shadps4/video_core/renderer_metal/*.mm)
     list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_object.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer_barriers.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_compiled_shader.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_counters.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_device.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_draw_core.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_encoder.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_order.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_depth_stencil.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_present.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_render_pipeline.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_scale.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_specialize.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_texture.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_timeline.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/vk_to_mtl.mm)
+    list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_screen_lighting.mm)
     target_sources(bbgpu PRIVATE ${METAL_SOURCES})
     target_link_libraries(bbgpu PRIVATE bbmetal_core "-framework Metal" "-framework QuartzCore"
         "-framework CoreGraphics" "-framework ColorSync" "-framework ImageIO" "-framework Foundation")
