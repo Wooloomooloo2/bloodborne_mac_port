@@ -37,12 +37,20 @@ int main() {
     unsetenv("BB_UPSCALER");
     unsetenv("BB_UPSCALE_PRESET");
     unsetenv("BB_RENDER_RES");
+    unsetenv("BB_METAL_FRAMEGEN");
     FILE* f = std::fopen(path, "w");
     assert(f);
-    std::fprintf(f, "# a comment\nupscaler=fsr3\nfps_cap=40\nfullscreen=1\nrenderer=metal\npreset=2\n");
+    std::fprintf(f, "# a comment\nupscaler=fsr3\nfps_cap=40\nfullscreen=1\nrenderer=metal\npreset=2\n"
+                    "mouse_look=1\nmouse_sensitivity=2.50\nmouse_invert_y=1\n");
     std::fclose(f);
     Load();
+    assert(!Get().framegen && !Get().startup_framegen && !Get().framegen_forced);
+    assert(!FrameGenerationNeedsRestart());
     assert(Get().upscaler == UpscalerFsr3 && Get().preset == 2);
+    assert(Get().mouse_look && Get().mouse_sensitivity == 2.5f && Get().mouse_invert_y);
+    assert(Get().pad_menu_combo);
+    Get().pad_menu_combo = false;
+    Get().mouse_vertical = 0.75f;
     Get().preset = 3;
     Save();
     std::string text = Read(path);
@@ -54,6 +62,13 @@ int main() {
     text = Read(path);
     assert(Count(text, "fps_cap=40") == 1 && Count(text, "fullscreen=1") == 1);
     assert(Count(text, "preset=3") == 1);
+    assert(Count(text, "mouse_look=1") == 1 && Count(text, "mouse_sensitivity=2.50") == 1 &&
+           Count(text, "mouse_invert_y=1") == 1);
+    assert(Count(text, "mouse_vertical=0.75") == 1 && Count(text, "pad_menu_combo=0") == 1);
+    Get().pad_menu_combo = true;
+    Get().mouse_vertical = 1.0f;
+    Load();
+    assert(!Get().pad_menu_combo && Get().mouse_vertical == 0.75f);
     setenv("BB_ULTRAWIDE_RES", "3840x1080", 1);
     f = std::fopen(path, "w");
     assert(f);
@@ -74,6 +89,50 @@ int main() {
     Load();
     assert(Get().ultrawide_width == 0);
     unsetenv("BB_ULTRAWIDE_RES");
+    // Frame generation is saved once, waits for restart, and the environment can
+    // force either launch state. Unsupported hardware keeps the saved preference.
+    Get().framegen = true;
+    assert(FrameGenerationNeedsRestart() && !Get().startup_framegen);
+    Save(); Save();
+    assert(Count(Read(path), "framegen=1") == 1);
+    Load();
+    assert(Get().framegen && Get().startup_framegen && !FrameGenerationNeedsRestart());
+    Get().framegen_supported = false;
+    Save();
+    assert(Count(Read(path), "framegen=1") == 1);
+    setenv("BB_METAL_FRAMEGEN", "0", 1);
+    Load();
+    assert(!Get().framegen && !Get().startup_framegen && Get().framegen_forced);
+    Get().show_fps = true; // an unrelated menu change must not save the override
+    Save(); Save(); Load();
+    assert(Count(Read(path), "framegen=1") == 1);
+    assert(!Get().framegen && Get().saved_framegen);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Load();
+    assert(Get().framegen && Get().startup_framegen && !Get().framegen_forced);
+    Get().framegen = false;
+    Save(); Load();
+    setenv("BB_METAL_FRAMEGEN", "1", 1);
+    Load();
+    assert(Get().framegen && Get().startup_framegen && Get().framegen_forced);
+    Get().show_fps = false;
+    Save(); Save(); Load();
+    assert(Count(Read(path), "framegen=0") == 1);
+    assert(Get().framegen && !Get().saved_framegen);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Load();
+    assert(!Get().framegen && !Get().startup_framegen && !Get().framegen_forced);
+    // An absent preference must also stay opt-in after an overridden launch.
+    f = std::fopen(path, "w");
+    assert(f);
+    std::fputs("fps_cap=60\n", f);
+    std::fclose(f);
+    setenv("BB_METAL_FRAMEGEN", "1", 1);
+    Load(); Save();
+    assert(Get().framegen && Count(Read(path), "framegen=0") == 1);
+    unsetenv("BB_METAL_FRAMEGEN");
+    Load();
+    assert(!Get().framegen && !Get().startup_framegen);
     std::remove(path);
     std::puts("PASS: settings menu keeps the launcher's keys");
     return 0;

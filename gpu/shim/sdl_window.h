@@ -52,6 +52,7 @@ private:
     std::atomic<bool> visible{true};
     std::atomic<bool> fullscreen{false};
     void UpdateVisible();
+    void UpdateDisplayRefresh(); // window/main thread only
     std::mutex text_mutex;
     bool text_requested{}, text_active{}, text_password{};
     int text_state{};

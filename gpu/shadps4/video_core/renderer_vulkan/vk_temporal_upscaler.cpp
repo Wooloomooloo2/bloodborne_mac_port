@@ -18,6 +18,7 @@
 #include "bbport_settings.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
+#include "core/emulator_settings.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/host_shaders/upscale_merge_comp.h"
 #include "video_core/host_shaders/upscale_reactive_comp.h"
@@ -134,6 +135,19 @@ TemporalUpscaler::TemporalUpscaler(Metal::Device& device_, Scheduler& scheduler_
     // Available unless BB_UPSCALER=none; on/off and the parameters are the menu's settings.
     const char* env = std::getenv("BB_UPSCALER");
     enabled = !(env && std::strcmp(env, "none") == 0);
+    BbSettings::Get().framegen_real_cap = EmulatorSettings.GetFrameLimit();
+    BbSettings::Get().framegen_supported =
+        enabled && !EmulatorSettings.IsFsrEnabled() && BbFrameGen::Supported(device);
+    if (enabled && BbFrameGen::Requested()) {
+        if (EmulatorSettings.IsFsrEnabled()) {
+            std::printf("Frame generation: legacy FSR 1 presentation is not supported\n");
+        } else if (BbFrameGen::Supported(device)) {
+            frame_generator = std::make_unique<BbFrameGen::Generator>(device);
+            std::printf("Frame generation: experimental 2x MetalFX enabled; temporal upscaler required\n");
+        } else {
+            std::printf("Frame generation: unavailable (requires macOS 26 and a supported Metal device)\n");
+        }
+    }
     if (const char* hash = std::getenv("BB_UPSCALE_BEFORE_CS")) {
         trigger_hash = std::strtoull(hash, nullptr, 16);
     }
@@ -220,6 +234,18 @@ bool TemporalUpscaler::RasterScaling() const {
 }
 
 bool TemporalUpscaler::OnFrameStart() {
+    // Finish the current HUD before resetting the UI state for the next scene.
+    // The packet travels with this exact display buffer, never just a texture address.
+    display_framegen = std::exchange(pending_framegen, {});
+    if (display_framegen) {
+        scheduler.EndRendering();
+        scheduler.Record([generator = frame_generator.get(), frame = display_framegen,
+                          ui = ui_image.Get()](Metal::Encoder& e) {
+            generator->FinishUi(e, frame, ui);
+        });
+        scheduler.GetDynamicState().Invalidate();
+    }
+    ++framegen_sequence;
     // bbport: BB_PRESET_FILE=<file> holding a preset number, read about once a second: switches
     // the preset like the menu does (scripted tests of live preset changes).
     static const char* preset_file = std::getenv("BB_PRESET_FILE");
@@ -893,7 +919,10 @@ float TemporalUpscaler::SceneMipBias() const {
 }
 
 bool TemporalUpscaler::Scaled() const {
-    return scaled_session || target_width != 1920 || target_height != 1080;
+    // Frame generation needs the finished tonemapped scene and an explicit HUD
+    // boundary at native 1080p too. Reuse the established output-size UI path.
+    return scaled_session || target_width != 1920 || target_height != 1080 ||
+           (frame_generator && BbFrameGen::Active() && Active());
 }
 
 void TemporalUpscaler::OnColorTarget(VideoCore::ImageId color) {
@@ -1113,6 +1142,29 @@ void TemporalUpscaler::RunScaled() {
             scale->ScaleColor(e, output, ui, Metal::ScaleFilter::Nearest);
         });
         scheduler.GetDynamicState().Invalidate();
+        if (frame_generator && BbFrameGen::Active()) {
+            const auto now = std::chrono::steady_clock::now();
+            const float interval = framegen_last.time_since_epoch().count()
+                ? std::chrono::duration<float>(now - framegen_last).count()
+                : inputs.frame_time_ms / 1000.f;
+            framegen_last = now;
+            pending_framegen = frame_generator->Prepare({
+                .width = w, .height = h, .out_width = ow, .out_height = oh,
+                .ui_format = Metal::TexturePixelFormat(ui_image.Get()),
+                .sequence = framegen_sequence, .interval = interval,
+                .near_plane = inputs.camera_near, .far_plane = inputs.camera_far,
+                .vertical_fov = inputs.vertical_fov,
+                .reset = inputs.reset || !camera_motion.Continuous(),
+            });
+            if (pending_framegen) {
+                scheduler.Record([generator = frame_generator.get(), frame = pending_framegen,
+                                  depth_texture, motion = motion_image.Get(),
+                                  ui = ui_image.Get()](Metal::Encoder& e) {
+                    generator->Capture(e, frame, depth_texture, motion, ui);
+                });
+                scheduler.GetDynamicState().Invalidate();
+            }
+        }
         reset = false;
         dispatched_last_frame = true;
         if (const int dump = DumpFrame(); dump >= 0) {
@@ -1188,6 +1240,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
     auto& display = displays[address];
     if (!display_redirect) {
         display.valid = false; // not upscaled: the presenter shows the guest buffer
+        display.framegen.reset();
         return false;
     }
     if (!display.image || display.format != image.info.pixel_format ||
@@ -1203,6 +1256,7 @@ bool TemporalUpscaler::RedirectColor(VideoCore::ImageId color,
                                       true, "Upscaler display");
     }
     display.valid = true;
+    display.framegen = display_framegen;
     target = {Mirror(display.image.Get(), display.format, display.views, view_info.format, {}),
               ui_width, ui_height};
     return true;
@@ -1232,7 +1286,10 @@ bool TemporalUpscaler::DisplayOverride(VAddr address, Display& display) {
     if (it == displays.end() || !it->second.valid) {
         return false;
     }
-    display = {it->second.image.Get(), it->second.format, it->second.width, it->second.height};
+    auto framegen = it->second.framegen.lock();
+    it->second.framegen.reset();
+    display = {it->second.image.Get(), it->second.format, it->second.width, it->second.height,
+               std::move(framegen)};
     // Diagnostic capture of the actual completed display buffer, including native UI.
     // BB_PRESENT_DUMP_COUNT=N: the trigger dumps N consecutive frames (temporal stability).
     static const char* dump = std::getenv("BB_PRESENT_DUMP_TRIGGER");

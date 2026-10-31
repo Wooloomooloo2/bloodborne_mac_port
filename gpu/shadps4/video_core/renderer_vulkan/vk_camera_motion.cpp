@@ -101,6 +101,19 @@ float CameraMotion::Near() const noexcept {
     return -current.proj[3] / current.proj[2];
 }
 
+bool CameraMotion::Continuous() const noexcept {
+    if (!Ready() || current.proj != previous.proj) return false;
+    float distance = 0, forward = 0, up = 0;
+    for (const u32 i : {3u, 7u, 11u}) {
+        const float delta = current.inv_view[i] - previous.inv_view[i];
+        distance += delta * delta;
+    }
+    for (const u32 i : {8u, 9u, 10u}) forward += current.view[i] * previous.view[i];
+    for (const u32 i : {4u, 5u, 6u}) up += current.view[i] * previous.view[i];
+    return std::isfinite(distance) && std::isfinite(forward) && std::isfinite(up) &&
+           distance <= 100 && forward >= .5f && up >= .5f;
+}
+
 std::array<std::array<float, 4>, 3> CameraMotion::TaaDepthParameters() const noexcept {
     const auto transform = Multiply(previous.view, current.inv_view);
     return {current.proj, previous.proj,
