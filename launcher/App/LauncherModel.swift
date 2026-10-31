@@ -59,9 +59,7 @@ final class LauncherModel: ObservableObject {
         displays = Self.connectedDisplays()
         screenChanges = NotificationCenter.default
             .publisher(for: NSApplication.didChangeScreenParametersNotification)
-            .sink { [weak self] _ in
-                self?.displays = Self.connectedDisplays()
-            }
+            .sink { [weak self] _ in self?.displays = Self.connectedDisplays() }
     }
 
     private static func connectedDisplays() -> [GameDisplay] {

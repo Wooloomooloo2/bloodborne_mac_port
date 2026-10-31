@@ -4,7 +4,8 @@
 
 Before starting the game, enable **Upscaler → Frame generation (experimental)**
 in the launcher. It explains missing temporal inputs and incompatible refresh rates
-on the primary display, where the game opens. The game checks its own display again.
+on the selected display (including a `BB_DISPLAY` override). A disconnected selection
+falls back to the primary display. The game checks its own display again.
 You can also open the in-game menu with **L3+R3** (or **Cmd+,**) and select
 **Display → Frame generation → MetalFX 2x (experimental)** to enable an intermediate
 image between each pair of real frames. The choice is saved as `framegen=0|1` in
