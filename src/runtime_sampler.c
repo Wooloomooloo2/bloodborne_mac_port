@@ -10,6 +10,7 @@
  * (CSGXTextureCreateFragment panic) within minutes, every time (2026-10-21). While the thread is
  * suspended the sampler takes no lock and allocates nothing (the thread may hold the lock). */
 #include "runtime.h"
+#include "runtime_hang_list.h"
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -150,12 +151,13 @@ static void report(void) {
 static void report_at_exit(void) { if (long_samples) report(); }
 
 void runtime_sampler_init(const void *image, uint64_t size) {
+    /* Hang reports also need the image bounds when periodic sampling is off. */
+    image_lo = (uintptr_t)image;
+    image_hi = size <= UINTPTR_MAX - image_lo ? image_lo + size : image_lo;
     const char *ms = getenv("BB_SAMPLE_MS");
     if (!ms || atoi(ms) <= 0) return;
     interval_ms = atoi(ms);
     if (getenv("BB_SAMPLE_LONG_MS")) long_ns_ms = atoi(getenv("BB_SAMPLE_LONG_MS"));
-    image_lo = (uintptr_t)image;
-    image_hi = image_lo + size;
     if (getenv("BB_SAMPLE_DUMP")) dump = fopen(getenv("BB_SAMPLE_DUMP"), "w");
 }
 
@@ -208,12 +210,21 @@ void runtime_sampler_flip(uint64_t main_cpu_ns) {
 /* The hang report (probe.c's watchdog): every live guest thread's name, what it is blocked on
  * and since when, and its guest call chain. Each thread is suspended only while its registers
  * and frame chain are read (no signals: CLAUDE.md), and nothing is printed while one is
- * suspended (it may hold the allocator's or stdio's lock). */
-void runtime_thread_dump_all(void) {
+ * suspended (it may hold the allocator's or stdio's lock). The later snapshots only revisit
+ * running threads. A single PC cannot establish that a loop made no progress (#118). */
 #if defined(__APPLE__) && defined(__x86_64__)
+static int hang_read(void *context, uint64_t address, void *out, size_t size) {
+    (void)context;
+    mach_vm_size_t got = 0;
+    return mach_vm_read_overwrite(mach_task_self(), address, size,
+                                  (mach_vm_address_t)(uintptr_t)out, &got) == KERN_SUCCESS && got == size;
+}
+
+static void dump_threads(unsigned snapshot) {
     enum { Max = 128, Depth = 10 };
     static struct { char name[32]; const char *blocked; uint64_t resource, since_ms;
-                    uint64_t pc[Depth]; int frames; } rows[Max];
+                    uint64_t pc[Depth]; int frames; x86_thread_state64_t registers;
+                    RuntimeHangList list; } rows[Max];
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     const uint64_t now_ms = (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
@@ -221,6 +232,8 @@ void runtime_thread_dump_all(void) {
     host_lock((HostMutex *)runtime_thread_get_lock());
     for (GuestThread *t = runtime_thread_get_all(); t && n < Max; t = t->next) {
         if (t->finished || pthread_equal(t->host, pthread_self())) continue;
+        if (snapshot > 1 && t->blocked_on) continue;
+        memset(&rows[n], 0, sizeof(rows[n]));
         memcpy(rows[n].name, t->name, sizeof(rows[n].name));
         rows[n].blocked = t->blocked_on;
         rows[n].resource = t->blocked_resource;
@@ -231,6 +244,7 @@ void runtime_thread_dump_all(void) {
             x86_thread_state64_t state;
             mach_msg_type_number_t count = x86_THREAD_STATE64_COUNT;
             if (thread_get_state(port, x86_THREAD_STATE64, (thread_state_t)&state, &count) == KERN_SUCCESS) {
+                rows[n].registers = state;
                 rows[n].pc[rows[n].frames++] = state.__rip;
                 uintptr_t rbp = (uintptr_t)state.__rbp;
                 while (rows[n].frames < Depth && rbp && !(rbp & 7)) {
@@ -242,13 +256,18 @@ void runtime_thread_dump_all(void) {
                     rows[n].pc[rows[n].frames++] = frame[1];
                     rbp = frame[0];
                 }
+                if (!rows[n].blocked)
+                    runtime_hang_list_capture(&rows[n].list, image_lo, image_hi - image_lo,
+                                               state.__rip, state.__rbx, state.__r12, state.__r15,
+                                               hang_read, NULL);
             }
             thread_resume(port);
         }
         ++n;
     }
     host_unlock((HostMutex *)runtime_thread_get_lock());
-    printf("Hang report: %d guest threads (guest offsets; blocked = the runtime wait it is in)\n", n);
+    printf("Hang report: snapshot %u, %d %sguest threads (guest offsets; blocked = the runtime wait it is in)\n",
+           snapshot, n, snapshot > 1 ? "running " : "");
     for (int i = 0; i < n; ++i) {
         char chain[768] = "";
         size_t used = 0;
@@ -271,7 +290,42 @@ void runtime_thread_dump_all(void) {
                    (unsigned long long)rows[i].resource, (unsigned long long)rows[i].since_ms, chain);
         else
             printf("  %-24s running; %s\n", rows[i].name, chain);
+        if (!rows[i].blocked && rows[i].frames) {
+            const x86_thread_state64_t *r = &rows[i].registers;
+            printf("    rax=%#llx rbx=%#llx rcx=%#llx rdx=%#llx\n", r->__rax, r->__rbx, r->__rcx, r->__rdx);
+            printf("    rdi=%#llx rsi=%#llx rsp=%#llx rbp=%#llx\n", r->__rdi, r->__rsi, r->__rsp, r->__rbp);
+            printf("    r8=%#llx r9=%#llx r10=%#llx r11=%#llx\n", r->__r8, r->__r9, r->__r10, r->__r11);
+            printf("    r12=%#llx r13=%#llx r14=%#llx r15=%#llx flags=%#llx\n",
+                   r->__r12, r->__r13, r->__r14, r->__r15, r->__rflags);
+        }
+        const RuntimeHangList *list = &rows[i].list;
+        if (list->status != HANG_LIST_NONE) {
+            static const char *const status[] = {"unrelated", "reached head", "observed cycle",
+                "64-node limit (inconclusive)", "unreadable address", "register layout mismatch"};
+            printf("    List #118: %s; owner=%#llx head=%#llx current=%#llx stopped=%#llx\n",
+                   status[list->status], (unsigned long long)list->owner, (unsigned long long)list->head,
+                   (unsigned long long)list->current, (unsigned long long)list->stopped_at);
+            printf("    List #118: first=%#llx cursor=%#llx generation=%u flags=%#x nodes=%u\n",
+                   (unsigned long long)list->first, (unsigned long long)list->cursor,
+                   list->generation, list->flags, list->count);
+            for (unsigned j = 0; j < list->count; ++j) {
+                const RuntimeHangNode *node = &list->nodes[j];
+                printf("      [%u] %#llx next=%#llx prev=%#llx flags=%#x%s\n", j,
+                       (unsigned long long)node->address, (unsigned long long)node->next,
+                       (unsigned long long)node->previous, node->flags,
+                       list->status == HANG_LIST_CYCLE && j == list->repeated ? " (repeated)" : "");
+            }
+        }
     }
     fflush(stdout);
+}
+#endif
+
+void runtime_thread_dump_all(void) {
+#if defined(__APPLE__) && defined(__x86_64__)
+    for (unsigned snapshot = 1; snapshot <= 3; ++snapshot) {
+        if (snapshot > 1) usleep(100000);
+        dump_threads(snapshot);
+    }
 #endif
 }

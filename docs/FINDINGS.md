@@ -2340,3 +2340,58 @@ This contains the reported null unbind and its known deferred query continuation
 It does not explain why the record disappeared or recreate its graphics state.
 The 91-minute passage route, long-session stability, image correctness after a
 missing record, and performance have not been replayed or measured here.
+
+## 2026-10-31: post-co-op reload worker hang (#118), investigation and diagnostics
+
+Issue [#118](https://github.com/Wooloomooloo2/bloodborne_mac_port/issues/118) reports a
+55-minute Hunter's Dream session ending normally, then a world-reload hang seven seconds
+later. The watchdog sampled `EzWorkPool_TypeB1` at guest `0x24a41b6`; B2 waited in a mutex
+from the same worker update, and main waited for the workers. The reporter confirms use
+of PR #78 on top of 0.5.12. Despite the comment saying otherwise, no diagnostics archive
+is attached; the investigation currently has only the ticket's excerpts and one sample
+per thread. The precise local build commit `78c368d` is not available from upstream.
+
+The original local 1.09 executable confirms that `0x24a41b6` compares the current node
+in `r15` with the sentinel in `r12`, followed by the backward branch to `0x24a4160`.
+The surrounding routine at `0x24a3df0` keeps its owner in `rbx`, its sentinel at
+`rbx + 0x58`, and node next/previous links at `+0x10`/`+0x18`. The caller at `0x2efb9c`
+implements periodic generation-based collection. This appears to be the UI's
+Scaleform/ActionScript collector. The node visitor deliberately unlinks and reinserts
+children during the traversal; observing mutation is not by itself corruption.
+
+A cycle that excludes the sentinel is plausible, but one PC sample cannot prove it,
+identify the responsible write, or establish a common cause with #99/#113. No shader
+guard or GPU watchdog messages were reported in this session. Cutting the walk short,
+disabling collection, or increasing the hang timeout would not establish a fix and
+could leave object references or collector state inconsistent.
+
+`runtime_thread_dump_all` now retains the full initial thread/wait report and adds two
+snapshots of running threads, with 100 ms between snapshots. Running rows include the
+x86 general registers. When the PC is inside the checked list loop and its tail matches
+the original instruction signature, it also records collector metadata and at most 64
+forward links, previous links and state words, starting from `r15`. The output explicitly
+distinguishes reaching the head, observing a repeated address, unreadable memory,
+register-layout mismatch and the inconclusive node limit. It does not interpret unrelated
+code using this layout. Image bounds are retained even when `BB_SAMPLE_MS` is off.
+
+The reader uses Mach memory reads while the sampled worker is suspended. It does not
+allocate, take additional user locks, signal guest threads, write the list or change
+execution. Logging happens after resumption. Other guest threads are not frozen together,
+so this is a bounded observation, not an atomic snapshot of the entire process. All new
+collection work runs only when emitting a hang report; the existing watchdog threshold
+and exit status remain unchanged.
+
+Validation: synthetic terminating lists, self-cycles, subcycles, exact 64-node boundaries,
+longer healthy lists, unreadable/unaligned/wrapping pointers, image bounds and all nine
+signature mismatches pass under x86-64 and ARM64 AddressSanitizer/UndefinedBehaviorSanitizer.
+An x86-64 fixture under Rosetta exercises the actual suspend/register/read/resume path with
+a synthetic list at the recognized code offset. Three snapshots identify its cycle; a
+second run records an actual `PROT_NONE` read failure. The blocked worker appears only in
+the initial report, and both workers resume and join. These fixtures need no game assets.
+The complete x86-64 runtime and probe compile and link, and the existing runtime fixture
+passes using the already built dev GPU/ATRAC libraries and dev's `-export_dynamic` linker
+setting. This is runtime validation, not a fresh GPU build, app package or game run.
+
+This is an investigation aid, not a fix for #118. A repeated co-op leave/reload run with
+these diagnostics is still needed to capture the actual list and select a justified
+mutation, lifetime or locking fix. No live co-op or long-session reproduction is claimed.
