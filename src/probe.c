@@ -7,6 +7,8 @@
 #include <string.h>
 #include <inttypes.h>
 #include "runtime.h"
+#include "runtime_trophy.h"
+#include "gpu/bbgpu_trophy.h"
 #include "gpu/bbgpu.h"
 #include "gpu_process.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
@@ -714,6 +716,8 @@ int main(int argc, char **argv) {
         if (sfo_value(sfo,"INSTALL_DIR_SAVEDATA",id,sizeof(id),NULL) || sfo_value(sfo,"TITLE_ID",id,sizeof(id),NULL))
             runtime_savedata_configure(id);
     }
+    runtime_trophy_configure(user_dir ? user_dir : "user");
+    bbgpu_trophy_set_artwork(app0);
     bbgpu_register_kernel();
     page_size = (size_t)sysconf(_SC_PAGESIZE);
     struct sigaction sa = {0}; sa.sa_sigaction = fault; sa.sa_flags = SA_SIGINFO;

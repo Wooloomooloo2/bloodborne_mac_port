@@ -16,6 +16,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_achievements.h"
 #include "bbport_overlay_metal.h"
 #include "imgui.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -117,6 +118,7 @@ void SetOpen(bool value) {
 }
 
 ImGuiKey KeyFromSdl(SDL_Keycode key) {
+    if (key >= SDLK_A && key <= SDLK_Z) return ImGuiKey(ImGuiKey_A + key - SDLK_A);
     switch (key) {
     case SDLK_TAB: return ImGuiKey_Tab;
     case SDLK_LEFT: return ImGuiKey_LeftArrow;
@@ -638,7 +640,7 @@ bool IsStartupOption(int e) {
     return !std::strcmp(key, "skip_intro") || !std::strncmp(key, "debug_", 6);
 }
 
-enum Tab : int { TabDisplay = 0, TabGraphics, TabAdvanced, TabCount };
+enum Tab : int { TabDisplay = 0, TabGraphics, TabAdvanced, TabAchievements, TabCount };
 int current_tab = TabDisplay;
 std::atomic<bool> gamepad_in_use{false}; // last menu input came from a pad: show L1/R1 hints
 
@@ -1062,7 +1064,7 @@ void Menu() {
 
     // Tabs: a centred segmented control. Gamepad L1/R1 switch tabs as in console menus.
     {
-        static const char* tabs[TabCount] = {"Display", "Graphics", "Advanced"};
+        static const char* tabs[TabCount] = {"Display", "Graphics", "Advanced", "Achievements"};
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
             !ImGui::IsAnyItemActive()) {
             if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) {
@@ -1076,7 +1078,8 @@ void Menu() {
         for (const char* t : tabs) {
             widest = std::max(widest, ImGui::CalcTextSize(t).x);
         }
-        const float tabs_w = (widest + 36.0f * base_scale) * float(TabCount);
+        const float tabs_w = std::min((widest + 24.0f * base_scale) * float(TabCount),
+                                      ImGui::GetContentRegionAvail().x - 72.0f * base_scale);
         const float x0 = win_pos.x + (ImGui::GetWindowWidth() - tabs_w) * 0.5f;
         const ImVec2 row = ImGui::GetCursorScreenPos();
         if (gamepad_in_use) {
@@ -1108,7 +1111,8 @@ void Menu() {
         switch (current_tab) {
         case TabDisplay: DisplayTab(s); break;
         case TabGraphics: GraphicsTab(s); break;
-        default: AdvancedTab(s); break;
+        case TabAdvanced: AdvancedTab(s); break;
+        case TabAchievements: if (BbAchievements::DrawTab(base_scale)) MarkChanged(); break;
         }
         ImGui::EndChild();
     }
@@ -1415,8 +1419,8 @@ void Init(Metal::Device& device, u32 pixel_format) {
     }
     initialized = true;
     std::printf("Overlay: menu ready (" BBPORT_MENU_KEYS " or L3+R3)\n");
-    // BB_MENU_OPEN=1..3: start with the menu open on that tab (automated menu screenshots).
-    if (const char* open = std::getenv("BB_MENU_OPEN"); open && open[0] >= '1' && open[0] <= '3') {
+    // BB_MENU_OPEN=1..4: start with the menu open on that tab (automated menu screenshots).
+    if (const char* open = std::getenv("BB_MENU_OPEN"); open && open[0] >= '1' && open[0] <= '4') {
         current_tab = open[0] - '1';
         SetOpen(true);
     }
@@ -1450,6 +1454,17 @@ bool HandleEvent(const SDL_Event& event) {
         const bool down = event.type == SDL_EVENT_KEY_DOWN;
         if (!down && event.key.scancode == held_scancode) {
             held_scancode = SDL_SCANCODE_UNKNOWN;
+            return true;
+        }
+        const bool achievements = event.key.key == SDLK_F2 ||
+            (event.key.key == SDLK_T && (event.key.mod & SDL_KMOD_GUI) &&
+             (event.key.mod & SDL_KMOD_SHIFT) && !(event.key.mod & (SDL_KMOD_ALT | SDL_KMOD_CTRL)));
+        if (achievements) {
+            if (down && !event.key.repeat) {
+                current_tab = TabAchievements;
+                SetOpen(true);
+                held_scancode = event.key.scancode;
+            }
             return true;
         }
         const bool toggle = IsMenuToggle(event.key);
@@ -1571,7 +1586,7 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || prompt_active || BbSettings::Get().show_fps);
+    return initialized && (menu_open || prompt_active || BbSettings::Get().show_fps || BbAchievements::BannerVisible());
 }
 
 void SetTextPrompt(bool active, const std::string& prompt, const std::string& text) {
@@ -1749,6 +1764,7 @@ void Render(void* command_buffer, void* target, u32 width, u32 height) {
         if (prompt_active && !menu_open) {
             TextPrompt();
         }
+        BbAchievements::DrawBanner(base_scale);
         if (menu_trace && (io.MouseClicked[0] || io.MouseReleased[0])) {
             std::printf("menu: frame sees %s at %.0f,%.0f, over a control: %s, control "
                         "active: %s\n",

@@ -4,6 +4,8 @@ import AppKit
 import Combine
 import Foundation
 
+enum LauncherPage: Hashable { case general, advanced, controls, achievements }
+
 /// The launcher window's state and actions.
 @MainActor
 final class LauncherModel: ObservableObject {
@@ -18,6 +20,7 @@ final class LauncherModel: ObservableObject {
     private var gameProcess: Process?
 
     @Published var settings = GameSettings()
+    @Published var page = LauncherPage.general
     @Published var config = LaunchConfig()
     @Published private(set) var dataDir: URL
     @Published private(set) var gameProblem: String?
@@ -69,6 +72,7 @@ final class LauncherModel: ObservableObject {
 
     var confURL: URL { layout.launchConfURL(env: env) }
     var settingsURL: URL { URL(fileURLWithPath: env["BB_CONFIG"] ?? dataDir.appendingPathComponent("bbport.ini").path) }
+    var trophyURL: URL { AchievementHistory.logURL(dataDir: dataDir, env: config.environment(adding: env)) }
     var logsFolder: URL { Logs.folder(home: URL(fileURLWithPath: NSHomeDirectory())) }
     /// This launch's session log, else the newest one (game.log links to it).
     var logURL: URL { sessionLog ?? logsFolder.appendingPathComponent(SessionLog.latestName).resolvingSymlinksInPath() }
