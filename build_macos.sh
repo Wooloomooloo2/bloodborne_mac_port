@@ -101,6 +101,9 @@ if [[ ${1:-} == --test ]]; then
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test
+    /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Werror -pthread -Igpu/shim \
+        tests/test_frame_rates.cpp -o out/frame-rates-test
+    out/frame-rates-test
     bash tests/test_launch_settings.sh
     bash scripts/macos/build_launcher.sh --test
     # Shared control block rings between bb-probe (x86-64) and bbgpu-host (arm64).
@@ -164,6 +167,10 @@ if [[ ${1:-} == --test ]]; then
             -framework Metal -framework MetalFX -framework Foundation -o out/metalfx-test
         out/metalfx-test
         MTL_DEBUG_LAYER=1 out/metalfx-test
+        # Experimental MetalFX frame interpolation: snapshots, history resets, HUD and pool bounds.
+        cmake --build out/gpu-arm64 --target framegen-test >/dev/null
+        out/gpu-arm64/framegen-test
+        MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
     fi
     # Metal-native M4: what an MTLBinaryArchive can serialize (pure Metal), plain and under
     # validation.

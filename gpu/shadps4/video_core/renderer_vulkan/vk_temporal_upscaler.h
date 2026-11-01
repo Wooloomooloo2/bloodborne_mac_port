@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "bbport_metalfx.h"
+#include "bbport_framegen.h"
 #include "ffx_metal/fsr3_metal.h"
 
 #include "common/types.h"
@@ -135,8 +136,14 @@ public:
         void* texture{};
         vk::Format format{};
         u32 width{}, height{};
+        BbFrameGen::FramePtr framegen;
     };
     bool DisplayOverride(VAddr address, Display& display);
+    BbFrameGen::Generator* FrameGenerator() const { return frame_generator.get(); }
+    bool FrameGenerationScene() const;
+    BbFrameGen::FramePtr FrameForDisplay() const {
+        return display_redirect ? display_framegen : BbFrameGen::FramePtr{};
+    }
 
     /// One frame of the resolve step (all textures id<MTLTexture>, unretained, alive until the
     /// GPU has run the frame). Render size: `reactive`; output size: `output`.
@@ -268,6 +275,7 @@ private:
     bool ui_phase = false;         ///< from the upscale to the next display pass
     bool display_redirect = false; ///< the display pass of an upscaled frame
     bool scaled_session = false;
+    bool native_capture = false; // native-aspect FG; no UI redirection while automatically paused
     u32 ui_width = 0, ui_height = 0;
     u32 render_width = 0, render_height = 0;
     vk::Format ui_format = vk::Format::eUndefined;
@@ -281,9 +289,16 @@ private:
         vk::Format format{};
         u32 width = 0, height = 0;
         bool valid = false;
+        // A drawn buffer that is never flipped must not reserve a snapshot.
+        // Lock the current lease in DisplayOverride; expired leases fall back.
+        std::weak_ptr<BbFrameGen::Frame> framegen;
     };
     std::mutex display_mutex;
     std::unordered_map<VAddr, DisplayImage> displays;
+    std::unique_ptr<BbFrameGen::Generator> frame_generator;
+    BbFrameGen::FramePtr pending_framegen, display_framegen;
+    u64 framegen_sequence = 0;
+    std::chrono::steady_clock::time_point framegen_last{};
 
     bool resources_ready = false; ///< the textures below match width/height/out size
     int resources_upscaler = -1;  ///< the provider they were made for

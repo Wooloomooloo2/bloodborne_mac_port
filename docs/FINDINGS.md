@@ -2340,3 +2340,115 @@ This contains the reported null unbind and its known deferred query continuation
 It does not explain why the record disappeared or recreate its graphics state.
 The 91-minute passage route, long-session stability, image correctness after a
 missing record, and performance have not been replayed or measured here.
+
+## 2026-10-31 — Frame-generation gamma rows and absent fragment programs (#64)
+
+The HUD-free scene capture sampled the gamma LUT with normalized Y coordinates
+`0`, `1` and `2`. These are row numbers, not normalized row centers: green and
+blue clamp to the bottom edge instead of selecting their channel curves. Sample
+`0.5 / height`, `1.5 / height` and `2.5 / height` in array slice zero instead.
+The real frame and HUD composition keep their existing paths.
+
+The previous GPU fixture used one LUT row, so clamping every channel to that row
+hid this defect. A new production-path readback uses different red, green and
+blue curves, with both three rows and a fourth sentinel row. It fails on the
+published implementation and passes with the correction, including alpha
+preservation and Metal validation. Existing frame-generation history, motion,
+snapshot-lifetime and cropped-display checks also pass; both GPU architectures
+build.
+
+A separate gameplay test reproduced a GPU-process SIGSEGV with the published
+renderer (`edf3fe4`) and frame generation enabled. At the first gameplay frames,
+`Rasterizer::DrawRecord` called `AmdGpu::GetParams(regs.ps_program)` with address
+zero while checking for the retail display pass. Pipeline selection already
+allows absent shader stages, including fragment-less depth draws. Display-pass
+detection must reject those draws too: check the draw shape, attachments, scissor
+and both program addresses before reading or fingerprinting shader memory.
+
+On M4 Max/macOS 27, at 1080p MetalFX Native AA with a 60 FPS real cap and Metal
+validation, the original framegen-off control completed 60 seconds of measured
+gameplay; framegen on crashed about 17 seconds after launch. The corrected
+renderer completed the same 60-second gameplay window and a separate replay of
+the first 30 seconds of the benchmark route (1,831 game frames). Both enabled
+runs encoded intermediate frames, exited normally and logged no Metal errors.
+The frame-rate, upscaler-support and overlay fixtures also pass, with Metal
+validation for the overlay and framegen GPU cases.
+
+Runs used independent caches and disposable save copies, with unchanged source
+save hashes. The common diagnostic runtime included the existing local DLC-folder
+provider solely to load the DLC-dependent benchmark save; that provider is not
+part of this renderer change. Concurrent workload and later framegen-off/on
+throughput varied, so these runs establish bounded crash coverage, not a
+performance comparison. Combat, long sessions, other Macs and 4K remain untested.
+
+**Correction (same day, owner's play test): the LUT is slices, not rows, and the channels are
+reversed.** In the game the bound LUT is 1025x1 with 3 array slices (R32Float; logged from
+`CaptureDisplay` in a diagnostic build), so row-centre sampling in slice zero still gives every channel the slice-zero
+curve. The retail display pass (PS `0x38d65b32`, decompiled from the pipeline cache) is
+`red = LUT[2](blue)`, `green = LUT[1](green)`, `blue = LUT[0](red)`. The generated frames kept
+red and blue in place, so the owner saw wrong colours on every other frame. `scene_gamma` now
+copies that mapping and `CaptureDisplay` rejects a LUT with fewer than 3 slices. The fixture now
+builds a 1-row LUT with one distinct curve per slice (and a fourth sentinel slice); it fails on
+the rows version and passes with the change, with and without Metal validation. A 1080p MetalFX
+Native AA frame-generation run to the benchmark route's measuring stage encoded intermediate frames
+with no errors. Owner's verdict on feel: playable, but noticeably laggier
+than frame generation off; it stays opt-in.
+
+The single-rate FPS counter also retained the worst-case resolution-text width
+reserved for the paired layout. Restore the original content-sized, left-aligned
+single row when generation is inactive, and clear any previous paired width.
+The production overlay readback measured 326 pixels before and 186 after at its
+fixed test size, while the paired counter stays at 377 pixels. Normal and Metal
+validation runs check the compact counter, restart-dependent transitions,
+unsupported/refresh-limited fallback, and stable paired columns.
+
+
+## 2026-11-01 — Absolute framegen deadlines and automatic GPU admission (#64)
+
+Paired presentation now uses host deadlines anchored to each GPU-ready source,
+with the real image due half a configured cap period after its intermediate.
+A late acquisition cannot extend the following pair's hold. This removes the
+per-image minimum-duration rounding that throttled non-integer refresh ratios.
+Windowed framegen no longer forces a third drawable; full screen retains three.
+The presenter waits only on the already-committed render timeline, and continues
+to acquire/submit/release the two drawables sequentially.
+
+On the M4 Max/macOS 27 with a 120 Hz presentation cadence, 60-second stationary
+windows measured 59.69 real FPS off and 59.53 real / 119.61 displayed FPS on.
+The last 4,000 displayed-image timestamps had no gaps over 25.1 ms on. A private
+queue trace also isolated about 8.3 ms of extra queueing from forcing three
+windowed drawables; it was removed after measurement. These are presentation
+queue measurements, not hardware input-to-photon latency.
+
+Two additional 60-second runs exercised the non-integer ratios physically: 50
+real / 100 displayed on 120 Hz matches the 144:120 ratio; 45 / 90 matches 160:120.
+They measured 50.00 / 99.99 and 45.00 / 89.99 FPS respectively, with displayed
+intervals quantised to 8.33/16.67 ms. This checks the pacing mechanism without
+claiming an external 144/160 Hz hardware test.
+
+4K Quality exposed a separate GPU limit: sustained generation on the normal
+three-drawable full-screen path measured 49.08 real FPS in this scene. Automatic
+admission first measures real-only gameplay, leaves generation paused when GPU
+time is needed for real frames, and resumes only when the measured optional-work
+cost fits with a margin. It never periodically probes a saturated scene. That
+60-second candidate measured 59.96 real FPS, using real-only fallback; the off
+control measured 58.84 FPS. Sequential controls vary, so this establishes fallback
+coverage rather than a speedup. A forced-two-drawable full-screen experiment was
+slower and is excluded from the implementation.
+
+Native output can now provide scene/depth/motion/HUD inputs without selecting a
+temporal upscaler. It copies native scene pixels without adding jitter or changing
+saved upscaler/preset/resolution choices. Native aspect patches keep their exact
+sizes and skip capture-only UI redirection and object motion while automatically
+paused. Camera admission accepts the first valid scene after a history reset,
+so enabling native capture does not feed that reset back into its own gate.
+
+The supplied gamma-slice/channel correction is retained unchanged. GPU fixtures
+cover distinct LUT slices, source lifetimes, absolute presentation, counters,
+refresh eligibility and GPU-budget transitions (including sustained pressure,
+CPU hitches, configuration changes, missing timestamps and no periodic probes).
+Native-off full-screen gameplay and 1920×1200 / 2560×1080 native-aspect routes
+also completed with generated frames; the aspect cases used Metal validation.
+Gameplay uses private save/cache copies and the existing local DLC diagnostic
+adapter; original save hashes remain unchanged. These are bounded checks, with
+no claim of long-session or hardware button-to-photon validation.

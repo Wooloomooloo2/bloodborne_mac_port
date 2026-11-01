@@ -114,6 +114,7 @@ struct GameSettings: Equatable {
     var wideOutput = PixelSize(3840, 1080)
     var displayOutput: PixelSize { ultrawide ? wideOutput : output }
     var upscaler = Upscaler.off
+    var frameGeneration = false
     var preset = 0
     var sharpen = true
     var sharpness = 0.3
@@ -169,6 +170,8 @@ struct GameSettings: Equatable {
             if let original = ini["standard_output_res"].flatMap(PixelSize.init(iniValue:)) { output = original }
         }
         if let v = ini["upscaler"], let u = Upscaler(rawValue: v) { upscaler = u }
+        // Match the renderer's opt-in parser (only the literal "1" enables it).
+        frameGeneration = ini["framegen"] == "1"
         if let v = ini["preset"], let p = Int(v), Resolution.presetScales.indices.contains(p) { preset = p }
         if let v = flag("sharpen") { sharpen = v }
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
@@ -212,6 +215,7 @@ struct GameSettings: Equatable {
         ini["ultrawide_res"] = ultrawide ? wideOutput.iniValue : nil
         ini["standard_output_res"] = output.iniValue
         ini["upscaler"] = ultrawide ? "off" : upscaler.rawValue
+        ini["framegen"] = frameGeneration ? "1" : "0"
         ini["preset"] = ultrawide ? "0" : String(preset)
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
@@ -247,5 +251,24 @@ struct GameSettings: Equatable {
     /// The scene size the game renders.
     var renderSize: PixelSize {
         ultrawide ? wideOutput : (upscaler.usesPreset ? Resolution.renderSize(output: output, preset: preset) : output)
+    }
+
+    /// Launcher preflight. The renderer checks the game window's own display again at runtime.
+    /// Unavailable choices stay saved so changing the cap/display/upscaler does not erase them.
+    func frameGenerationUnavailableReason(deviceSupported: Bool, display: FrameGenerationDisplay?) -> String? {
+        guard deviceSupported else { return "Requires macOS 26 or later and a Mac supporting MetalFX frame generation." }
+        guard let display, display.refreshRate.isFinite, display.refreshRate > 0 else {
+            return "The display refresh rate could not be determined."
+        }
+        let required = frameCap.rawValue * 2
+        let rate = display.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
+        let minimum = display.minimumRefreshRate.formatted(.number.precision(.fractionLength(0...2)))
+        guard display.supports(realCap: frameCap.rawValue, fullscreen: fullscreen) else {
+            if display.minimumRefreshRate > 0, !display.requiresFullscreen || fullscreen {
+                return "The paired \(required) FPS is outside the display's variable refresh range (\(minimum)–\(rate) Hz). Change the cap or display mode."
+            }
+            return "Requires at least \(required) Hz for the \(frameCap.label) FPS cap. This display reports \(rate) Hz."
+        }
+        return nil
     }
 }

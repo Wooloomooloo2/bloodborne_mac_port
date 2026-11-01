@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "bbport_settings.h"
+#include "bbport_framegen.h"
 #include "bbport_toggles.h"
 #include "common/assert.h"
 #include "shader_recompiler/runtime_info.h"
@@ -20,12 +21,16 @@
 
 namespace Vulkan {
 
+bool ObjectMotion::Enabled() const noexcept {
+    return enabled && (BbSettings::Get().upscaler != BbSettings::UpscalerOff || BbFrameGen::Active());
+}
+
 ObjectMotion::ObjectMotion(Metal::Device& device_, Scheduler& scheduler_)
     : device{device_}, scheduler{scheduler_} {
     // Pipeline selection limits the extra attachment and vertex stores to likely
     // animated draws. A setting or environment override can still disable the path.
     if (!BbSettings::Get().object_motion ||
-        BbSettings::Get().upscaler == BbSettings::UpscalerOff) {
+        (BbSettings::Get().upscaler == BbSettings::UpscalerOff && !BbFrameGen::Requested())) {
         std::puts("Object motion: off (enable in menu or BB_OBJECT_MOTION=1)");
         return;
     }
