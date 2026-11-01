@@ -19,12 +19,15 @@ namespace BbFrameGen {
 
 bool Requested();                      // launch setting; menu changes need a restart
 bool Supported(Metal::Device& device); // macOS 26+, queried on the actual device
-// Fixed refresh must be a whole multiple of twice the cap (0.2% tolerance).
+// Absolute pair deadlines work at any refresh at least twice the cap (0.2% tolerance).
 // A positive minimum denotes active variable refresh; the paired rate must fit its range.
 bool DisplaySupported(double refresh_hz, uint32_t real_cap, double min_refresh_hz = 0);
 bool DisplaySupported(); // current window display and configured real cap
 void UpdateDisplayTiming(void* cocoa_window, bool fullscreen); // window/main thread only
-bool Active(); // running launch choice, device/path support, and display support
+bool Active(); // running launch choice, device/path/display support, and GPU headroom
+void StartGpuBudget(); // before the first frame; initially measure real-only gameplay
+void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene);
+bool GpuBudgetLimited(); // temporary automatic fallback; the saved preference stays enabled
 inline constexpr std::size_t MaxSnapshotSets = 3;
 
 struct Description {
@@ -50,10 +53,9 @@ using FramePtr = std::shared_ptr<Frame>;
 // Only contiguous real frames with finite camera/timing inputs can share
 // history.
 bool Continuous(const Description& previous, const Description& current);
-// Half the configured cap's period, with scheduling slack. Measured real-frame
-// cadence only validates timing; drawable waits must not lengthen future holds.
-// Invalid timing or an uncapped game (0) requests no minimum display duration.
-double PresentDuration(float interval, uint32_t game_limit);
+// Offset of the real image from its intermediate's absolute deadline. Measured cadence
+// validates timing only: acquisition delays must never accumulate in later pairs.
+double PresentInterval(float interval, uint32_t game_limit);
 
 class Generator {
   public:

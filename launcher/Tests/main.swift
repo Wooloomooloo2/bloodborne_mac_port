@@ -247,10 +247,10 @@ do {
     // Keep these vectors aligned with tests/test_framegen.mm's renderer policy checks.
     for (rate, cap, supported) in [
         (60.0, 30, true), (60, 60, false), (120, 60, true), (120, 120, false),
-        (144, 60, false), (160, 60, false), (240, 60, true), (360, 60, true),
-        (240, 120, true), (80, 40, true), (120, 40, false), (180, 90, true),
+        (144, 60, true), (160, 60, true), (240, 60, true), (360, 60, true),
+        (240, 120, true), (80, 40, true), (120, 40, true), (180, 90, true),
         (59.94, 30, true), (119.88, 60, true), (239.76, 60, true),
-        (119, 60, false), (121, 60, false), (0, 30, false), (-1, 30, false),
+        (119, 60, false), (121, 60, true), (0, 30, false), (-1, 30, false),
         (Double.nan, 30, false), (Double.infinity, 30, false)
     ] {
         check(FrameGenerationDisplay(refreshRate: rate).supports(realCap: cap, fullscreen: false) == supported,
@@ -259,7 +259,7 @@ do {
     for (maximum, minimum, cap, supported) in [
         (144.0, 48.0, 60, true), (160, 48, 60, true), (160, 48, 40, true),
         (119.88, 23.976, 60, true),
-        (160, 100, 40, false), (160, 48, 90, false), (160, 0, 60, false),
+        (160, 100, 40, false), (160, 48, 90, false), (160, 0, 60, true),
         (160, 160, 60, false), (160, 200, 60, false), (160, Double.nan, 60, false)
     ] {
         check(FrameGenerationDisplay(refreshRate: maximum, minimumRefreshRate: minimum)
@@ -267,12 +267,12 @@ do {
               "variable display cadence policy: \(minimum)-\(maximum) Hz, \(cap) real FPS")
     }
     check(reason(120, device: false) != nil, "unsupported OS/device explains unavailable frame generation")
-    check(reason(144)?.contains("120 Hz") == true && reason(160)?.contains("120 Hz") == true,
-          "fixed 144/160 Hz explains setting the display to 120 Hz")
+    check(reason(144) == nil && reason(160) == nil,
+          "absolute deadlines support fixed 144/160 Hz without a display mode change")
     check(settings.frameGenerationUnavailableReason(deviceSupported: true, display: nil) != nil,
           "missing display cannot enable generation")
-    check(reason(160, minimum: 48, external: true)?.contains("full screen") == true,
-          "external Adaptive-Sync explains its full-screen requirement")
+    check(reason(160, minimum: 48, external: true) == nil,
+          "windowed external display can use its fixed refresh cadence")
     settings.fullscreen = true
     check(reason(160, minimum: 48, external: true) == nil, "full-screen Adaptive-Sync enables generation")
     settings.fullscreen = false
@@ -281,10 +281,10 @@ do {
     check(reason(120)?.contains("240 Hz") == true, "120 FPS cap explains the need for 240 Hz")
     settings.frameCap = .fps60
     settings.upscaler = .off
-    check(reason(120)?.contains("Select MetalFX") == true, "upscaling off explains missing inputs")
+    check(reason(120) == nil, "native capture does not require selecting a temporal upscaler")
     settings.upscaler = .metalfx
     settings.ultrawide = true
-    check(reason(120)?.contains("16:10") == true, "native wide output explains missing inputs")
+    check(reason(120) == nil, "native wide output can capture frame generation inputs")
     settings.apply(to: &ini)
     check(ini["framegen"] == "1" && GameSettings(ini: ini).frameGeneration,
           "unavailable frame generation keeps the saved preference")

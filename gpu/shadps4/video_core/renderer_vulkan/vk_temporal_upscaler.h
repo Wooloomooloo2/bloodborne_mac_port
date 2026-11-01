@@ -140,6 +140,7 @@ public:
     };
     bool DisplayOverride(VAddr address, Display& display);
     BbFrameGen::Generator* FrameGenerator() const { return frame_generator.get(); }
+    bool FrameGenerationScene() const;
     BbFrameGen::FramePtr FrameForDisplay() const {
         return display_redirect ? display_framegen : BbFrameGen::FramePtr{};
     }
@@ -274,6 +275,7 @@ private:
     bool ui_phase = false;         ///< from the upscale to the next display pass
     bool display_redirect = false; ///< the display pass of an upscaled frame
     bool scaled_session = false;
+    bool native_capture = false; // native-aspect FG; no UI redirection while automatically paused
     u32 ui_width = 0, ui_height = 0;
     u32 render_width = 0, render_height = 0;
     vk::Format ui_format = vk::Format::eUndefined;

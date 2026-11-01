@@ -105,7 +105,8 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     /// Presents `frame` on the present queue once its draw-scheduler tick is done, and returns
-    /// it to the pool when the present completed. Never touches the draw scheduler.
+    /// it to the pool when the present completed. Paired deadlines wait on the committed
+    /// render timeline; this thread never records or flushes draw-scheduler work.
     /// present_id (bbport, frame spike log): unused until presented-time stats (M5).
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true,
                  u32 present_id = 0);

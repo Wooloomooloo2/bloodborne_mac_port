@@ -2616,3 +2616,54 @@ The production overlay readback measured 326 pixels before and 186 after at its
 fixed test size, while the paired counter stays at 377 pixels. Normal and Metal
 validation runs check the compact counter, restart-dependent transitions,
 unsupported/refresh-limited fallback, and stable paired columns.
+
+
+## 2026-11-01 — Absolute framegen deadlines and automatic GPU admission (#64)
+
+Paired presentation now uses host deadlines anchored to each GPU-ready source,
+with the real image due half a configured cap period after its intermediate.
+A late acquisition cannot extend the following pair's hold. This removes the
+per-image minimum-duration rounding that throttled non-integer refresh ratios.
+Windowed framegen no longer forces a third drawable; full screen retains three.
+The presenter waits only on the already-committed render timeline, and continues
+to acquire/submit/release the two drawables sequentially.
+
+On the M4 Max/macOS 27 with a 120 Hz presentation cadence, 60-second stationary
+windows measured 59.69 real FPS off and 59.53 real / 119.61 displayed FPS on.
+The last 4,000 displayed-image timestamps had no gaps over 25.1 ms on. A private
+queue trace also isolated about 8.3 ms of extra queueing from forcing three
+windowed drawables; it was removed after measurement. These are presentation
+queue measurements, not hardware input-to-photon latency.
+
+Two additional 60-second runs exercised the non-integer ratios physically: 50
+real / 100 displayed on 120 Hz matches the 144:120 ratio; 45 / 90 matches 160:120.
+They measured 50.00 / 99.99 and 45.00 / 89.99 FPS respectively, with displayed
+intervals quantised to 8.33/16.67 ms. This checks the pacing mechanism without
+claiming an external 144/160 Hz hardware test.
+
+4K Quality exposed a separate GPU limit: sustained generation on the normal
+three-drawable full-screen path measured 49.08 real FPS in this scene. Automatic
+admission first measures real-only gameplay, leaves generation paused when GPU
+time is needed for real frames, and resumes only when the measured optional-work
+cost fits with a margin. It never periodically probes a saturated scene. That
+60-second candidate measured 59.96 real FPS, using real-only fallback; the off
+control measured 58.84 FPS. Sequential controls vary, so this establishes fallback
+coverage rather than a speedup. A forced-two-drawable full-screen experiment was
+slower and is excluded from the implementation.
+
+Native output can now provide scene/depth/motion/HUD inputs without selecting a
+temporal upscaler. It copies native scene pixels without adding jitter or changing
+saved upscaler/preset/resolution choices. Native aspect patches keep their exact
+sizes and skip capture-only UI redirection and object motion while automatically
+paused. Camera admission accepts the first valid scene after a history reset,
+so enabling native capture does not feed that reset back into its own gate.
+
+The supplied gamma-slice/channel correction is retained unchanged. GPU fixtures
+cover distinct LUT slices, source lifetimes, absolute presentation, counters,
+refresh eligibility and GPU-budget transitions (including sustained pressure,
+CPU hitches, configuration changes, missing timestamps and no periodic probes).
+Native-off full-screen gameplay and 1920×1200 / 2560×1080 native-aspect routes
+also completed with generated frames; the aspect cases used Metal validation.
+Gameplay uses private save/cache copies and the existing local DLC diagnostic
+adapter; original save hashes remain unchanged. These are bounded checks, with
+no claim of long-session or hardware button-to-photon validation.

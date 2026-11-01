@@ -9,6 +9,8 @@
 #include <cstring>
 
 #include "bbport_toggles.h"
+#include "bbport_framegen.h"
+#include "bbport_settings.h"
 #include "common/assert.h"
 
 #include "video_core/buffer_cache/buffer.h"
@@ -72,8 +74,9 @@ CameraMotion::CameraMotion(Metal::Device& device_, Scheduler& scheduler_,
     debug_overlay = env && env[0] == '1';
     const char* upscaler = std::getenv("BB_UPSCALER");
     // The upscaler can be switched on from the menu at any time: the camera is always tracked
-    // unless BB_UPSCALER=none.
-    for_upscaler = !(upscaler && std::strcmp(upscaler, "none") == 0);
+    // unless BB_UPSCALER=none without a native-aspect frame-generation launch.
+    for_upscaler = !(upscaler && std::strcmp(upscaler, "none") == 0) ||
+                   (BbSettings::Get().ultrawide_width && BbFrameGen::Requested());
     // Built here, not at first use on the recording thread.
     if (for_upscaler) {
         motion_kernel = Metal::BuildHostKernel(device, CAMERA_MOTION_COMP, {}, "camera_motion");
@@ -182,6 +185,10 @@ void CameraMotion::OnGBufferPass(VideoCore::ImageId depth) {
 }
 
 void CameraMotion::OnDisplayPass(VideoCore::ImageId frame) {
+    // Admission measures real-only scenes too, including their first frame after a history
+    // reset. Requiring the previous camera would feed a native-path restart back into the gate.
+    display_had_scene.store(frame_has_camera && current.valid && depth_id,
+                             std::memory_order_relaxed);
     if (debug_overlay && frame && depth_id && current.valid && previous.valid) {
         Overlay(frame);
     }

@@ -230,10 +230,12 @@ int main() {
         s.upscaler = BbSettings::UpscalerOff;
         for (int i = 0; i < 4; ++i) Present(t, true);
         const auto native_counter = counter();
-        Expect(CounterBounds(t) == normal_bounds, "missing temporal inputs restores the single FPS layout");
+        Expect(CounterBounds(t) == framegen_bounds,
+               "native frame generation keeps the paired FPS counter without a temporal upscaler");
         s.startup_framegen = false;
         for (int i = 0; i < 4; ++i) Present(t, true);
-        Expect(counter() == native_counter, "no temporal inputs matches the original framegen-off counter");
+        Expect(counter() != native_counter && CounterBounds(t)[3] == normal_bounds[3],
+               "native framegen off restores the single FPS row");
         s.startup_framegen = true;
         s.upscaler = BbSettings::UpscalerTaa;
         for (int i = 0; i < 4; ++i) Present(t, true, {60, 90});
@@ -465,7 +467,9 @@ int main() {
             s.display_timing = {hz, 0};
             for (int i = 0; i < 3; ++i) Present(t, true);
             Click(t, fx, fy);
-            Expect(!s.framegen, "incompatible fixed 144/160 Hz cannot enable generation from the menu");
+            Expect(s.framegen, "absolute deadlines allow fixed 144/160 Hz from the menu");
+            Click(t, fx, fy);
+            Expect(!s.framegen, "fixed-refresh switch can be reverted");
         }
         s.display_timing = {120, 0};
         s.framegen_real_cap = 0;

@@ -3,7 +3,7 @@
 ## Experimental MetalFX frame generation on macOS (2026-10-24)
 
 Before starting the game, enable **Upscaler → Frame generation (experimental)**
-in the launcher. It explains missing temporal inputs and incompatible refresh rates
+in the launcher. It explains hardware and refresh-rate limits
 on the selected display (including a `BB_DISPLAY` override). A disconnected selection
 falls back to the primary display. The game checks its own display again.
 You can also open the in-game menu with **L3+R3** (or **Cmd+,**) and select
@@ -13,28 +13,38 @@ image between each pair of real frames. The choice is saved as `framegen=0|1` in
 Restart Game**; toggling back to the running choice clears the restart notice. The
 current session keeps its existing presentation resources until restart.
 
-It requires macOS 26+, a build with the macOS 26 SDK or newer, a
-device accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, an active
-temporal upscaler (`metalfx`, `fsr3`, or `taa`), and a compatible window-display mode:
+It requires macOS 26+, a build with the macOS 26 SDK or newer, a device
+accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, a real FPS cap,
+and a display able to show at least **2 × that cap** (0.2% tolerance includes
+119.88 Hz for 60 FPS). The launcher checks the selected display and the renderer
+checks the game window's actual display again. Unknown or insufficient refresh
+rates disable the switch with a reason; moving the window to a suitable display
+resumes generation without erasing the saved preference.
 
-- Fixed refresh must be a whole multiple of **2 × the real FPS cap**, within 0.2%.
-  At a 60 FPS cap, 120/240/360 Hz qualify; 144/160 Hz do not. Fractional equivalents
-  such as 119.88 Hz qualify. A 30 FPS cap permits 60 Hz; a 120 FPS cap needs 240 Hz
-  or a whole multiple.
-- Active variable refresh permits a paired rate inside the display's reported
-  minimum/maximum range (with the same 0.2% tolerance). ProMotion can also service
-  windowed output. External
-  Adaptive-Sync requires full screen and a variable mode enabled in macOS display
-  settings, following [Apple's scheduling guidance](https://developer.apple.com/videos/play/wwdc2021/10147/).
-- Off, native 16:10/ultrawide output, an uncapped launch, and an unknown refresh rate
-  disable the control with a reason. Native aspect patches turn temporal upscaling off.
+Frame generation also captures inputs with **upscaling off**, including native
+16:10 and ultrawide patches. The native path copies the scene's exact pixels and
+captures depth/motion before the HUD. It keeps the selected resolution, aspect,
+upscaler and preset preferences; no temporal upscaler or extra jitter is enabled.
 
-The window thread reads the game window's own `NSScreen` refresh intervals/current
-mode and publishes both limits together on display/mode/fullscreen changes. Moving
-to an incompatible mode suspends snapshot capture and paired presentation; returning
-to a suitable mode resumes them. The saved frame-generation preference is retained.
-For an incompatible fixed 144/160 Hz mode at a 60 FPS cap, the controls recommend
-setting the display to 120 Hz (or a whole multiple).
+Pairs use absolute host deadlines: the intermediate is eligible when its GPU work
+is ready, and the real image is due half a configured real-frame period later.
+A late acquisition presents as soon as possible instead of extending a relative
+minimum hold. Each source frame anchors its own deadlines, so stalls do not
+accumulate a permanent phase shift. Fixed 144/160 Hz therefore no longer need a
+manual switch to 120 Hz: images quantise to refresh boundaries without forcing
+both images to occupy two refreshes each. Active variable refresh uses a paired
+rate inside its reported range; external Adaptive-Sync requires full screen.
+Windowed external displays can use the fixed-refresh deadline path.
+
+The renderer measures real-only gameplay GPU time before admitting interpolation.
+Generation pauses automatically under sustained GPU pressure, preserving the real
+frame rate, and resumes only when the measured interpolation cost fits with spare
+time. It does not periodically insert test pairs into a saturated scene. The menu
+explains a headroom pause; the switch and saved preferences stay enabled. Loading
+screens, output/preset changes and long pauses invalidate the initial estimate.
+The optional work has its own command buffer, submitted after the real scene
+without a GPU drain, so its completed GPU duration can guide resumption.
+
 `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
 disables both controls for that session; remove it to use the saved preference. It never
 overwrites the file's `framegen` preference: unrelated menu saves preserve the

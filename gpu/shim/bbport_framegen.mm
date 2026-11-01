@@ -4,6 +4,7 @@
 // follow the direct-Metal port's frame_generation.mm at b395cf4; adapted to
 // this port's two queues.
 #include "bbport_framegen.h"
+#include "bbport_framegen_budget.h"
 #include "bbport_settings.h"
 
 #include "video_core/renderer_metal/mtl_device.h"
@@ -21,6 +22,9 @@
 
 namespace BbFrameGen {
 namespace {
+GpuBudget gpu_budget; // render producer only; the present thread reads the published gate
+std::atomic<bool> gpu_available{true};
+std::atomic<double> generation_seconds{0};
 constexpr const char* Source = R"msl(
 #include <metal_stdlib>
 using namespace metal;
@@ -142,10 +146,7 @@ bool DisplaySupported(double refresh_hz, uint32_t real_cap, double min_refresh_h
                min_refresh_hz < refresh_hz && paired_rate >= min_refresh_hz * .998 &&
                paired_rate <= refresh_hz * 1.002;
     }
-    const double ratio = refresh_hz / paired_rate;
-    const double multiple = std::round(ratio);
-    // Includes 59.94/119.88 Hz modes without admitting 144/160 Hz at a 60 FPS cap.
-    return multiple >= 1 && std::abs(ratio - multiple) <= .002 * multiple;
+    return paired_rate <= refresh_hz * 1.002;
 }
 bool DisplaySupported() {
     const auto& s = BbSettings::Get();
@@ -176,8 +177,28 @@ void UpdateDisplayTiming(void* cocoa_window, bool fullscreen) {
 }
 bool Active() {
     const auto& s = BbSettings::Get();
-    return Requested() && s.framegen_supported && s.upscaler != BbSettings::UpscalerOff &&
-           DisplaySupported();
+    return Requested() && s.framegen_supported && DisplaySupported() && !GpuBudgetLimited();
+}
+void StartGpuBudget() {
+    gpu_budget = {};
+    gpu_available = false;
+    generation_seconds = 0;
+}
+bool GpuBudgetLimited() {
+    return !gpu_available.load(std::memory_order_relaxed);
+}
+void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene) {
+    const auto& s = BbSettings::Get();
+    if (!Requested() || !s.framegen_supported) return;
+    const auto size = BbSettings::OutputSize();
+    const uint64_t config = uint64_t(size[0]) | (uint64_t(size[1]) << 16) |
+        (uint64_t(s.upscaler.load()) << 32) | (uint64_t(BbSettings::RenderPreset()) << 40);
+    const bool available = gpu_budget.Observe(now, gpu_busy_ns, scene, s.framegen_real_cap, config,
+                                             generation_seconds.load(std::memory_order_relaxed));
+    if (gpu_available.exchange(available, std::memory_order_relaxed) != available) {
+        std::printf("Frame generation: %s (automatic GPU headroom check)\n",
+                    available ? "resumed" : "paused to preserve real FPS");
+    }
 }
 bool Supported(Metal::Device& device) {
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
@@ -195,14 +216,10 @@ bool Continuous(const Description& previous, const Description& current) {
            previous.near_plane == current.near_plane && previous.far_plane == current.far_plane &&
            previous.vertical_fov == current.vertical_fov;
 }
-double PresentDuration(float interval, uint32_t game_limit) {
+double PresentInterval(float interval, uint32_t game_limit) {
     if (!std::isfinite(interval) || interval < 1.f / 240.f || interval > .1f)
         return 0;
-    // Measured cadence includes nextDrawable backpressure. Feeding that delay
-    // back into the minimum display time lengthens later waits and can collapse
-    // the real-frame rate. Only the configured cap may request an extra hold.
-    const double period = game_limit ? 1.0 / game_limit : 0;
-    return period * .5 * .97;
+    return game_limit ? .5 / game_limit : 0;
 }
 
 struct Generator::Impl {
@@ -486,6 +503,12 @@ void Generator::Interpolate(Metal::Encoder& e, const FramePtr& frame, void* disp
         fx.jitterOffsetX = fx.jitterOffsetY = 0;
         e.EndEncoding();
         [fx encodeToCommandBuffer:(__bridge id<MTLCommandBuffer>)e.CommandBuffer()];
+        [(__bridge id<MTLCommandBuffer>)e.CommandBuffer()
+            addCompletedHandler:^(id<MTLCommandBuffer> completed) {
+                const double duration = completed.GPUEndTime - completed.GPUStartTime;
+                if (completed.status == MTLCommandBufferStatusCompleted && duration > 0)
+                    generation_seconds.store(duration, std::memory_order_relaxed);
+            }];
         e.KeepAlive(Metal::Object::Retain(s.effect.Get()));
         if (s.previous)
             Pin(e, s.previous);

@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <memory>
 
 #include "common/types.h"
@@ -75,6 +76,9 @@ public:
     [[nodiscard]] bool Ready() const noexcept {
         return current.valid && previous.valid && depth_id;
     }
+    [[nodiscard]] bool LastDisplayHadScene() const noexcept {
+        return display_had_scene.load(std::memory_order_relaxed);
+    }
     [[nodiscard]] VideoCore::ImageId Depth() const noexcept {
         return depth_id;
     }
@@ -127,6 +131,7 @@ private:
     ObjectMotion* object_motion = nullptr;
     Camera current, previous;
     bool frame_has_camera = false;
+    std::atomic<bool> display_had_scene{false};
     std::array<float, 2> jitter{}, previous_jitter{};
     std::array<u32, 2> render_size{};
     VideoCore::ImageId depth_id{};
