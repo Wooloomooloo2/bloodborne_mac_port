@@ -42,6 +42,15 @@ Each item: what was done for now, what the refinement is, and where it lives.
   the reporter's save, 1-2 passes through the passage reproduce it) and fix it on the startup
   path; then #117 is not needed. Workaround for players: start with the upscaler off, then enable
   MetalFX in game.
+- **Missing movie-audio output device (#123, 2026-11-01).** A checked guard now
+  rejects start with a null device and treats null stop like the original
+  already-closed path, preserving the callers' unlocks. This contains the
+  `0x282279d` / `0x100c4` dereference; it does not initialize a device or restore
+  sound. *Next:* collect the complete session log/diagnostics and movie/transition
+  steps, trace the manager's `+0xbe0` device lifetime and initializer result, then
+  verify playback and teardown in game. A permanently absent device may leave
+  playback waiting for audio startup; the instruction fixture cannot rule that
+  out. See FINDINGS 2026-11-01.
 - **The game's AA is lost above 1080p (#115, 2026-10-31).** Above 1920x1080 run.sh uses live
   resolution changes: the guest's buffers stay at 1080p and host targets are scaled, so the game's
   own temporal AA (a 1080p post-process) never reaches the picture. Measured at the benchmark stand
