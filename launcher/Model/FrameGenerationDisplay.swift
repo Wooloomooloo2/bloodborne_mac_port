@@ -16,9 +16,8 @@ struct FrameGenerationDisplay: Equatable {
                 && minimumRefreshRate < refreshRate && pairedRate >= minimumRefreshRate * 0.998
                 && pairedRate <= refreshRate * 1.002
         }
-        let ratio = refreshRate / pairedRate
-        let multiple = ratio.rounded()
+        // Absolute pair deadlines do not round a minimum hold up on every image.
         // Same 0.2% tolerance as BbFrameGen::DisplaySupported, including 119.88 Hz.
-        return multiple >= 1 && abs(ratio - multiple) <= 0.002 * multiple
+        return pairedRate <= refreshRate * 1.002
     }
 }

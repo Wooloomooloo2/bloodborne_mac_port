@@ -125,11 +125,11 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
       present_queue{std::make_unique<Metal::PresentQueue>(device)},
       pool{std::make_shared<FramePool>()} {
     ASSERT_MSG(layer != nullptr, "Presenter: the window has no CAMetalLayer");
+    if (BbFrameGen::Requested()) BbFrameGen::StartGpuBudget();
     if (const char* env = std::getenv("BB_SNAPSHOT_TRIGGER"); env && *env) {
         snapshot_trigger = env;
     }
     Metal::LayerConfig config = LayerConfigFromEnv();
-    if (rasterizer->GetUpscaler().FrameGenerator()) config.max_drawables = 3;
     // Snapshots read the drawable back.
     config.framebuffer_only = snapshot_trigger.empty();
     Metal::ConfigureLayer(device, layer, config);
@@ -205,6 +205,8 @@ Frame* Presenter::PrepareLastFrame() {
 
 Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& attribute,
                                VAddr cpu_address) {
+    BbFrameGen::UpdateGpuBudget(BbFrameRates::Now(), device.GpuBusyNs(),
+                                rasterizer->GetUpscaler().FrameGenerationScene());
     // bbport: scaled upscaler presets: the output-size display buffer drawn by the port.
     TemporalUpscaler::Display display{};
     const bool upscaled = rasterizer->GetUpscaler().DisplayOverride(cpu_address, display);
@@ -267,7 +269,10 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                 frame->generated = Metal::CreateTexture(device, desc, "Generated frame", nullptr);
             }
             if (frame->generated) {
-                draw_scheduler.EndRendering();
+                // Submit the real scene before optional work, without draining the GPU.
+                // Its separate command buffer also gives the budget an upper bound on
+                // interpolation/pair-copy cost, independent of changes in scene complexity.
+                draw_scheduler.Flush();
                 draw_scheduler.Record([generator, packet = frame->framegen,
                     displayed = Metal::Object::Retain(input.Get())](Metal::Encoder& e) {
                     generator->Interpolate(e, packet, displayed.Get());
@@ -450,7 +455,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
         Metal::Drawable drawable;
         std::shared_ptr<Frame> pair_owner;
         bool generated_presented = false;
-        double duration = 0;
+        double real_deadline = 0;
         // Submit the generated image before asking for the real image's drawable.
         // Direct scanout keeps drawables in use longer than the compositor. Holding
         // an unsubmitted real drawable while waiting for a second one exhausts the
@@ -467,17 +472,21 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
             pair_owner = std::shared_ptr<Frame>(frame, [pool = pool](Frame* owned) {
                 pool->Free(owned);
             });
-            duration = BbFrameGen::PresentDuration(frame->framegen->description.interval,
-                                                   EmulatorSettings.GetFrameLimit());
+            const double interval = BbFrameGen::PresentInterval(
+                frame->framegen->description.interval, EmulatorSettings.GetFrameLimit());
+            // Anchor this pair only once its source/interpolation is ready. Deadlines from
+            // earlier pairs must not drift after a slow frame or a drawable acquisition.
+            // PrepareFrame committed this tick. Wait on its thread-safe timeline only;
+            // the presenter must never flush the recording thread's current work.
+            draw_scheduler.GetTimeline().Wait(frame->ready_tick);
+            const double generated_deadline = Metal::PresentationTime();
+            real_deadline = generated_deadline + interval;
             void* const cb = present_queue->Begin();
-            const auto tick = draw_scheduler.GetTimeline().DeviceTickOf(frame->ready_tick);
-            ASSERT_MSG(tick.has_value(), "Generated frame tick was not committed");
-            present_queue->WaitForDeviceTick(cb, *tick);
             pp_pass.Passes().Present(cb, frame->generated.Get(), frame->width, frame->height,
                 drawable.texture, drawable.width, drawable.height);
             BbOverlay::Render(cb, drawable.texture, drawable.width, drawable.height, readings());
-            present_queue->Commit(cb, drawable.drawable.Get(), [pair_owner] {}, duration,
-                                  on_displayed);
+            present_queue->Commit(cb, drawable.drawable.Get(), [pair_owner] {}, 0,
+                                  on_displayed, generated_deadline);
             generated_presented = true;
             // Drain autoreleased Metal references too, before the next acquisition.
             drawable = {};
@@ -541,7 +550,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame,
                         std::fflush(stdout);
                     }).detach();
                 }
-            }, generated_presented ? duration : PacingSeconds(), on_displayed);
+            }, generated_presented ? 0 : PacingSeconds(), on_displayed, real_deadline);
         last_present.submitted = NowNs();
         last_present.presented = last_present.submitted;
     });
