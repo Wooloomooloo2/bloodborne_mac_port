@@ -2340,3 +2340,30 @@ This contains the reported null unbind and its known deferred query continuation
 It does not explain why the record disappeared or recreate its graphics state.
 The 91-minute passage route, long-session stability, image correctness after a
 missing record, and performance have not been replayed or measured here.
+
+## 2026-11-02: skip conflicting external patches without blocking launch (#79)
+
+The reviewer's enabled external FPS patch (`90909090` at PS4 `0x00a3fc3f`)
+conflicts with the built-in 60 FPS preset. Before this change, `compile_external`
+called `audit.add` outside its per-patch `ValueError` handler, so the exception
+reached the CLI and exited 1 before `run.sh` could start the game. The new CLI
+regression reproduces that exact error and exit status on the rebased baseline.
+
+Move the overlap check into the existing per-external-patch handler. A conflict
+now emits `Patches: skipped <file>/<name>: ...` and discards that entire patch;
+preflight validates all effective bytes before recording any ownership. The
+built-in writes remain, and later patches in the same collection or another file
+still load. Explicit `Overrides` declarations and identical overlaps retain their
+existing behavior. Conflicts between built-in/generated groups remain fatal.
+
+Rebased onto master `50274ee`, retaining its newer opening-movie hook and unsafe
+condition-wait filtering. The runtime preflight also honors `BB_MOVIE_LOCK=0` for
+that hook, alongside the existing context-lock/frame-pool switches.
+
+Validation: 27 Python patch tests (including the failing-then-passing CLI repro,
+whole-patch rejection without output/audit residue, external-to-external conflicts
+and explicit overrides), five restart tests, three ultrawide tests and the native
+hook/whole-set verifier pass. The verifier covers the movie prologue and its
+disable switch; the ARM64 fallback compiles with warnings as errors. Shell syntax
+and `git diff --check` pass. This revision has no new gameplay or performance
+measurement; the maintainer's reported benchmark is separate review evidence.
