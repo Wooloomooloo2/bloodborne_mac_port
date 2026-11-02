@@ -137,10 +137,17 @@ static void crash_exit(const char *why, int status) {
 }
 /* Hang watchdog: the game flips a frame many times a second, loading screens included. No new
  * flip for BB_HANG_SECONDS (default 30, 0 = off) after the first one means the game is stuck,
- * for example waiting for GPU work that never arrives (#18). A late wake-up (system sleep,
- * the process stopped) restarts the count. */
+ * for example waiting for GPU work that never arrives (#18). Before the first flip the limit is
+ * BB_HANG_FIRST_SECONDS (default 180, 0 = off; a first launch builds its shader cache then): a
+ * game stuck on a black screen from the start (#121) waited forever. A late wake-up (system
+ * sleep, the process stopped) restarts the count. */
+static unsigned hang_first_limit(void) {
+    const char *env = getenv("BB_HANG_FIRST_SECONDS");
+    return env ? (unsigned)strtoul(env, NULL, 10) : 180;
+}
 static void *hang_watchdog(void *arg) {
     const unsigned limit = (unsigned)(uintptr_t)arg;
+    const unsigned first_limit = hang_first_limit();
     uint64_t last = 0;
     struct timespec since, before;
     clock_gettime(CLOCK_MONOTONIC, &since);
@@ -152,7 +159,17 @@ static void *hang_watchdog(void *arg) {
         const uint64_t flips = bbgpu_get_flip_count();
         const int woke_late = now.tv_sec - before.tv_sec > 5;
         before = now;
-        if (flips != last || flips == 0 || woke_late) {
+        if (flips == 0 && !woke_late) {
+            if (first_limit && (unsigned)(now.tv_sec - since.tv_sec) >= first_limit) {
+                char why[160];
+                snprintf(why, sizeof why, "the game stopped responding (no first frame after %u "
+                         "seconds; BB_HANG_FIRST_SECONDS)", first_limit);
+                runtime_thread_dump_all();
+                crash_exit(why, GPU_PROCESS_EXIT_HANG);
+            }
+            continue;
+        }
+        if (flips != last || woke_late) {
             last = flips;
             since = now;
             continue;
