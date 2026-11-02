@@ -138,9 +138,12 @@ const char *runtime_patch_conflict(uint64_t offset, const unsigned char *data, s
     const int lock_off=env && env[0]=='0';
     env=getenv("BB_FRAME_POOL");
     const int pool_off=env && env[0]=='0';
+    env=getenv("BB_MOVIE_LOCK");
+    const int movie_off=env && env[0]=='0';
     for (size_t i=0;i<HOOK_COUNT;++i) {
         const Hook *h=&hooks[i];
         if (h->before ? pool_off : lock_off) continue;
+        if (h->offset==0x28fe7c0 && movie_off) continue;
         if (changes_bytes(offset,data,size,h->offset,h->prologue,h->prologue_size)) return h->name;
     }
     return NULL;

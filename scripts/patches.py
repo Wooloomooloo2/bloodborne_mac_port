@@ -417,7 +417,7 @@ def external_selection(found, config):
 
 
 def compile_external(selected, segments, audit=None):
-    """Writes of the selected external patches; a patch with unsupported lines is skipped whole."""
+    """Writes of external patches; unsupported or conflicting patches are skipped whole."""
     writes=[]
     audit = audit if audit is not None else PatchAudit()
     for key,_,meta in selected:
@@ -432,10 +432,10 @@ def compile_external(selected, segments, audit=None):
                     print(f'Patches: {key}: skipped the write at {line.get("Address")} ({reason})',file=sys.stderr)
                     continue
                 ours.append((offset,data))
+            writes += audit.add(key, ours, patch_overrides(meta))
         except ValueError as error:
             print(f'Patches: skipped {key}: {error}',file=sys.stderr)
             continue
-        writes += audit.add(key, ours, patch_overrides(meta))
         print(f'Patches: external {key} ({len(ours)} writes)')
     return writes
 

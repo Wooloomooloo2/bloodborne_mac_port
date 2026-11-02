@@ -90,7 +90,9 @@ Supported line types: `bytes`, `bytes16/32/64`, `float32/64`, `utf8`, `utf16`.
 A patch with `mask` lines (pattern search) or with an address outside the eboot is skipped
 entirely, with a message in the log. Third-party patches are applied after the built-in ones
 (`patches/Bloodborne.xml`). Identical overlaps are accepted. Different bytes from two selected
-patches stop preparation with their names and the first conflicting address. For an intentional
+patches cause the conflicting external patch to be skipped whole, with its name and the first
+conflicting address in a `Patches: skipped` log line; the remaining patches still load. Conflicts
+between built-in patches stop preparation. For an intentional
 override, the later patch's `Metadata` can declare `Overrides="Built-in patch name"`, or
 `Overrides="file.xml/Patch name"` for another external patch. Separate multiple names with `;`.
 Writes within one patch retain their original order. Required runtime hook prologues and the

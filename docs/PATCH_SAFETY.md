@@ -11,8 +11,11 @@ or moving-lift correction is claimed here.
 
 Selected patches are compared using their effective bytes after replaying each
 patch's ordered writes. Equal cross-patch writes are accepted. Disagreements
-stop preparation before `patches.bin` is written and identify both sources and
-the PS4 address. Intentional replacements can use the later XML metadata's
+between built-in/generated groups stop preparation before `patches.bin` is
+written. A conflicting external patch is skipped whole with a `Patches: skipped`
+line naming both sources and the PS4 address; other external patches continue.
+The skipped patch changes neither the output nor audit ownership, so it cannot
+make later independent patches conflict. Intentional replacements can use the later XML metadata's
 `Overrides="Patch name;file.xml/Other patch"` declaration. This also applies
 across built-in, generated resolution and external groups. Existing XML without
 disagreeing writes needs no change; existing conflicting external overrides need
@@ -22,7 +25,8 @@ The native loader separately scans the complete patch file before applying its
 first write. It refuses changes to active context-lock/frame-pool hook prologues
 using the hook installer's own descriptors, and to the retained timed-wait call.
 Identical original bytes are allowed. Disabling a hook through its existing
-`BB_CONTEXT_LOCK=0` or `BB_FRAME_POOL=0` option removes only that hook's protection.
+`BB_CONTEXT_LOCK=0`, `BB_FRAME_POOL=0`, or `BB_MOVIE_LOCK=0` option removes only
+the corresponding hooks' protection.
 The timed-wait call remains required. XML override declarations cannot bypass
 this native protection. Other relocation/mapping admission checks remain in the
 loader; a successful scan is not proof that every game patch is compatible.

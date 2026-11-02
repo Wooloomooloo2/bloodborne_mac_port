@@ -13,9 +13,9 @@ static void entry(FILE *f,uint64_t offset,const unsigned char *data,uint64_t siz
     assert(fwrite(data,1,(size_t)size,f)==size);
 }
 int main(void) {
-    unsetenv("BB_CONTEXT_LOCK"); unsetenv("BB_FRAME_POOL");
+    unsetenv("BB_CONTEXT_LOCK"); unsetenv("BB_FRAME_POOL"); unsetenv("BB_MOVIE_LOCK");
     const unsigned char original=0x55, changed=0x90;
-    const uint64_t sites[]={0xebb960,0x2199af0,0x219d220,0x2198fd0,0xe453b0};
+    const uint64_t sites[]={0xebb960,0x2199af0,0x219d220,0x2198fd0,0xe453b0,0x28fe7c0};
     for (size_t i=0;i<sizeof(sites)/sizeof(sites[0]);++i) {
         assert(runtime_patch_conflict(sites[i],&changed,1));
         assert(!runtime_patch_conflict(sites[i],&original,1));
@@ -26,6 +26,11 @@ int main(void) {
     const unsigned char call[]={0xe8,0xa2,0xce,0xb3,0x00},ret[]={0xc3,0x90,0x90,0x90,0x90};
     assert(!runtime_patch_conflict(0x2483ec1-0x400000,call,sizeof(call)));
     assert(runtime_patch_conflict(0x2483ec1-0x400000,ret,sizeof(ret)));
+    setenv("BB_MOVIE_LOCK","0",1);
+    assert(!runtime_patch_conflict(sites[5],&changed,1));
+    assert(runtime_patch_conflict(sites[0],&changed,1));
+    assert(runtime_patch_conflict(sites[3],&changed,1));
+    unsetenv("BB_MOVIE_LOCK");
     setenv("BB_CONTEXT_LOCK","0",1);
     assert(!runtime_patch_conflict(sites[0],&changed,1));
     assert(runtime_patch_conflict(sites[3],&changed,1));
