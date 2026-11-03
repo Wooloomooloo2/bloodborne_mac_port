@@ -2402,6 +2402,13 @@ M4 Max, macOS 27, master 50274ee, scratch data dir with the reporters' saves, 10
 
 ## 2026-10-25: native title-menu Exit Game (PR #76)
 
+The title menu's unused Opinion Box is shown as Exit Game. Its condition and relocated
+callback are guarded against the original 1.09 code; the callback exits the runtime with
+status 0 and the existing GPU-host parent watcher handles renderer/cache shutdown. The
+in-world save-and-return-to-title action stays intact. The generated title movies have
+six animated rows; all three variants and 22 language bundles generate successfully with
+all 26 source hashes unchanged. Warm cache lookup is about 7 ms.
+
 22 asset fixtures, native/Rosetta exit-hook fixtures, existing Mac Settings hooks and
 launch-settings fixtures pass. After merging upstream, both GPU libraries, the runtime
 and both native hosts rebuild with protocol 6 (benchmark fields plus settings snapshot).
@@ -2417,3 +2424,26 @@ command return code corroborate the logs. No crash/fatal-stop lines were present
 26 original menu assets plus source save copy stayed unchanged. The initial missing-DLC
 check was closed normally and excluded from the menu-exit results. The packaged launcher
 app was not exercised. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md).
+
+## 2026-10-25: native menu PR #76 refreshed against 0.5.7
+
+Merged `af0fae2` while preserving the native menus, upstream mouse input, launch settings,
+benchmark and launcher lifecycle. Shared protocol 8 distinguishes the native settings
+snapshot from upstream's mouse layout (6) and the independent achievements PR's layout
+(7). Both GPU architectures, the runtime, both GPU hosts and launcher compile. Native
+settings with mouse-preference persistence, menu/Exit Game hooks, asset/mod/patch fixtures,
+launcher model/Stop lifecycle, runtime/semaphore/pad, launch/restart settings, shared rings
+and the Metal overlay (plain and validation layer) pass. Gameplay and packaged-app checks
+were not repeated. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md#upstream-refresh-25-october-2026).
+
+## 2026-11-03: native menu PR #76 rebased onto current master
+
+Rebased onto `a88dd8a` while preserving upstream mouse-wheel/vertical/menu-combo
+settings, guest-memory refresh, startup watchdog and render guards. Display choices
+from configuration are recomputed on restart while explicit overrides survive.
+Shared protocol 12 distinguishes the current native-menu layout from previously
+published incompatible layouts; rebuild game and native GPU binaries together.
+Both GPU architectures, runtime/hosts and launcher build; 64 Python tests, native
+settings/menu hooks, restart/display checks, cross-architecture rings, production
+GPU split and the Metal overlay (normal and API validation) pass. No gameplay or
+packaged-app check was repeated. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md#upstream-rebase-3-november-2026).
