@@ -7,6 +7,7 @@
 #include "bbport_toggles.h"
 #include "bbport_cpu.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#include "video_core/renderer_vulkan/screen_lighting_policy.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
@@ -73,6 +74,8 @@ Rasterizer::Rasterizer(Metal::Device& device_, Scheduler& scheduler_, Runtime& r
     object_motion = std::make_unique<ObjectMotion>(device, scheduler);
     camera_motion = std::make_unique<CameraMotion>(device, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
+    screen_lighting = std::make_unique<ScreenLighting>(device, scheduler, texture_cache, runtime,
+                                                       *camera_motion, *scene_targets);
     upscaler = std::make_unique<TemporalUpscaler>(device, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
     if (!EmulatorSettings.IsNullGPU()) {
@@ -334,6 +337,14 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
     gbuffer_draw = camera_motion->Enabled() && scene_gbuffer;
     if (gbuffer_draw) {
         camera_motion->OnGBufferPass(db_desc.first);
+        if (screen_lighting->Enabled()) {
+            for (const auto& [id, desc] : cb_descs) {
+                if (!id) continue;
+                const auto format = texture_cache.GetImage(id).info.pixel_format;
+                if (format == vk::Format::eR8G8B8A8Srgb || format == vk::Format::eB8G8R8A8Srgb)
+                    screen_lighting->OnGBuffer(db_desc.first,id);
+            }
+        }
     }
     if (upscaler->Enabled() && cb_descs[0].first) {
         upscaler->OnColorTarget(cb_descs[0].first);
@@ -1043,9 +1054,10 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     // bbport: the pass copying a finished frame to a display buffer; the previous draw's
     // target is that frame.
     // Object motion needs the frame boundary too (its history halves alternate per frame).
-    if ((camera_motion->Enabled() || object_motion->Enabled()) && regs.color_buffers[0] &&
+    if ((camera_motion->Enabled() || object_motion->Enabled() || screen_lighting->TrackFrames()) && regs.color_buffers[0] &&
         FrameCapture::IsDisplayBuffer(regs.color_buffers[0].Address())) {
         scene_started = false;
+        screen_lighting->OnFrameStart();
         camera_motion->OnDisplayPass(cb_descs[0].first);
         if (upscaler->OnFrameStart()) {
             object_motion->InvalidateHistory();
@@ -1212,9 +1224,20 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const Metal::Draw::Resources resources = RecordResources(is_indexed);
     // bbport: the pipeline may still be compiling on the creation pool; the recording thread
     // waits for it as late as possible (failed: the draw helper skips and counts it).
+    const auto* lighting_ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
+    const bool opaque_lighting = screen_lighting->Enabled() && !EmulatorSettings.IsPatchShaders() && lighting_ps &&
+        ScreenLightingPolicy::OpaqueComposite(vs_info.pgm_hash, lighting_ps->pgm_hash,
+            pipeline->GetGraphicsKey().mrt_mask, num_indices, num_instances,
+            pipeline->GetGraphicsKey().blend_controls[0].enable,
+            u32(pipeline->GetGraphicsKey().write_masks[0])) &&
+        draw_state.scissor_x == 0 && draw_state.scissor_y == 0 &&
+        draw_state.scissor_width >= state.width && draw_state.scissor_height >= state.height;
+    const auto lighting_encoded = opaque_lighting ? std::make_shared<std::atomic<bool>>(false)
+                                                   : std::shared_ptr<std::atomic<bool>>{};
     scheduler.RecordDraw(
         [=, runs = &scheduler.GetDrawRuns()](Metal::Encoder& e) {
-            runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
+            const bool drawn = runs->Draw(e, DrawPipelines(*pipeline), draw_state, resources, draw_args);
+            if (lighting_encoded) lighting_encoded->store(drawn,std::memory_order_release);
         },
         IsTessellated(*pipeline));
     if (FrameCapture::Active()) {
@@ -1230,6 +1253,8 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
             FrameCapture::Note(note);
         }
     }
+    if (lighting_encoded)
+        screen_lighting->AfterOpaqueDraw(cb_descs[0].first,db_desc.first,state,lighting_encoded);
     DebugState.IncDrawCall();
     if (PassLabels() == 2) {
         scheduler.EndRendering();

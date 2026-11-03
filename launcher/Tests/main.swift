@@ -80,6 +80,17 @@ do {
 do {
     let defaults = GameSettings(ini: IniFile())
     check(defaults == GameSettings(), "empty ini = defaults")
+    check(defaults.screenLighting == .off && defaults.screenLightingAO == 0.5 && defaults.screenLightingGI == 0.7,
+          "extra screen lighting defaults off")
+    var lightingIni = IniFile(text: "screen_lighting=high\nscreen_lighting_ao=0.6\nscreen_lighting_gi=1.2\ncustom_key=kept\n")
+    let lightingSettings = GameSettings(ini: lightingIni)
+    lightingSettings.apply(to: &lightingIni)
+    check(lightingSettings.screenLighting == .high && lightingSettings.screenLightingAO == 0.6 &&
+          lightingSettings.screenLightingGI == 1.2 && GameSettings(ini: lightingIni) == lightingSettings &&
+          lightingIni["custom_key"] == "kept", "screen lighting settings round trip")
+    let badLighting = GameSettings(ini: IniFile(text: "screen_lighting=bad\nscreen_lighting_ao=nan\nscreen_lighting_gi=90\n"))
+    check(badLighting.screenLighting == .off && badLighting.screenLightingAO == 0.5 && badLighting.screenLightingGI == 2,
+          "screen lighting is finite and bounded")
     check(defaults.output == PixelSize(1920, 1080) && defaults.upscaler == .off && defaults.preset == 0, "default display")
     check(defaults.frameCap == .fps60 && !defaults.fullscreen, "default cap, window")
     check(defaults.gameTiming == .fixed && GameSettings(ini: IniFile(text: "game_timing=variable\n")).gameTiming == .variable, "game timing: default fixed, read")

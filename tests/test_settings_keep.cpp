@@ -37,18 +37,33 @@ int main() {
     unsetenv("BB_UPSCALER");
     unsetenv("BB_UPSCALE_PRESET");
     unsetenv("BB_RENDER_RES");
+    unsetenv("BB_SCREEN_LIGHTING");
+    unsetenv("BB_SCREEN_LIGHTING_AO");
+    unsetenv("BB_SCREEN_LIGHTING_GI");
     FILE* f = std::fopen(path, "w");
     assert(f);
-    std::fprintf(f, "# a comment\nupscaler=fsr3\nfps_cap=40\nfullscreen=1\nrenderer=metal\npreset=2\n");
+    std::fprintf(f, "# a comment\nupscaler=fsr3\nfps_cap=40\nfullscreen=1\nrenderer=metal\npreset=2\nscreen_lighting=low\nscreen_lighting_ao=0.6\nscreen_lighting_gi=1.2\n");
     std::fclose(f);
     Load();
     assert(Get().upscaler == UpscalerFsr3 && Get().preset == 2);
+    assert(Get().screen_lighting == ScreenLightingLow && Get().screen_lighting_ao == 0.6f &&
+           Get().screen_lighting_gi == 1.2f);
     Get().preset = 3;
     Save();
     std::string text = Read(path);
     assert(Count(text, "fps_cap=40") == 1 && Count(text, "fullscreen=1") == 1);
     assert(Count(text, "renderer=") == 0); // the removed renderer setting is dropped
     assert(Count(text, "preset=3") == 1 && Count(text, "preset=2") == 0);
+    assert(Count(text, "screen_lighting=low") == 1 && Count(text, "screen_lighting_ao=0.60") == 1 &&
+           Count(text, "screen_lighting_gi=1.20") == 1);
+    setenv("BB_SCREEN_LIGHTING", "high", 1);
+    setenv("BB_SCREEN_LIGHTING_AO", "nan", 1);
+    setenv("BB_SCREEN_LIGHTING_GI", "90", 1);
+    Load();
+    assert(Get().screen_lighting == ScreenLightingHigh && Get().screen_lighting_ao == 0.5f &&
+           Get().screen_lighting_gi == 2.0f);
+    unsetenv("BB_SCREEN_LIGHTING"); unsetenv("BB_SCREEN_LIGHTING_AO"); unsetenv("BB_SCREEN_LIGHTING_GI");
+    Load();
     assert(Count(text, "upscaler=fsr3") == 1 && Count(text, "# a comment") == 0);
     Save(); // again: still once each
     text = Read(path);

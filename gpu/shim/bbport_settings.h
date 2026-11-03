@@ -28,6 +28,8 @@ inline bool IsFsr4(int upscaler) {
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
+enum ScreenLighting : int { ScreenLightingOff = 0, ScreenLightingLow, ScreenLightingHigh, ScreenLightingCount };
+inline constexpr const char* ScreenLightingNames[] = {"off", "low", "high"};
 
 /// Game effects switched by the community patches at start (patches.py EFFECTS): ini key,
 /// menu label, default (the game's own behaviour).
@@ -73,6 +75,10 @@ struct Values {
     std::atomic<float> reactive_max{0.9f};
     std::atomic<int> debug_view{DebugNone};
     std::atomic<bool> show_fps{false};
+    /// Extra screen-space occlusion and diffuse bounce before transparencies/post. Live, opt-in.
+    std::atomic<int> screen_lighting{ScreenLightingOff};
+    std::atomic<float> screen_lighting_ao{0.5f}, screen_lighting_gi{0.7f};
+    std::atomic<bool> screen_lighting_active{false};
     /// Frame pacing at the FPS cap (vk_presenter.cpp PacingSeconds): even frame times on
     /// variable-refresh displays, about one frame more input latency. bbport.ini frame_pacing; live.
     std::atomic<bool> frame_pacing{false};

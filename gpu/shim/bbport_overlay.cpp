@@ -883,6 +883,21 @@ void GraphicsTab(BbSettings::Values& s) {
     }
     HintBelow("Motion blur and shadows from dynamic lights are noticeably heavy on the GPU.");
     EndCard();
+
+    BeginCard("Screen-space lighting");
+    static const char* lighting_modes[] = {"Off", "Low", "High"};
+    if (const int picked = Segmented("screen_lighting", lighting_modes, 3,
+                                     s.screen_lighting.load()); picked >= 0)
+        Store(s.screen_lighting, picked, true);
+    if (s.screen_lighting != BbSettings::ScreenLightingOff) {
+        SliderRow("Extra occlusion", s.screen_lighting_ao, 0.0f, 1.0f);
+        SliderRow("Indirect light", s.screen_lighting_gi, 0.0f, 2.0f);
+        Note(s.screen_lighting_ao == 0.0f && s.screen_lighting_gi == 0.0f ? "Both lighting strengths are zero."
+            : s.screen_lighting_active ? "Additional lighting is active. Uses more GPU time."
+                                     : "Waiting for a supported opaque scene.");
+    }
+    HintBelow("Adds contact shading and bounced light from visible surfaces. The game's own SSAO remains a separate option above.");
+    EndCard();
 }
 
 void AdvancedTab(BbSettings::Values& s) {
