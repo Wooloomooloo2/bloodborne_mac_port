@@ -118,6 +118,7 @@ struct GameSettings: Equatable {
     var sharpen = true
     var sharpness = 0.3
     var showFPS = false
+    var achievementBanners = true
     var metalHUD = false
     /// bbport.ini mouse_look (PR #20): the mouse turns the camera after a click in the window,
     /// and the arrow keys are the d-pad.
@@ -173,6 +174,7 @@ struct GameSettings: Equatable {
         if let v = flag("sharpen") { sharpen = v }
         if let v = ini["sharpness"], let s = Double(v), (0...2).contains(s) { sharpness = s }
         if let v = flag("show_fps") { showFPS = v }
+        if let v = flag("achievement_banners") { achievementBanners = v }
         if let v = flag("metal_hud") { metalHUD = v }
         if let v = flag("mouse_look") { mouseLook = v }
         if let v = ini["mouse_sensitivity"].flatMap(Double.init) { mouseSensitivity = min(max(v, 0.1), 10) }
@@ -216,6 +218,7 @@ struct GameSettings: Equatable {
         ini["sharpen"] = sharpen ? "1" : "0"
         ini["sharpness"] = String(format: "%.2f", sharpness)
         ini["show_fps"] = showFPS ? "1" : "0"
+        ini["achievement_banners"] = achievementBanners ? "1" : "0"
         ini["metal_hud"] = metalHUD ? "1" : "0"
         ini["mouse_look"] = mouseLook ? "1" : "0"
         ini["mouse_sensitivity"] = String(format: "%.2f", mouseSensitivity)

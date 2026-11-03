@@ -10,6 +10,7 @@
 // backend).
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#import <ImageIO/ImageIO.h>
 
 #include <SDL3/SDL.h>
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include <unistd.h>
 #include <vector>
 #include "bbport_overlay.h"
+#include "../gpu/bbgpu_trophy.h"
 #include "bbport_settings.h"
 #include "video_core/renderer_metal/mtl_device.h"
 
@@ -40,6 +42,29 @@ struct Target {
     id<MTLCommandQueue> queue;
     id<MTLTexture> texture;
 };
+
+// Optional fixture screenshots for visual QA; never captures a desktop or a running game.
+void Snapshot(const Target& t, const char* name) {
+    const char* folder = std::getenv("BB_OVERLAY_TEST_OUTPUT");
+    if (!folder) return;
+    std::vector<u8> pixels(size_t(Width)*Height*4);
+    [t.texture getBytes:pixels.data() bytesPerRow:Width*4 fromRegion:MTLRegionMake2D(0,0,Width,Height) mipmapLevel:0];
+    CGColorSpaceRef colors = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels.data(), Width, Height, 8, Width*4, colors,
+        CGBitmapInfo(kCGImageAlphaPremultipliedFirst) | CGBitmapInfo(kCGBitmapByteOrder32Little));
+    CGColorSpaceRelease(colors);
+    CGImageRef image = CGBitmapContextCreateImage(context);
+    NSString* path = [[NSString stringWithUTF8String:folder] stringByAppendingPathComponent:[NSString stringWithUTF8String:name]];
+    CGImageDestinationRef file = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, nullptr);
+    Expect(file != nullptr, "snapshot destination created");
+    if (file) {
+        CGImageDestinationAddImage(file, image, nullptr);
+        Expect(CGImageDestinationFinalize(file), "snapshot written");
+        CFRelease(file);
+    }
+    CGImageRelease(image);
+    CGContextRelease(context);
+}
 
 /// Clears the target to Fill, then runs one present's overlay step.
 void Present(Target& t, bool clear) {
@@ -212,6 +237,47 @@ int main() {
                    "the saved ini says upscaler=metalfx");
         }
         BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true));
+
+        // Restored history is visible in the catalog but never announced on launch.
+        RuntimeTrophySnapshot trophies{};
+        trophies.unlocked[14] = 100;
+        bbgpu_trophy_update(&trophies, 0);
+        Expect(!BbOverlay::Visible(), "historical trophies do not replay banners");
+        // F2 opens the new tab; its visible text comes from the shared generated catalog.
+        BbOverlay::HandleEvent(Key(SDLK_F2, SDL_KMOD_NONE, true));
+        BbOverlay::HandleEvent(Key(SDLK_F2, SDL_KMOD_NONE, false));
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Expect(BbOverlay::Visible() && BbOverlay::CapturesInput(), "F2 opens achievements");
+        Snapshot(t, "achievements-tab.png");
+        BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true));
+        BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, false));
+        trophies.unlocked[30] = 200;
+        bbgpu_trophy_update(&trophies, UINT64_C(1) << 30);
+        Expect(BbOverlay::Visible(), "live unlock makes the overlay visible with FPS off");
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Expect(Changed(t, Width/2 - 250, 0, Width/2 + 250, 180) > .05,
+               "achievement banner rendered at the top");
+        Expect(!BbOverlay::CapturesInput() && !BbOverlay::HandleEvent(text),
+               "unlock banner does not capture game input");
+        Expect(Changed(t, 0, Height/2, Width/2, Height) == 0,
+               "banner preserves the game image outside its bounds");
+        Snapshot(t, "achievement-banner.png");
+        trophies.unlocked[21] = 300;
+        bbgpu_trophy_update(&trophies, (UINT64_C(1) << 30) | (UINT64_C(1) << 21));
+        usleep(6600*1000);
+        for (int i = 0; i < 3; ++i) Present(t, true);
+        Expect(BbOverlay::Visible() && !BbOverlay::CapturesInput(),
+               "next queued unlock appears after the first banner expires");
+        s.achievement_banners = false;
+        Present(t, true);
+        Expect(!BbOverlay::Visible(), "notification setting dismisses the banner");
+        s.achievement_banners = true;
+        Expect(!BbOverlay::Visible(), "dismissed notifications do not replay");
+        BbOverlay::HandleEvent(Key(SDLK_T, SDL_KMOD_GUI | SDL_KMOD_SHIFT, true));
+        BbOverlay::HandleEvent(Key(SDLK_T, SDL_KMOD_GUI | SDL_KMOD_SHIFT, false));
+        Expect(BbOverlay::CapturesInput(), "Cmd+Shift+T opens achievements");
+        BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, true));
+        BbOverlay::HandleEvent(Key(SDLK_ESCAPE, SDL_KMOD_NONE, false));
     }
     std::remove(config);
     if (failures) {

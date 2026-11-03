@@ -349,7 +349,8 @@ if (APPLE)
     target_include_directories(overlay-test PRIVATE shim shadps4)
     target_compile_options(overlay-test PRIVATE -UNDEBUG)
     set_source_files_properties(../tests/test_mtl_overlay.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_link_libraries(overlay-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
+    target_link_libraries(overlay-test PRIVATE bbgpu "-framework Metal" "-framework Foundation"
+        "-framework CoreGraphics" "-framework ImageIO")
     target_link_options(overlay-test PRIVATE -Wl,-export_dynamic)
     # Metal-native M6: every FSR 3.1 blob through the FidelityFX Metal back end to a compute
     # pipeline.

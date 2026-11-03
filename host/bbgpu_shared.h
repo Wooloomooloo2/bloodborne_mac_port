@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include "../gpu/bbgpu_trophy.h"
 
 #ifdef __cplusplus
 #define BBGPU_ALIGNAS(n) alignas(n)
@@ -34,7 +35,7 @@
 #define BBGPU_GUEST_MAX UINT64_C(0xfc00000000)
 
 #define BBGPU_SHARED_MAGIC 0x31424742u /* "BGB1" */
-#define BBGPU_SHARED_VERSION 7u /* 3: command buffer copy arena; 4: game fault counters; 5: benchmark; 6: mouse look; 7: mouse wheel */
+#define BBGPU_SHARED_VERSION 8u /* 3: command buffer copy arena; 4: game fault counters; 5: benchmark; 6: mouse look; 7: mouse wheel; 8: achievements */
 #define BBGPU_CONTROL_SIZE (UINT64_C(4) << 20) /* control block and rings */
 /* Command buffer copies (game side, at submit; the host parses these): the game may rewrite its
  * command buffers once the submit returns, before the host has parsed them. */
@@ -218,12 +219,15 @@ typedef struct {
     /* Mouse look (host window -> the game's pad emulation, runtime_pad.c): the mouse's speed in
      * points per second over the last ~33 ms, scaled by the sensitivity and the Y inversion
      * already; buttons as SDL_BUTTON masks; mouse_captured while the window holds the cursor.
-     * Appended last: a host that predates them leaves them zero (no mouse look). */
+     * Zero until the host publishes mouse input (no mouse look). */
     BBGPU_ALIGNAS(BBGPU_CACHE_LINE) int32_t mouse_vx, mouse_vy;
     uint32_t mouse_buttons, mouse_captured;
     /* Mouse wheel steps while the window holds the cursor, counted up (the game turns each step
      * into a short press of whatever is bound to Wheel Up / Wheel Down, runtime_pad.c). */
     uint32_t mouse_wheel_up, mouse_wheel_down;
+    /* Game writes; GPU host reads. No player data is written by the renderer. */
+    BBGPU_ALIGNAS(BBGPU_CACHE_LINE) BbGpuTrophies trophies;
+    char trophy_archive[1200]; /* immutable launch configuration, empty without artwork */
 } BbGpuShared;
 
 #define BBGPU_SUBMIT_RING_OFFSET (UINT64_C(64) << 10)

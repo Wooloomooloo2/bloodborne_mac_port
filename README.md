@@ -21,6 +21,11 @@ taking the time to make it!
 
 ## Status (2026-10-31)
 
+**Local achievements:** all 40 trophies, including The Old Hunters, in a new launcher page
+and in-game **Settings → Achievements** tab (`F2` or `⌘⇧T`), with progress, filters, dates,
+optional trophy artwork and unlock banners. Existing `trophies.log` history is preserved.
+[Behavior, original sources and validation limits](docs/ACHIEVEMENTS.md).
+
 **Current version: [mac-v0.5.12](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.12)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
@@ -785,6 +790,12 @@ saves and settings as the Finder launcher.
 ## Credits
 
 This port stands entirely on the work of others:
+
+- **[pyL1nx](https://github.com/pyL1nx/bloodborne_pc/tree/64919f7da13a24bac53578acec5f74f959fe5c4e)** —
+  original achievement integration, trophy catalog, history format and platinum rule.
+  **[evill33t/bloodborne_mac](https://github.com/evill33t/bloodborne_mac/tree/5469befbb0c39759ffbf91d20a2e1a514e9b7581)** —
+  runtime persistence/query implementation and native Mac browser/banner design ported here.
+  [File-level sources and adaptation notes](docs/ACHIEVEMENTS.md#original-sources-and-adaptation).
 
 - **deadinside28** — author of `bbport`, the original native Linux port of Bloodborne: the flat memory image approach, the HLE
   runtime, the two-stage Vulkan draw pipeline, synthetic motion vectors and the upscaler
