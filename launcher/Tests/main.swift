@@ -97,6 +97,18 @@ do {
     let advanced = GameSettings(ini: IniFile(text: "jitter=1\nmodel_lod=-2\nreactive=1\nreactive_scale=2.5\nreactive_threshold=0.4\nreactive_max=0.7\nobject_motion=1\nlive_resolution=auto\ndebug_camera=1\n"))
     check(advanced.jitter && advanced.modelDetail == .highest && advanced.reactive && advanced.reactiveScale == 2.5, "read advanced")
     check(advanced.reactiveThreshold == 0.4 && advanced.reactiveMax == 0.7 && advanced.objectMotion && advanced.liveResolution == .auto && advanced.effects["debug_camera"] == true, "read advanced, debug")
+    check(!defaults.metalfxWhiteSceneFix, "white-scene workaround defaults off")
+    var whiteFix = GameSettings(ini: IniFile(text: "metalfx_white_scene_fix=1\n"))
+    check(whiteFix.metalfxWhiteSceneFix, "read opt-in white-scene workaround")
+    var whiteIni = IniFile(text: "future_key=keep\n")
+    whiteFix.apply(to: &whiteIni)
+    check(whiteIni["metalfx_white_scene_fix"] == "1" && whiteIni["future_key"] == "keep", "write workaround and preserve unrelated keys")
+    whiteFix.metalfxWhiteSceneFix = false
+    whiteFix.apply(to: &whiteIni)
+    check(whiteIni["metalfx_white_scene_fix"] == "0" && !GameSettings(ini: whiteIni).metalfxWhiteSceneFix, "disable workaround round trip")
+    for value in ["2", "true", ""] {
+        check(!GameSettings(ini: IniFile(text: "metalfx_white_scene_fix=\(value)\n")).metalfxWhiteSceneFix, "invalid workaround defaults off")
+    }
     let bad = GameSettings(ini: IniFile(text: "model_lod=7\nreactive_threshold=3\nlive_resolution=2\n"))
     check(bad.modelDetail == .gameDefault && bad.reactiveThreshold == 0.2 && bad.liveResolution == .off, "invalid advanced values -> defaults")
     check(read.effects["effect_dof"] == false && read.showFPS && read.metalHUD && read.sharpness == 0.75, "read effects")

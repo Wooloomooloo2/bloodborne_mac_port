@@ -73,15 +73,15 @@ fps=${BB_FPS:-uncap}
 # (output and presets change in the menu without a restart, but post-processing stays at 1080p
 # and scene targets are copied back: much slower on the Steam Deck and older GPUs). Chosen by
 # BB_LIVE_RES=0/1, else bbport.ini live_resolution=0/1/auto (auto: the GPU check, strong
-# discrete GPUs get them); off when unset. Above 1080p MetalFX uses the live path: patched guest
-# targets can turn the scene white at room transitions (#116). BB_RENDER_RES is an explicit override.
+# discrete GPUs get them); off when unset. metalfx_white_scene_fix=1 opts into the native-guest
+# workaround for white scenes above 1080p (#116), at a GPU cost. BB_RENDER_RES is an explicit override.
 wide_patch=$("$PYTHON" scripts/patches.py --print-ultrawide --settings "$BB_CONFIG")
 bb_native_ultrawide "$wide_patch"
 scaled_render='' scaled_output=''
 if [[ -z $wide_patch && -z ${BB_RENDER_RES:-} ]]; then
     read -r scaled_render scaled_output < <("$PYTHON" scripts/patches.py --print-scaled --settings "$BB_CONFIG") || true
 fi
-live=0 above_1080=0 metalfx_live=0
+live=0 above_1080=0 metalfx_live=0 metalfx_white_scene_fix=0
 if [[ -n ${scaled_output:-} ]]; then
     live=${BB_LIVE_RES:-}
     provider=${BB_UPSCALER:-}
@@ -93,6 +93,13 @@ if [[ -n ${scaled_output:-} ]]; then
             fi
             if [[ -z ${BB_UPSCALER:-} && $line =~ ^[[:space:]]*upscaler[[:space:]]*=[[:space:]]*([^[:space:]]+)[[:space:]]*$ ]]; then
                 provider=${BASH_REMATCH[1]}
+            fi
+            if [[ $line =~ ^[[:space:]]*metalfx_white_scene_fix[[:space:]]*=(.*)$ ]]; then
+                if [[ ${BASH_REMATCH[1]} =~ ^[[:space:]]*1[[:space:]]*$ ]]; then
+                    metalfx_white_scene_fix=1
+                else
+                    metalfx_white_scene_fix=0
+                fi
             fi
         done < "$BB_CONFIG"
     fi
@@ -107,12 +114,12 @@ if [[ -n ${scaled_output:-} ]]; then
     # MetalFX in game. The startup-patched path can feed a flat white image into MetalFX
     # after a room transition; resetting the scaler cannot repair its input.
     IFS=x read -r output_w output_h <<< "$scaled_output"
-    if [[ $provider == metalfx ]] && (( output_w > 1920 || output_h > 1080 )); then
+    if [[ $metalfx_white_scene_fix == 1 && $provider == metalfx ]] && (( output_w > 1920 || output_h > 1080 )); then
         live=1 metalfx_live=1
     fi
 fi
 if [[ $metalfx_live == 1 ]]; then
-    echo "Output ${scaled_output}: MetalFX uses live resolution changes (native guest targets; avoids the room-transition white screen)"
+    echo "Output ${scaled_output}: MetalFX white-scene workaround enabled (native guest targets; extra post-processing and resolve cost)"
 elif [[ $live == 1 && $above_1080 == 1 ]]; then
     echo "Output ${scaled_output}: scene ${scaled_render} through live resolution changes (the startup patch breaks scenes above 1080p)"
 elif [[ $live == 1 ]]; then

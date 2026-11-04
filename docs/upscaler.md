@@ -2,10 +2,17 @@
 
 ## MetalFX startup targets above 1080p (#116, 2026-10-31)
 
-On macOS, MetalFX at outputs above 1920×1080 now selects live resolution changes
-automatically. Guest render targets remain 1920×1080; the host renders at the selected
-preset size and MetalFX reconstructs the requested output. This matches starting with
-upscaling off and enabling MetalFX later, including when `live_resolution=0` was saved.
+The **Avoid white scenes (MetalFX)** setting in the launcher's Advanced controls and the
+in-game Advanced → Resolution card opts into the native-guest workaround. It is **off by
+default** (`metalfx_white_scene_fix=0`); changing it requires a restart. When enabled for
+MetalFX output above 1920×1080, guest render targets remain 1920×1080 and the host scales
+scene targets at the selected preset size before MetalFX reconstructs the requested output.
+
+This keeps the game's post-processing at 1080p and adds resolves, which can reduce
+performance. Two noisy A/B pairs on battery in Hunter's Dream at 1440p MetalFX Quality
+reported roughly 5–20% extra GPU time. This is a limited observation, not a general cost
+estimate. Leave the setting off unless white scenes occur. The separate Live resolution
+changes setting still works, and the existing safeguard for scene sizes above 1080p remains.
 
 The old 1440p Quality startup patch creates 1708×960 guest targets. Passing between rooms
 in Forbidden Woods can then make the tonemapped scene uniformly white before MetalFX

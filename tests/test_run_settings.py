@@ -14,7 +14,7 @@ import unittest
 
 class RestartResolutionTests(unittest.TestCase):
     def run_restarts(self, explicit=False, live=False, ini_extra='', caps=None, bare_path=False,
-                     upscaler='fsr3', output='1280x720'):
+                     upscaler='fsr3', output='1280x720', restart_configs=None):
         with tempfile.TemporaryDirectory() as directory:
             data = Path(directory)
             # Preparation is unrelated to this test; allow the real patch compiler to
@@ -48,9 +48,10 @@ class RestartResolutionTests(unittest.TestCase):
                 'with (config.parent/"environments").open("a") as f:\n'
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
                 '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
+                f'restart_configs={restart_configs!r}\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
-                '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
+                '("1280x720" if stage==0 else "1920x1080")+"\\n" if restart_configs is None else restart_configs[stage])\n'
                 '    os.environ["BB_TEST_STAGE"]=str(stage+1)\n'
                 '    os.execlp("bash", "bash", "run.sh")\n')
             probe.chmod(0o755)
@@ -120,7 +121,7 @@ class RestartResolutionTests(unittest.TestCase):
         for output in ('2560x1440', '3456x1944', '3840x2160'):
             with self.subTest(output=output):
                 first = self.run_restarts(upscaler='metalfx', output=output,
-                                          ini_extra='live_resolution=0\n',
+                                          ini_extra='live_resolution=0\nmetalfx_white_scene_fix=1\n',
                                           bare_path=output == '2560x1440')[0]
                 self.assertEqual(first, dict(BB_RENDER_RES=None, BB_OUTPUT_RES=None,
                                              BB_AUTO_RENDER_RES=None))
@@ -133,15 +134,52 @@ class RestartResolutionTests(unittest.TestCase):
 
     def test_metalfx_guard_reads_trimmed_ini_values(self):
         first = self.run_restarts(output='2560x1440',
-                                  ini_extra='  upscaler = metalfx \r\n')[0]
+                                  ini_extra='  upscaler = metalfx \r\n  metalfx_white_scene_fix = 1 \r\n')[0]
         self.assertIsNone(first['BB_RENDER_RES'])
 
     def test_metalfx_native_targets_do_not_stick_after_provider_change(self):
-        rows = self.run_restarts(upscaler='metalfx', output='2560x1440')
+        rows = self.run_restarts(upscaler='metalfx', output='2560x1440',
+                                 ini_extra='metalfx_white_scene_fix=1\n')
         # The next launch selects FSR 3.1 at 720p: keep its existing startup behavior.
         self.assertEqual([row['BB_RENDER_RES'] for row in rows], [None, '426x240', '640x360'])
 
     def test_metalfx_explicit_render_override_remains_available(self):
-        first = self.run_restarts(upscaler='metalfx', output='2560x1440', explicit=True)[0]
+        first = self.run_restarts(upscaler='metalfx', output='2560x1440', explicit=True,
+                                  ini_extra='metalfx_white_scene_fix=1\n')[0]
         self.assertEqual(first['BB_RENDER_RES'], '800x450')
         self.assertIsNone(first['BB_AUTO_RENDER_RES'])
+
+    def test_metalfx_white_scene_workaround_is_opt_in(self):
+        for value in (None, '0', '2', 'true', 'garbage', ''):
+            with self.subTest(value=value):
+                extra = '' if value is None else f'metalfx_white_scene_fix={value}\n'
+                first = self.run_restarts(upscaler='metalfx', output='2560x1440',
+                                          ini_extra=extra)[0]
+                self.assertEqual(first['BB_RENDER_RES'], '1706x960')
+                self.assertEqual(first['BB_AUTO_RENDER_RES'], '1')
+        # The user's general live-resolution choice still works with the workaround off.
+        self.assertIsNone(self.run_restarts(upscaler='metalfx', output='2560x1440',
+                          ini_extra='live_resolution=1\nmetalfx_white_scene_fix=0\n')[0]['BB_RENDER_RES'])
+
+    def test_disabling_workaround_recomputes_same_provider_after_restart(self):
+        config = 'upscaler=metalfx\npreset=1\noutput_res=2560x1440\n'
+        rows = self.run_restarts(upscaler='metalfx', output='2560x1440',
+                                 ini_extra='metalfx_white_scene_fix=1\n',
+                                 restart_configs=[config + 'metalfx_white_scene_fix=0\n',
+                                                  config + 'metalfx_white_scene_fix=1\n'])
+        self.assertEqual([r['BB_RENDER_RES'] for r in rows], [None, '1706x960', None])
+
+    def test_workaround_does_not_change_other_paths(self):
+        for provider in ('fsr3', 'off', 'taa'):
+            with self.subTest(provider=provider):
+                before = self.run_restarts(upscaler=provider, output='2560x1440')[0]
+                after = self.run_restarts(upscaler=provider, output='2560x1440',
+                                          ini_extra='metalfx_white_scene_fix=1\n')[0]
+                self.assertEqual(before, after)
+        for output in ('1280x720', '1920x1080'):
+            self.assertEqual(self.run_restarts(upscaler='metalfx', output=output)[0],
+                             self.run_restarts(upscaler='metalfx', output=output,
+                                               ini_extra='metalfx_white_scene_fix=1\n')[0])
+        # The pre-existing >1080p scene-geometry safeguard stays active at 4K Quality.
+        self.assertIsNone(self.run_restarts(upscaler='metalfx', output='3840x2160',
+                          ini_extra='metalfx_white_scene_fix=0\n')[0]['BB_RENDER_RES'])

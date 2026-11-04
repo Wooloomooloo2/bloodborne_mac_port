@@ -208,7 +208,10 @@ struct LauncherView: View {
                         ForEach(LiveResolution.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Above 1080p it is always on.")
+                    Text("On: output resolution and quality change in the game without a restart, but post-processing stays at 1080p (slower). Off: everything renders at the chosen size. Scene resolutions above 1080p always use it.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Toggle("Avoid white scenes (MetalFX)", isOn: $model.settings.metalfxWhiteSceneFix)
+                    Text("For MetalFX output above 1080p. Keeps post-processing at 1080p to avoid white scenes, but can reduce performance. Requires a restart.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Shader compilation") {

@@ -2449,3 +2449,27 @@ M4 Max, macOS 27, master 50274ee, scratch data dir with the reporters' saves, 10
   so a game that never flips ran until killed (1 min 47 s in the report). It now stops after
   `BB_HANG_FIRST_SECONDS` (180) with a thread dump. A normal start flips within 3 s of the
   watchdog starting (`BB_HANG_FIRST_SECONDS=3` did not trip).
+
+## MetalFX white-scene workaround is opt-in (2026-11-04, #116 / #117)
+
+`metalfx_white_scene_fix=0` is now the default. **Avoid white scenes (MetalFX)** in
+Advanced launcher settings and the in-game Advanced → Resolution card enables the
+native-guest workaround on the next restart for MetalFX output above 1080p. Both
+surfaces explain the performance cost and restart requirement. Disabling it returns
+1440p Quality to the cheaper startup-patched path; explicit Live resolution changes
+and the existing safeguard for scene sizes above 1080p remain effective.
+
+The live path runs guest post-processing at 1080p and resolves scene targets back.
+Two A/B pairs on battery in Hunter's Dream at 1440p MetalFX Quality reported roughly
+5–20% extra GPU time, with substantial noise. This is evidence for an opt-in tradeoff,
+not a general performance estimate. The post-process responsible for flat white
+scene colour on the reduced startup path remains unidentified; #116 is not resolved.
+
+Validation of the setting: 13 launch/re-exec tests (missing/invalid/off/on values,
+trimmed config, same-provider disable/re-enable, other providers/lower outputs,
+explicit render overrides and the pre-existing >1080p scene safeguard), 27 patch
+compiler tests, C++ persistence/default/reload checks, native launcher/model tests,
+and arm64/x86-64 renderer builds pass. The native overlay fixture passes normally
+and under Metal API Validation; upscaler choice/fallback checks pass. These checks
+validate setting routing and persistence. No new Forbidden Woods traversal, gameplay
+A/B performance result, packaged-app or long-session claim is made by this update.
