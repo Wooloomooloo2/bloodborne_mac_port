@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #define _GNU_SOURCE
 #include "mutex_fixture.h"
+#include <string.h>
 
 static void *mutex, *cond;
 static void *foreign(void *unused) {
@@ -18,8 +19,15 @@ static void *claim_and_signal(void *unused) {
     assert(UNLOCK(&mutex) == 0);
     return NULL;
 }
-int main(void) {
+int main(int argc, char **argv) {
     alarm(10);
+    if (argc > 1 && !strcmp(argv[1], "--normal-self-lock")) {
+        fixture_mutex(&mutex, 3);
+        assert(LOCK(&mutex) == 0);
+        puts("normal mutex held"); fflush(stdout);
+        LOCK(&mutex);
+        return 99; /* The normal self-lock must keep blocking. */
+    }
     for (int type = 1; type <= 4; ++type) {
         mutex = cond = NULL;
         fixture_mutex(&mutex, type);

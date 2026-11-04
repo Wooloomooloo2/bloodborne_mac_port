@@ -26,3 +26,14 @@ class ContractTests(unittest.TestCase):
                                         capture_output=True, text=True, timeout=15)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("PASS:", result.stdout)
+
+    def test_normal_self_lock_keeps_blocking(self):
+        process = subprocess.Popen([self.exe, "--normal-self-lock"], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(process.stdout.readline().strip(), "normal mutex held")
+            with self.assertRaises(subprocess.TimeoutExpired):
+                process.wait(timeout=0.2)
+        finally:
+            process.kill()
+            process.communicate()
