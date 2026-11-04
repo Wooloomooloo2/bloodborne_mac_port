@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <stdatomic.h>
 
 enum { TYPE_ERRORCHECK = 1, TYPE_RECURSIVE = 2, TYPE_NORMAL = 3 }; /* 4: adaptive, error-checking here */
 
@@ -165,7 +166,8 @@ static ABI int32_t mutex_timedlock(GuestMutex **mutex, uint32_t usec) {
     RUNTIME_SYNC("mutex_timedlock", *mutex, e);
     return e;
 }
-typedef struct { NativeCond native; } GuestCond;
+typedef struct { NativeCond native; atomic_uint waiters; } GuestCond;
+#define COND_DESTROYED ((GuestCond *)(uintptr_t)1)
 static size_t conds, waits, wakeups;
 static ABI int32_t cond_init(GuestCond **out, void **attr, const char *name) {
     (void)attr; (void)name;
@@ -175,14 +177,18 @@ static ABI int32_t cond_init(GuestCond **out, void **attr, const char *name) {
     CHECK_LOW_ADDR(c);
     int e = native_cond_init(&c->native);
     if (e) { runtime_low_free(c); return orbis_error(e); }
+    atomic_init(&c->waiters, 0);
     *out = c; ++conds; return 0;
 }
 static int32_t ensure_cond(GuestCond **cond) {
     if (!cond) return orbis_error(EINVAL);
-    if (__atomic_load_n((uintptr_t *)cond, __ATOMIC_ACQUIRE) >= 2) return 0;
+    const uintptr_t value = __atomic_load_n((uintptr_t *)cond, __ATOMIC_ACQUIRE);
+    if (value == 1) return orbis_error(EINVAL);
+    if (value >= 2) return 0;
     host_mutex_lock(&static_init);
     int32_t e = 0;
-    if ((uintptr_t)*cond < 2) {
+    if (*cond == COND_DESTROYED) e = orbis_error(EINVAL);
+    else if (!*cond) {
         GuestCond *c = NULL;
         e = cond_init(&c, NULL, NULL);
         if (!e) __atomic_store_n(cond, c, __ATOMIC_RELEASE);
@@ -192,9 +198,13 @@ static int32_t ensure_cond(GuestCond **cond) {
 }
 static ABI int32_t cond_destroy(GuestCond **cond) {
     if (!cond) return orbis_error(EINVAL);
-    if ((uintptr_t)*cond < 2) return 0;
+    if (*cond == COND_DESTROYED) return orbis_error(EINVAL);
+    if (!*cond) return 0;
+    /* Linux pthread_cond_destroy can wait for waiters rather than answer EBUSY.
+     * Check the guest contract before entering the host destruction primitive. */
+    if (atomic_load_explicit(&(*cond)->waiters, memory_order_acquire)) return orbis_error(EBUSY);
     int e = native_cond_destroy(&(*cond)->native);
-    if (!e) { runtime_low_free(*cond); *cond = NULL; }
+    if (!e) { runtime_low_free(*cond); *cond = COND_DESTROYED; }
     return orbis_error(e);
 }
 static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
@@ -204,7 +214,9 @@ static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
     ++waits;
     RUNTIME_SYNC("cond_wait:unlock", *mutex, 0);
     runtime_thread_set_blocked("condvar", (uintptr_t)cond);
+    atomic_fetch_add_explicit(&(*cond)->waiters, 1, memory_order_acq_rel);
     int32_t res = orbis_error(native_cond_wait(&(*cond)->native, &(*mutex)->native, 0));
+    atomic_fetch_sub_explicit(&(*cond)->waiters, 1, memory_order_acq_rel);
     runtime_thread_clear_blocked();
     RUNTIME_SYNC("cond_wait:lock", *mutex, res);
     return res;
@@ -216,7 +228,9 @@ static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, uint64_t de
     ++waits;
     RUNTIME_SYNC("cond_timedwait:unlock", *mutex, 0);
     runtime_thread_set_blocked("condvar_timed", (uintptr_t)cond);
+    atomic_fetch_add_explicit(&(*cond)->waiters, 1, memory_order_acq_rel);
     int32_t res = timed_error(native_cond_wait(&(*cond)->native, &(*mutex)->native, deadline ? deadline : 1));
+    atomic_fetch_sub_explicit(&(*cond)->waiters, 1, memory_order_acq_rel);
     runtime_thread_clear_blocked();
     RUNTIME_SYNC("cond_timedwait:lock", *mutex, res);
     return res;
