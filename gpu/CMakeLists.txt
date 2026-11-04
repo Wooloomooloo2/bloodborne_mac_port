@@ -446,3 +446,15 @@ target_include_directories(index-offset-test PRIVATE shim shadps4 third_party/gc
 target_compile_options(index-offset-test PRIVATE -UNDEBUG)
 target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
 target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)
+
+# CPU-only validation of the production GPU boundary helper.
+add_executable(gnm-submit-validation-test EXCLUDE_FROM_ALL ../tests/test_gnm_submit_validation.cpp)
+target_include_directories(gnm-submit-validation-test PRIVATE shim)
+target_compile_options(gnm-submit-validation-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_executable(gnm-submit-api-test EXCLUDE_FROM_ALL ../tests/test_gnm_submit_api.cpp ../tests/test_gpu_runtime_stubs.cpp)
+target_include_directories(gnm-submit-api-test PRIVATE shim shadps4 third_party/gcn/include)
+target_link_libraries(gnm-submit-api-test PRIVATE bbgpu)
+target_compile_options(gnm-submit-api-test PRIVATE -UNDEBUG)
+if (APPLE)
+    target_link_options(gnm-submit-api-test PRIVATE -Wl,-export_dynamic)
+endif()
