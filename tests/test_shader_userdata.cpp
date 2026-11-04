@@ -114,6 +114,21 @@ int main() {
     ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(std::numeric_limits<u32>::max()));
     info.flattened_ud_buf.clear();
     ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(0));
+    // Image descriptors are twice as wide as buffer/sampler descriptors.
+    // Admission uses the complete requested type, including its final DWORD.
+    const auto check_width = [&]<typename T>() {
+        info.flattened_ud_buf.assign(sizeof(T) / sizeof(u32) + 1, 0x12345678);
+        T expected{};
+        std::memcpy(&expected, info.flattened_ud_buf.data() + 1, sizeof(T));
+        const auto full = info.ReadUdSharp<T>(1);
+        assert(std::memcmp(&full, &expected, sizeof(T)) == 0);
+        info.flattened_ud_buf.pop_back();
+        const auto short_read = info.ReadUdSharp<T>(1);
+        const T zero{};
+        assert(std::memcmp(&short_read, &zero, sizeof(T)) == 0);
+    };
+    check_width.operator()<AmdGpu::Image>();
+    check_width.operator()<AmdGpu::Sampler>();
     alignas(8) std::array<u32, 8> table{};
     std::memcpy(table.data(), &descriptor, sizeof(descriptor));
     SetPointer(ud, 2, table.data());
