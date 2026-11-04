@@ -18,6 +18,7 @@
 #include <time.h>
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
+#include "bbport_pm4_bounds.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -543,6 +544,11 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(ccb.data());
+        if (!BbPm4::CompletePacket(header->raw, ccb.size())) {
+            std::fprintf(stderr, "GPU: incomplete CE packet %#010x (%zu words left); buffer skipped\n",
+                         header->raw, ccb.size());
+            break;
+        }
         const u32 type = header->type;
         if (type != 3) {
             // No other types of packets were spotted so far
@@ -875,6 +881,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
+        if (header->type != 1 && !BbPm4::CompletePacket(header->raw, dcb.size())) {
+            std::fprintf(stderr, "GPU: incomplete graphics packet %#010x (%zu words left); buffer skipped\n",
+                         header->raw, dcb.size());
+            break;
+        }
         const u32 type = header->type;
 
         switch (type) {

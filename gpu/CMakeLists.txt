@@ -422,3 +422,8 @@ target_include_directories(index-offset-test PRIVATE shim shadps4 third_party/gc
 target_compile_options(index-offset-test PRIVATE -UNDEBUG)
 target_link_libraries(index-offset-test PRIVATE bbgpu "-framework Metal" "-framework Foundation")
 target_link_options(index-offset-test PRIVATE -Wl,-export_dynamic)
+
+# CPU-only validation of the production GPU boundary helper.
+add_executable(pm4-contracts-test EXCLUDE_FROM_ALL ../tests/test_pm4_contracts.cpp)
+target_include_directories(pm4-contracts-test PRIVATE shim)
+target_compile_options(pm4-contracts-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
