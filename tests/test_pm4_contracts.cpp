@@ -15,8 +15,8 @@ int main() {
     assert(BbPm4::CompletePacket(wait[0], wait.size()));
     assert(BbPm4::CompletePacket(wait[0], 65));
     assert(!BbPm4::CompletePacket(0xc0003c00, 100));
-    assert(!BbPm4::CompletePacket(0xc0054900, 100));
-    assert(BbPm4::CompletePacket(0xc0064900, 8));
+    assert(!BbPm4::CompletePacket(0xc0044900, 100));
+    assert(BbPm4::CompletePacket(0xc0054900, 7));
     std::array<uint32_t, 64> marker;
     marker.fill(0xa5a5a5a5);
     marker[0] = 0xc03e1000; marker[1] = 0x68750777;

@@ -43,6 +43,10 @@
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
+// Pin the helper's admission sizes to the packet layouts actually decoded here.
+static_assert(sizeof(AmdGpu::PM4CmdWaitRegMem) == BbPm4::WaitRegMemWords * sizeof(u32));
+static_assert(sizeof(AmdGpu::PM4CmdReleaseMem) == BbPm4::ReleaseMemWords * sizeof(u32));
+
 // bbport: bad-packet diagnostics (DumpBadPacket). Declared here, outside namespace AmdGpu: the GPU
 // library links with -undefined dynamic_lookup, so a misplaced declaration became a null call.
 extern "C" int runtime_memory_read_backing(uintptr_t address, void* out, uint64_t size);
