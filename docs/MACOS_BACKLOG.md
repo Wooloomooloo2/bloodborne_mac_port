@@ -38,10 +38,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
 - **Forbidden Woods turns white with MetalFX above 1080p (#116, 2026-11-02).** With the startup
   patch (guest targets 1708x960 at 1440p Quality) the scene goes flat white after the passage
   beside the lift; PR #117 (evill33t) read the frame back: MetalFX's input is already one colour,
-  depth still varies, so a game post-process breaks at that size. #117 works around it by putting
-  MetalFX above 1080p on the live path, but that costs ~5-20% GPU in the Hunter's Dream (post at
-  1080p plus proxy resolves; two noisy battery-power A/B pairs, FINDINGS 2026-11-02), so the owner
-  held it. *Fix:* find the pass that first writes the white image (frame capture at the gate with
+  depth still varies, so a game post-process breaks at that size. #117 (merged 2026-11-05 as an
+  opt-in, `metalfx_white_scene_fix`, off by default) puts MetalFX above 1080p on the live path,
+  which costs ~5-20% GPU in the Hunter's Dream (post at 1080p plus proxy resolves; two noisy
+  battery-power A/B pairs, FINDINGS 2026-11-02). *Fix:* find the pass that first writes the white image (frame capture at the gate with
   the reporter's save, 1-2 passes through the passage reproduce it) and fix it on the startup
   path; then #117 is not needed. Workaround for players: start with the upscaler off, then enable
   MetalFX in game.
