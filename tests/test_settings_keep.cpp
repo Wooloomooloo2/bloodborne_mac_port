@@ -43,6 +43,8 @@ int main() {
     std::fclose(f);
     Load();
     assert(Get().upscaler == UpscalerFsr3 && Get().preset == 2);
+    assert(!Get().metalfx_white_scene_fix && !Get().startup_metalfx_white_scene_fix);
+    Get().metalfx_white_scene_fix = true;
     Get().preset = 3;
     Save();
     std::string text = Read(path);
@@ -54,6 +56,35 @@ int main() {
     text = Read(path);
     assert(Count(text, "fps_cap=40") == 1 && Count(text, "fullscreen=1") == 1);
     assert(Count(text, "preset=3") == 1);
+    assert(Count(text, "metalfx_white_scene_fix=1") == 1);
+    Load();
+    assert(Get().metalfx_white_scene_fix && Get().startup_metalfx_white_scene_fix);
+    Get().metalfx_white_scene_fix = false;
+    Save();
+    assert(Count(Read(path), "metalfx_white_scene_fix=0") == 1);
+    Load();
+    assert(!Get().metalfx_white_scene_fix && !Get().startup_metalfx_white_scene_fix);
+    // Reloading a missing or malformed key cannot retain a previous enabled value.
+    for (const char* entry : {"", "metalfx_white_scene_fix=2\n", "metalfx_white_scene_fix=true\n"}) {
+        Get().metalfx_white_scene_fix = true;
+        f = std::fopen(path, "w");
+        assert(f);
+        std::fputs(entry, f);
+        std::fclose(f);
+        Load();
+        assert(!Get().metalfx_white_scene_fix && !Get().startup_metalfx_white_scene_fix);
+    }
+    f = std::fopen(path, "w");
+    assert(f);
+    std::fputs("  metalfx_white_scene_fix = 1 \r\n", f);
+    std::fclose(f);
+    Load();
+    assert(Get().metalfx_white_scene_fix && Get().startup_metalfx_white_scene_fix);
+    Get().metalfx_white_scene_fix = false;
+    Save();
+    assert(Count(Read(path), "metalfx_white_scene_fix=0") == 1);
+    Load();
+    assert(!Get().metalfx_white_scene_fix);
     setenv("BB_ULTRAWIDE_RES", "3840x1080", 1);
     f = std::fopen(path, "w");
     assert(f);

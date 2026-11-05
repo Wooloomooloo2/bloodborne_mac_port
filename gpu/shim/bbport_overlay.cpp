@@ -936,7 +936,8 @@ void AdvancedTab(BbSettings::Values& s) {
     ImGui::EndDisabled();
     EndCard();
 
-    BeginCard("Resolution", int(s.live_resolution != s.startup_live_resolution));
+    BeginCard("Resolution", int(s.live_resolution != s.startup_live_resolution ||
+                                s.metalfx_white_scene_fix != s.startup_metalfx_white_scene_fix));
     Label("Live resolution changes");
     InfoTip("On: output resolution and preset change without a restart, but the game's "
             "post-processing stays at 1080p, which is noticeably slower on the Steam Deck and "
@@ -951,6 +952,9 @@ void AdvancedTab(BbSettings::Values& s) {
         picked >= 0) {
         Store(s.live_resolution, picked - 1, true);
     }
+    Toggle("Avoid white scenes (MetalFX)", s.metalfx_white_scene_fix);
+    HintBelow("For MetalFX output above 1080p. Keeps post-processing at 1080p to avoid white "
+              "scenes, but can reduce performance. Requires a restart.");
     EndCard();
 
     BeginCard("Shader compilation");
@@ -1118,6 +1122,7 @@ void Menu() {
         bool restart = s.object_motion != s.startup_object_motion ||
                        s.model_lod != s.startup_model_lod ||
                        s.live_resolution != s.startup_live_resolution ||
+                       s.metalfx_white_scene_fix != s.startup_metalfx_white_scene_fix ||
                        BbSettings::ResolutionNeedsRestart();
         for (int e = 0; e < BbSettings::EffectCount; ++e) {
             restart |= s.effects[e] != s.startup_effects[e];
