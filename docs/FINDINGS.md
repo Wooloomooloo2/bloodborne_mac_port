@@ -2399,3 +2399,39 @@ M4 Max, macOS 27, master 50274ee, scratch data dir with the reporters' saves, 10
   so a game that never flips ran until killed (1 min 47 s in the report). It now stops after
   `BB_HANG_FIRST_SECONDS` (180) with a thread dump. A normal start flips within 3 s of the
   watchdog starting (`BB_HANG_FIRST_SECONDS=3` did not trip).
+
+## 2026-11-05: long-session hangs: the frame heap fills with pending occlusion queries (#127, #139, #131)
+
+Three hang reports in #127 (M5 Max 48 GB 60 fixed; M4 16 GB 40 variable, twice) and #139 follow
+one sequence: the render thread's 256 KiB frame heap peak climbs steadily during play (z1: 29 KiB
+at 35k frames, 108 at 124k, 222 at 233k; ~0.9 KiB per 1,000 frames with a steady 60-70 records),
+reaches 100%, overflows into the spare pool (13-20 min before the hang), then "absent shader
+record" guard lines (#99/#113), then pipelines with an invalid vertex attribute 0 format (garbage
+V#s), then no new frame for 30 s. The Undefined-format errors mid-session are a symptom of this,
+not the startup preload seen in #125.
+
+Here (M4 Max, master + diagnostics on branch `frame-pool-growth`): standing in the Hunter's Dream
+for 5 min the peak stays at 4 KiB; the benchmark route (Central Yharnam, 130 s of play) takes it
+from 8 to 15 KiB. Per-caller bytes in the frame heap (allocate hook 0xe453b0, two return
+addresses above the arena 0xe455c2) put all of the growth on one allocation: 0x21b4ce2 (a locked
+frame-list allocate, 0x21b4ca0) called from 0xec6ca0. That function (0xec6bf0) takes a
+{count, pointers} array; deferred, it copies count x 8 bytes into the frame list and queues
+0xec6d40, which walks the entries: state (+0x18) 1-3 are processed, and a state-3 entry asks its
+query's value (0xe2f190 -> 0x216a2f0, no wait) and becomes 4 when it is ready. The array grew
+from ~256 to ~1,250 entries during the route.
+
+Counting 0xe2f190 by record type (observer hook): **every type-1 query is not ready** (721,578
+of 721,578 calls in one report). Type 1 in 0x216a2f0's jump table (0x216a3ca) ANDs the 16 qwords
+of the query block and wants bit 63 in all: the 8 render backends' begin/end counts that
+ZPASS_DONE dumps write. Pending blocks read as all zeros. `liverpool.cpp` writes those counts
+for `EventWrite` PixelPipeStatDump with index ZpassDone (8 pairs, valid bit set), and it did so
+for the first query only: a counter in the handler saw **one dump in 130 s** (event types seen:
+56 control, 57 dump). Writing the counts through `TryWriteBacking` instead of a plain store
+changed nothing (the dumps never come). Unknown type-3 opcodes stop the parser, so the dumps are
+not dropped as unknown packets.
+
+Open: where the game's later begin/end dumps go (another queue/IB the port does not run, a
+predicated/conditional section, or the game waiting on the first query's state before it issues
+more). On a PS4 the list does not grow, so the queries complete there. A fix that makes them
+complete removes the frame heap growth, the spare pool overflow and (probably) the late absent
+records and hangs; it may also explain #55 (FPS sinking over a session: the walk is per frame).

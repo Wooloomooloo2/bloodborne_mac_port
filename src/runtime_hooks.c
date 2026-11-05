@@ -69,6 +69,9 @@ typedef struct Hook {
 static void frame_pool_flip(const HookArgs *args);
 static void linear_heap_alloc_args(const HookArgs *args);
 static uint64_t linear_heap_alloc_result(uint64_t ret);
+static void query_value_args(const HookArgs *args);
+static uint64_t query_value_result(uint64_t ret);
+static void query_counts_take(char *out, size_t out_size);
 
 static Hook hooks[] = {
     /* push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; sub rsp,0x58 */
@@ -116,6 +119,14 @@ static Hook hooks[] = {
     {NULL, "linear heap allocate", 0xe453b0,
      {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x54, 0x53, 0x49, 0x89, 0xd7},
      14, 0, 0, 0, 0, linear_heap_alloc_args, linear_heap_alloc_result},
+    /* A GPU query's value callback: (query, context, out) -> ready. query+0 is the record, +8 1
+     * while issued; it asks 0x216a2f0 without waiting. Counted by record type (#127: the list of
+     * pending queries the render thread copies into the frame heap each frame keeps growing).
+     * push rbp; mov rbp,rsp; push r15; push r14; push rbx; push rax; mov r14,rdx; mov rbx,rdi */
+    {NULL, "query value", 0xe2f190,
+     {0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x53, 0x50, 0x49, 0x89, 0xd6, 0x48, 0x89,
+      0xfb},
+     16, 0, 0, 0, 0, query_value_args, query_value_result},
 };
 #define HOOK_COUNT (sizeof(hooks) / sizeof(hooks[0]))
 
@@ -183,6 +194,56 @@ typedef struct Spare {
 static Spare spares[2];
 static _Atomic uint64_t spare_allocations, spare_bytes, spare_resets;
 static uint64_t pool_test_limit;
+static uintptr_t pool_image; /* the game image: callers are reported as guest offsets */
+
+/* Frame heap bytes since the last flip by the game code that asked (two return addresses: the
+ * allocate's caller and its caller), reported with each new peak: in long sessions the peak
+ * climbs ~0.9 KiB per 1,000 frames with a steady record count until the heap is full and the
+ * game hangs (#127, #139), so one caller's share keeps growing. */
+#define POOL_CALLERS 32
+typedef struct PoolCaller {
+    _Atomic uint64_t key; /* caller << 32 | caller's caller (guest offsets below 4 GiB) */
+    _Atomic uint64_t bytes, count;
+} PoolCaller;
+static PoolCaller pool_callers[POOL_CALLERS];
+
+static void pool_caller_add(uint64_t key, uint64_t bytes) {
+    for (unsigned i = 0, slot = (unsigned)((key * 0x9e3779b97f4a7c15ull) >> 59); i < POOL_CALLERS;
+         ++i, slot = (slot + 1) % POOL_CALLERS) {
+        uint64_t seen = atomic_load_explicit(&pool_callers[slot].key, memory_order_relaxed);
+        if (!seen && atomic_compare_exchange_strong(&pool_callers[slot].key, &seen, key)) seen = key;
+        if (seen == key) {
+            atomic_fetch_add_explicit(&pool_callers[slot].bytes, bytes, memory_order_relaxed);
+            atomic_fetch_add_explicit(&pool_callers[slot].count, 1, memory_order_relaxed);
+            return;
+        }
+    }
+}
+
+/* The three largest callers of the frame just ended into `out`; clears the byte counts. */
+static void pool_callers_take(char *out, size_t out_size) {
+    uint64_t top_key[3] = {0}, top_bytes[3] = {0}, top_count[3] = {0};
+    for (unsigned i = 0; i < POOL_CALLERS; ++i) {
+        const uint64_t key = atomic_load_explicit(&pool_callers[i].key, memory_order_relaxed);
+        const uint64_t bytes = atomic_exchange_explicit(&pool_callers[i].bytes, 0, memory_order_relaxed);
+        const uint64_t count = atomic_exchange_explicit(&pool_callers[i].count, 0, memory_order_relaxed);
+        for (int t = 0; t < 3; ++t) {
+            if (bytes <= top_bytes[t]) continue;
+            for (int m = 2; m > t; --m) {
+                top_key[m] = top_key[m - 1], top_bytes[m] = top_bytes[m - 1], top_count[m] = top_count[m - 1];
+            }
+            top_key[t] = key, top_bytes[t] = bytes, top_count[t] = count;
+            break;
+        }
+    }
+    size_t n = 0;
+    out[0] = 0;
+    for (int t = 0; t < 3 && top_bytes[t] && n < out_size; ++t) {
+        n += (size_t)snprintf(out + n, out_size - n, "%s%" PRIu64 " B in %" PRIu64 " from 0x%" PRIx64 "<0x%" PRIx64,
+                              t ? ", " : "; by caller: ", top_bytes[t], top_count[t], top_key[t] >> 32,
+                              top_key[t] & 0xffffffffu);
+    }
+}
 
 static Spare *frame_heap_spare(uint64_t heap) {
     for (int i = 0; i < 2; ++i)
@@ -202,6 +263,8 @@ static void frame_pool_flip(const HookArgs *args) {
         if (guest_pointer(h) && atomic_load_explicit(&spares[i].heap, memory_order_relaxed) != h)
             atomic_store_explicit(&spares[i].heap, h, memory_order_release);
     }
+    char callers[256];
+    pool_callers_take(callers, sizeof(callers));
     uint64_t list = *(const uint64_t *)(uintptr_t)(r + 0x360 + 8 * (uint64_t)index);
     if (!guest_pointer(list)) return;
     uint64_t heap = *(const uint64_t *)(uintptr_t)(list + 0x78);
@@ -225,16 +288,77 @@ static void frame_pool_flip(const HookArgs *args) {
     if (tenths > pool_reported_tenths || now - pool_last_report_ns > 10000000000ull) {
         pool_reported_tenths = tenths > pool_reported_tenths ? tenths : pool_reported_tenths;
         pool_last_report_ns = now;
+        char queries[256];
+        query_counts_take(queries, sizeof(queries));
         fprintf(stderr, "Frame pool: new peak %" PRIu64 " of %" PRIu64 " KiB (%u%%), %" PRIu64 " of %" PRIu64
-                " records, frame %" PRIu64 "\n", used >> 10, size >> 10, (unsigned)(used * 100 / size), records,
-                capacity, atomic_load_explicit(&pool_flips, memory_order_relaxed));
+                " records, frame %" PRIu64 "%s%s\n", used >> 10, size >> 10, (unsigned)(used * 100 / size), records,
+                capacity, atomic_load_explicit(&pool_flips, memory_order_relaxed), callers, queries);
     }
 }
 
 static _Thread_local HookArgs heap_args;
 
+/* Query value calls by record type (0-15, 16: no or unknown record) since the last report. */
+static _Atomic uint64_t query_asked[17], query_waiting[17];
+static _Thread_local unsigned query_type;
+
+static void query_value_args(const HookArgs *args) {
+    query_type = 16;
+    const uint64_t query = args->rdi;
+    if (!guest_pointer(query) || *(const int32_t *)(uintptr_t)(query + 8) != 1) return;
+    const uint64_t record = *(const uint64_t *)(uintptr_t)query;
+    if (!guest_pointer(record)) return;
+    const uint32_t type = *(const uint32_t *)(uintptr_t)(record + 4);
+    query_type = type < 16 ? type : 16;
+    static _Atomic unsigned dumped;
+    const uint64_t block = *(const uint64_t *)(uintptr_t)(record + 0x10);
+    if (type == 1 && guest_pointer(block) && atomic_fetch_add(&dumped, 1) % 50000 == 0) {
+        /* The 8 render backends' begin/end counts the GPU's ZPASS_DONE dumps write (bit 63:
+         * valid); 0x216a2f0 reports the query ready once all 16 have it. */
+        const uint64_t *q = (const uint64_t *)(uintptr_t)block;
+        fprintf(stderr, "Frame pool: occlusion query at 0x%" PRIx64 ":", block);
+        for (int i = 0; i < 16; ++i) fprintf(stderr, " %" PRIx64, q[i]);
+        fprintf(stderr, "\n");
+    }
+}
+
+static uint64_t query_value_result(uint64_t ret) {
+    atomic_fetch_add_explicit(&query_asked[query_type], 1, memory_order_relaxed);
+    if (!(ret & 0xff)) atomic_fetch_add_explicit(&query_waiting[query_type], 1, memory_order_relaxed);
+    return ret;
+}
+
+/* "; queries: type T asked/not ready, ..." for the types asked since the last report. */
+static void query_counts_take(char *out, size_t out_size) {
+    size_t n = 0;
+    out[0] = 0;
+    for (unsigned t = 0; t < 17 && n < out_size; ++t) {
+        const uint64_t asked = atomic_exchange_explicit(&query_asked[t], 0, memory_order_relaxed);
+        const uint64_t waiting = atomic_exchange_explicit(&query_waiting[t], 0, memory_order_relaxed);
+        if (!asked) continue;
+        n += (size_t)snprintf(out + n, out_size - n, "%stype %u %" PRIu64 "/%" PRIu64 " not ready",
+                              n ? ", " : "; queries: ", t, waiting, asked);
+    }
+}
+
 static void linear_heap_alloc_args(const HookArgs *args) {
     heap_args = *args;
+    if (frame_heap_spare(args->rdi)) {
+        /* The guest's return address sits above the saved rax, hook and rbp (bb_hook_common);
+         * its caller's comes from the guest's rbp chain (the game keeps frame pointers). */
+        uint64_t caller = *(const uint64_t *)((const char *)args + 72) - pool_image;
+        const uint64_t frame = *(const uint64_t *)((const char *)args + 64);
+        uint64_t caller2 = 0, caller3 = 0;
+        if (guest_pointer(frame)) {
+            caller2 = *(const uint64_t *)(uintptr_t)(frame + 8) - pool_image;
+            const uint64_t frame2 = *(const uint64_t *)(uintptr_t)frame;
+            if (guest_pointer(frame2)) caller3 = *(const uint64_t *)(uintptr_t)(frame2 + 8) - pool_image;
+        }
+        /* The allocate's caller is nearly always the chunked arena (0xe455c2) and its caller a
+         * locked wrapper (0x21b4ce2): keep the two above the arena. */
+        if (caller == 0xe455c2) caller = caller2, caller2 = caller3;
+        pool_caller_add((caller << 32) | (caller2 & 0xffffffffu), args->rsi);
+    }
     /* The first allocation after the game reset a frame heap: the records the spare pool served
      * for that heap's previous frame are gone with it, so the spare pool starts over too. */
     Spare *spare = frame_heap_spare(args->rdi);
@@ -486,6 +610,7 @@ static void print_stats(void) {
 }
 
 void runtime_install_context_lock(unsigned char *image, uint64_t image_size) {
+    pool_image = (uintptr_t)image;
     const char *env = getenv("BB_CONTEXT_LOCK");
     const int lock_off = env && env[0] == '0';
     if (lock_off) printf("Context lock: off (BB_CONTEXT_LOCK=0)\n");
