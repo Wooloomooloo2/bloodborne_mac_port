@@ -162,6 +162,7 @@ struct PsoCache::Impl {
     id<MTLBinaryArchive> archive; ///< the archive loaded at startup (or an empty one); nil: none
     std::mutex archive_mutex;     ///< guards the members up to `stop`
     NSMutableArray* recorded = [NSMutableArray array]; ///< one descriptor per PSO key and stage
+    bool archive_compute{true};   ///< compute pipelines go into the archive too (#129)
     u64 unwritten{};              ///< pipelines compiled since the last successful write
     /// The last write attempt (or the cache's creation): the writer waits kWriteInterval after it.
     std::chrono::steady_clock::time_point last_write = std::chrono::steady_clock::now();
@@ -225,6 +226,27 @@ PsoCache::PsoCache(Device& device_, std::filesystem::path cache_dir)
     if (const char* env = std::getenv("MTL_SHADER_VALIDATION"); env && env[0] == '1') {
         LOG_WARNING(Render, "Metal binary archive off under MTL_SHADER_VALIDATION");
         return;
+    }
+    // BB_METAL_ARCHIVE=0: no archive (every pipeline compiles at each start); =render: render
+    // pipelines only. On an M5 (Apple10 GPUs) with macOS 27.2, adding a compute pipeline to the
+    // archive crashes inside Metal (strlen(NULL) under -[_MTLBinaryArchive
+    // getArchiveIDWithErrorInternal:], #129), so that combination keeps compute pipelines out.
+    // M2 on 27.2 and M5 on 27.0.1 write them without trouble.
+    const char* archive_env = std::getenv("BB_METAL_ARCHIVE");
+    if (archive_env && archive_env[0] == '0') {
+        LOG_WARNING(Render, "Metal binary archive off (BB_METAL_ARCHIVE=0)");
+        return;
+    }
+    if (archive_env && std::string_view{archive_env} == "render") {
+        impl->archive_compute = false;
+    } else if (!archive_env && [impl->mtl_device supportsFamily:MTLGPUFamilyApple10] &&
+               [[NSProcessInfo processInfo]
+                   isOperatingSystemAtLeastVersion:NSOperatingSystemVersion{27, 2, 0}]) {
+        impl->archive_compute = false;
+    }
+    if (!impl->archive_compute) {
+        std::printf("Metal binary archive: render pipelines only (compute pipelines compile at "
+                    "each start; #129, BB_METAL_ARCHIVE)\n");
     }
 
     @autoreleasepool {
@@ -326,6 +348,7 @@ bool PsoCache::WriteArchive() {
         if (!fresh) {
             error = FirstLine(ns_error);
         }
+        fresh.label = @"bbport pipelines";
         for (id descriptor in descriptors) {
             if (!fresh) {
                 break;
@@ -421,7 +444,8 @@ id CreateWithArchive(PsoCache::Impl& impl, bool archive_loaded, Descriptor* desc
         error = FirstLine(ns_error);
         return nil;
     }
-    if (impl.archive) {
+    if (impl.archive &&
+        (impl.archive_compute || ![descriptor isKindOfClass:[MTLComputePipelineDescriptor class]])) {
         [record addObject:descriptor];
     }
     return state;
