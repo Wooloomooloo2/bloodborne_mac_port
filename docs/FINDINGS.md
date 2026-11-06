@@ -2435,3 +2435,14 @@ predicated/conditional section, or the game waiting on the first query's state b
 more). On a PS4 the list does not grow, so the queries complete there. A fix that makes them
 complete removes the frame heap growth, the spare pool overflow and (probably) the late absent
 records and hangs; it may also explain #55 (FPS sinking over a session: the walk is per frame).
+
+Follow-up (2026-11-06):
+- The query's begin and end are 0xe2f130 (state 0 -> 2, then 0x2169ec0) and 0xe2f160 (state 1,
+  then 0x216a070): the functions the #99/#113 render guards protect as "shader bind/unbind" are
+  the occlusion query's begin and end. deadinside28's `InstallGxQueryGuard` (upstream 0fc2921c,
+  bbport issue #336; carried in Nightwatch as `gpu/shim/bbport_gx_query_guard.cpp`) skips begin/end
+  for a query with a null handle, "made while the device heap is full": the same symptom as #99,
+  with no account of why the heap fills. Our measurement is the why.
+- COND_EXEC is not involved: the game never issues one on the benchmark route (a counter in the
+  handler saw none in 130 s). Note for later: `PM4CmdCondExec::Address()` is a `bool*`, so the
+  handler tests only the low byte of the condition, while the CP tests the dword.
