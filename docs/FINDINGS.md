@@ -2521,3 +2521,33 @@ Both GPU architectures, runtime/hosts and launcher build; 64 Python tests, nativ
 settings/menu hooks, restart/display checks, cross-architecture rings, production
 GPU split and the Metal overlay (normal and API validation) pass. No gameplay or
 packaged-app check was repeated. Details: [NATIVE_MAC_SETTINGS.md](NATIVE_MAC_SETTINGS.md#upstream-rebase-3-november-2026).
+
+## 2026-11-06: long-session hang fixed: occlusion query dumps were wiped (#127, #139)
+
+The long-session sequence (frame heap fills over ~1.5-2 h of play, then missing render records
+(#99/#113), garbage vertex descriptors and a hang) comes from the game's occlusion queries never
+completing. Measured with the diagnostics on branch `frame-pool-growth` (bytes per caller in the
+frame heap, query readiness by type):
+
+- The growth is one allocation: 0xec6bf0 copies the game's list of pending queries (count x 8
+  bytes) into the frame heap every frame; on the benchmark route it grew from ~256 to ~1,250
+  entries in 130 s. Standing still it does not grow (no new queries).
+- Every type-1 (occlusion) query was not ready: 0x216a2f0 ANDs the 16 qwords of the query block
+  and wants bit 63 (valid) in each; pending blocks read all zeros.
+- The query's begin (0xe2f130 -> 0x2169ec0, type 1: 0x1077660 with esi 0) writes DMA_DATA (fill
+  the 128-byte block with 0) + WAIT_REG_MEM, then EVENT_WRITE PixelPipeStatControl (0x7fc00) and
+  EVENT_WRITE PixelPipeStatDump to the block; the end (0xe2f160 -> 0x216a070) writes the two events
+  with the dump at block + 8. (The #99/#113 render guards sit on these begin/end functions.)
+- In the command processor DMA_DATA runs in order with the draws (RunInOrder, on the draw
+  recording thread), the dump was written at once on the GPU command thread: the begin's fill
+  landed after the dumps and wiped them.
+
+Fix (`liverpool.cpp`): the dump goes through RunInOrder (RunZpassDump) and writes through the
+guest's backing memory like the fence labels. Benchmark route, M4 Max: type-1 queries 0/36 not
+ready (before 721,578/721,578), frame heap peak flat at 6 KiB over the route (before 8 -> 15 KiB
+and climbing), 60 FPS, GPU 12 ms/frame. The counts are the existing stand-in (every query sees
+0x2ffffff samples, i.e. visible), so anything the game hides by occlusion is now always shown
+as visible once its query completes; previously only the first query ever completed.
+
+Not yet checked: a session longer than the old ~1.5 h limit, and effects that depend on
+occlusion queries (sun/lamp glare, lens flares) for visible changes.

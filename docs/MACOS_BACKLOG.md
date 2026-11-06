@@ -21,15 +21,12 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
-- **Long sessions hang: occlusion queries never finish (#127, #139, maybe #131/#118/#55;
-  2026-11-05, top priority).** The game keeps a list of pending occlusion queries (type 1, read by
-  0x216a2f0 from 16 ZPASS_DONE counts with bit 63) and copies it into its 256 KiB frame heap every
-  frame (0xec6bf0). On the port every type-1 query stays not ready, the list grows during play
-  (~0.9 KiB per 1,000 frames), the heap fills after ~1.5-2 h, then absent records and a hang. Only
-  one PixelPipeStatDump was processed in 130 s of play. *Fix:* find where the game's later
-  begin/end dumps go and complete them; check with the `frame-pool-growth` diagnostics (frame
-  pool peak stays flat, "type 1 0/N not ready"). FINDINGS 2026-11-05. Workaround for players:
-  restart every ~90 min.
+- **Long sessions hang (#127, #139): fixed on branch `fix-127-occlusion-order` (2026-11-06).**
+  Occlusion query dumps were written before the game's DMA_DATA clear of the same block (it runs
+  in order with the draws), so no query ever completed and the pending list filled the frame
+  heap. Left: a > 2 h play session, and a look at glare/flare effects that use occlusion queries.
+  The occlusion counts are a stand-in (always visible): real per-draw sample counts would need
+  Metal visibility results (follow-up, only if an effect looks wrong). FINDINGS 2026-11-06.
 - **Motion blur smears a still picture until restart (#109, 2026-11-05).** M2 16 GB, 1280x720,
   upscaler off: after a while the whole scene streaks as if moving; restarting clears it, and
   with motion blur off it never comes back (reporter). The blur pass reads wrong velocity or a
