@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-10-31)
+## Status (2026-11-06)
 
-**Current version: [mac-v0.5.12](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.12)** (download the app, or build it as below).
+**Current version: [mac-v0.5.13](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.13)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -32,14 +32,37 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** 0.5.12 is the last 0.5.x release. **0.6** will be **MetalFX frame generation** (#64,
-from @evill33t): it comes out as pre-releases first and only becomes the default once it's well
-tested.
+**Releases:** **0.6** will be **MetalFX frame generation** (#64, from @evill33t): it comes out as
+pre-releases first and only once it plays at least as well as with frame generation off. Other
+fixes and features keep coming as 0.5.x releases until then.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
-sessions, and 0.5.12 fixes that crash's follow-up. Online play (#9) is still in progress.
+sessions, 0.5.12 fixes that crash's follow-up, and 0.5.13 adds Mac Settings to the game's own
+menu. Online play (#9) is still in progress.
 
-### New in 0.5.12: the last 0.5.x release
+### New in 0.5.13: Mac Settings in the game's menu
+
+- **Mac Settings in the game's own System menu** (#76, from [@evill33t](https://github.com/evill33t)):
+  the renderer, quality, effects and launch settings in the game's native menu, in nine groups
+  (Left/Right on **Page**, or L1/R1). It shares `bbport.ini` with the launcher and the ⌘,
+  overlay; `*` marks changes that need a restart. The title menu also gets an **Exit Game**
+  entry. Its menu assets are generated from your own game files; `BB_MAC_SETTINGS=0` and
+  `BB_EXIT_GAME=0` turn them off.
+- **Avoid white scenes (MetalFX)** (#116, #117, from @evill33t): an opt-in switch for the
+  Forbidden Woods scene that turns white with MetalFX above 1080p. Off by default because it
+  costs some GPU time; starting with the upscaler off and turning MetalFX on in game also avoids it.
+- **A conflicting patch file no longer stops the game from starting** (#79, from @evill33t):
+  a third-party patch that overlaps a built-in one is skipped with a log line, and patches can
+  no longer overwrite the port's own runtime hooks.
+- **A game stuck before its first frame now ends with a report** (#121): after 3 minutes on a
+  black screen it stops and writes the thread list, so the launcher can show why.
+- **Known:** long sessions can still freeze after about 1.5 to 2 hours of play (#127): the game's
+  occlusion queries never finish on the port, and a list of them fills a small per-frame memory
+  area. Until it's fixed, quit and restart about every 90 minutes.
+- **Known:** on M5 Macs with macOS 27.2, the GPU process can crash about 40 seconds after start
+  (#129). A fix is being tested.
+
+### New in 0.5.12
 
 - **Fixed: the crash after long sessions, again** (#113; "signal 11 at guest offset 0x216a08c",
   after about 90 minutes). 0.5.11 skipped the game's render bind for a resource that was gone,
