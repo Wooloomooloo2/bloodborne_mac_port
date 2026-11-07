@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-11-06)
+## Status (2026-11-07)
 
-**Current version: [mac-v0.5.13](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.13)** (download the app, or build it as below).
+**Current version: [mac-v0.5.14](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.14)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -37,8 +37,20 @@ pre-releases first and only once it plays at least as well as with frame generat
 fixes and features keep coming as 0.5.x releases until then.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
-sessions, 0.5.12 fixes that crash's follow-up, and 0.5.13 adds Mac Settings to the game's own
-menu. Online play (#9) is still in progress.
+sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
+menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play. Online play (#9) is still in progress.
+
+### New in 0.5.14: long sessions no longer freeze
+
+- **Fixed: the freeze after about 1.5 to 2 hours of play** (#127, #139). The game's occlusion
+  queries never finished on the port: the result was written and then wiped by the game's own
+  clear of the same memory, which ran later. The list of waiting queries grew every frame until a
+  small per-frame memory area filled, and the game froze or crashed (the #99/#113 crashes were the
+  same thing). The results now arrive in order; a 2.5-hour test session stayed at 60 FPS with
+  that memory area at 3% full. No need to restart every 90 minutes any more.
+- **M5 Macs on macOS 27.2: a fix for the GPU process crash about 40 seconds after start** (#129,
+  waiting for the reporter's confirmation). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
+  `=render` forces render-only elsewhere). Other Macs are unchanged.
 
 ### New in 0.5.13: Mac Settings in the game's menu
 
@@ -56,11 +68,8 @@ menu. Online play (#9) is still in progress.
   no longer overwrite the port's own runtime hooks.
 - **A game stuck before its first frame now ends with a report** (#121): after 3 minutes on a
   black screen it stops and writes the thread list, so the launcher can show why.
-- **Known:** long sessions can still freeze after about 1.5 to 2 hours of play (#127): the game's
-  occlusion queries never finish on the port, and a list of them fills a small per-frame memory
-  area. Until it's fixed, quit and restart about every 90 minutes.
-- **Known:** on M5 Macs with macOS 27.2, the GPU process can crash about 40 seconds after start
-  (#129). A fix is being tested.
+- Long sessions could freeze after 1.5 to 2 hours (#127) and M5 Macs on macOS 27.2 could crash at
+  start (#129): both addressed in 0.5.14.
 
 ### New in 0.5.12
 

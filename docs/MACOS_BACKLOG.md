@@ -21,10 +21,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
 
 ## 1. Stability
 
-- **Long sessions hang (#127, #139): fixed on branch `fix-127-occlusion-order` (2026-11-06).**
+- **Long sessions hang (#127, #139): fixed in 0.5.14 (2026-11-06).**
   Occlusion query dumps were written before the game's DMA_DATA clear of the same block (it runs
   in order with the draws), so no query ever completed and the pending list filled the frame
-  heap. Left: a > 2 h play session, and a look at glare/flare effects that use occlusion queries.
+  heap. Verified: 2.5 h scripted session (heap flat at 8 KiB), glare/flares checked by the owner.
   The occlusion counts are a stand-in (always visible): real per-draw sample counts would need
   Metal visibility results (follow-up, only if an effect looks wrong). FINDINGS 2026-11-06.
 - **Motion blur smears a still picture until restart (#109, 2026-11-05).** M2 16 GB, 1280x720,

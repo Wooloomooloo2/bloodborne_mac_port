@@ -2549,5 +2549,9 @@ and climbing), 60 FPS, GPU 12 ms/frame. The counts are the existing stand-in (ev
 0x2ffffff samples, i.e. visible), so anything the game hides by occlusion is now always shown
 as visible once its query completes; previously only the first query ever completed.
 
-Not yet checked: a session longer than the old ~1.5 h limit, and effects that depend on
-occlusion queries (sun/lamp glare, lens flares) for visible changes.
+Overnight check (2026-11-06, M4 Max, macOS 27.0.1, benchmark save, one session): 150 min, 64
+passes of the route, stopped at the time limit. No "frame heap full" or render guard lines;
+frame pool peak 8 of 256 KiB (3%), last new peak at frame 212k; 60 FPS and 6-11 ms GPU per
+frame from start to end (no #55-style drift). The owner checked glare and lens flares (no visible
+change) and played 36 min on their own save at 1440p (frame pool peak 7 KiB, normal exit).
+Shipped in 0.5.14.
