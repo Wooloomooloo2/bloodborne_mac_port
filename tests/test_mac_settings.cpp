@@ -91,7 +91,8 @@ int main() {
     assert(Count(Read(launch), "BB_SHOW_LAUNCHER=1") == 1);
     assert(Read(launch).find("BB_GAME='/some path/game'\nFUTURE_OPTION=keep\n") != std::string::npos);
 
-    // Keep the user's unsupported provider and every unowned launcher / future framegen key.
+    // Keep the user's unsupported provider and unowned launcher/future keys. Framegen now
+    // owns its literal 0/1 preference; an old provider-name value is disabled on save.
     Write(config, "upscaler=fsr411\npreset=0\nfps_cap=40\ngame_timing=variable\nfullscreen=1\n"
                   "metal_hud=1\ntexture_compression=0\nfsr4_invert_jitter=1\n"
                   "mouse_look=1\nmouse_sensitivity=2.25\nmouse_vertical=1.75\nmouse_invert_y=1\npad_menu_combo=0\n"
@@ -113,9 +114,10 @@ int main() {
     auto text = Read(config);
     assert(Count(text, "upscaler=fsr411") == 1 && Count(text, "sharpness=0.57") == 1);
     for (const char* line : {"fsr4_invert_jitter=1", "future_launcher=leave me alone",
-                             "framegen=fsr3", "framegen_multiplier=3"}) {
+                             "framegen_multiplier=3"}) {
         assert(Count(text, line) == 1);
     }
+    assert(Count(text, "framegen=0") == 1 && Count(text, "framegen=fsr3") == 0);
     BbSettings::ConfigureUpscalerSupport(true, true);
     assert(Get(BBMAC_PROVIDER_MASK) == (basic | (1 << BbSettings::UpscalerMetalFx) |
                                               (1 << BbSettings::UpscalerFsr3)));
@@ -185,7 +187,8 @@ int main() {
     assert(Count(text, "mouse_look=1") == 1 && Count(text, "mouse_sensitivity=2.25") == 1);
     assert(Count(text, "mouse_invert_y=1") == 1 && Count(text, "mouse_vertical=1.75") == 1);
     assert(Count(text, "pad_menu_combo=0") == 1);
-    assert(Count(text, "future_launcher=leave me alone") == 1 && Count(text, "framegen=fsr3") == 1);
+    assert(Count(text, "future_launcher=leave me alone") == 1 && Count(text, "framegen=0") == 1);
+    assert(Count(text, "framegen_multiplier=3") == 1);
     BbSettings::Load();
     BbSettings::ConfigureUpscalerSupport(true, true);
     assert(Get(BBMAC_SHARPNESS) == 87 && Get(BBMAC_SHOW_FPS) == 1);

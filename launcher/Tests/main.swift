@@ -295,6 +295,33 @@ do {
     check(ini["custom_key"] == "keep" && ini.text.hasPrefix("# menu settings\n")
           && ini.text.split(separator: "\n").filter { $0.hasPrefix("framegen=") }.count == 1,
           "frame generation save keeps comments and other settings without duplicate keys")
+
+    // Validate dependent changes and saved configurations at launch, in both directions.
+    settings.ultrawide = false
+    settings.upscaler = .metalfx
+    let display = FrameGenerationDisplay(refreshRate: 120)
+    func conflict() -> String? {
+        settings.frameGenerationConfigurationProblem(deviceSupported: true, display: display)
+    }
+    settings.frameGeneration = true
+    check(conflict() == nil, "60 real / 120 displayed is a valid enabled configuration")
+    settings.upscaler = .metalfx
+    settings.frameCap = .fps120
+    check(conflict()?.contains("240 Hz") == true, "raising the real cap above display capacity is rejected")
+    settings.frameCap = .fps60
+    check(settings.frameGenerationConfigurationProblem(deviceSupported: true, display: display,
+        realCap: 75)?.contains("150 Hz") == true,
+        "non-menu environment caps use their actual paired display rate")
+    check(settings.frameGenerationConfigurationProblem(deviceSupported: true, display: display,
+        realCap: 0) != nil, "an uncapped override cannot bypass launch validation")
+    check(settings.frameGenerationConfigurationProblem(deviceSupported: true, display: display,
+        realCap: Int.max) != nil, "an invalid environment cap reports a problem without overflow")
+    check(settings.frameGenerationConfigurationProblem(deviceSupported: true,
+        display: FrameGenerationDisplay(refreshRate: 60)) != nil,
+        "moving the selected display to 60 Hz exposes a launch conflict")
+    settings.frameGeneration = false
+    check(settings.frameGenerationConfigurationProblem(deviceSupported: false, display: nil) == nil,
+          "disabling frame generation always allows recovery from an unavailable configuration")
 }
 
 // Shell quoting and launch.conf (review focus 1: spaces, quotes; bash must source it).

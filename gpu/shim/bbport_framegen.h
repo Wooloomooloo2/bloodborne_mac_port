@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
+#include "bbport_framegen_budget.h"
+
 #include "video_core/renderer_metal/mtl_object.h"
 #include <atomic>
 #include <cstddef>
@@ -28,6 +30,7 @@ bool Active(); // running launch choice, device/path/display support, and GPU he
 void StartGpuBudget(); // before the first frame; initially measure real-only gameplay
 void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene);
 bool GpuBudgetLimited(); // temporary automatic fallback; the saved preference stays enabled
+BudgetState GpuBudgetState();
 inline constexpr std::size_t MaxSnapshotSets = 3;
 
 struct Description {

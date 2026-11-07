@@ -13,6 +13,13 @@ image between each pair of real frames. The choice is saved as `framegen=0|1` in
 Restart Game**; toggling back to the running choice clears the restart notice. The
 current session keeps its existing presentation resources until restart.
 
+The launcher rejects cap/display changes that cannot present the paired rate, with a warning.
+Starting with an incompatible saved configuration also shows a warning instead of silently
+launching without generation. Turn generation off or fix the conflicting setting to continue;
+saved preferences are not erased when a display disconnects. An unavailable saved generation
+choice can always be switched off. Legacy FSR 1 and overrides that disable temporal input
+capture are checked before launch.
+
 It requires macOS 26+, a build with the macOS 26 SDK or newer, a device
 accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, a real FPS cap,
 and a display able to show at least **2 × that cap** (0.2% tolerance includes
@@ -44,6 +51,11 @@ explains a headroom pause; the switch and saved preferences stay enabled. Loadin
 screens, output/preset changes and long pauses invalidate the initial estimate.
 The optional work has its own command buffer, submitted after the real scene
 without a GPU drain, so its completed GPU duration can guide resumption.
+The resume cost uses a median of distinct completed interpolation submissions after warmup.
+A single first-use or stalled submission cannot become a permanent cost estimate while paused.
+The FPS overlay identifies waiting for a scene, measurement, GPU pressure and display/configuration
+conflicts even when only the real-frame counter is shown. GPU pressure remains a runtime pause,
+not an incompatible saved configuration: performance depends on the scene.
 
 `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
 disables both controls for that session; remove it to use the saved preference. It never

@@ -24,7 +24,9 @@ namespace BbFrameGen {
 namespace {
 GpuBudget gpu_budget; // render producer only; the present thread reads the published gate
 std::atomic<bool> gpu_available{true};
-std::atomic<double> generation_seconds{0};
+struct GenerationSample { double seconds{}; uint64_t sequence{}; };
+std::atomic<GenerationSample> generation_sample{};
+std::atomic<BudgetState> budget_state{BudgetState::Measuring};
 constexpr const char* Source = R"msl(
 #include <metal_stdlib>
 using namespace metal;
@@ -182,10 +184,14 @@ bool Active() {
 void StartGpuBudget() {
     gpu_budget = {};
     gpu_available = false;
-    generation_seconds = 0;
+    generation_sample = GenerationSample{};
+    budget_state = BudgetState::Measuring;
 }
 bool GpuBudgetLimited() {
     return !gpu_available.load(std::memory_order_relaxed);
+}
+BudgetState GpuBudgetState() {
+    return budget_state.load(std::memory_order_relaxed);
 }
 void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene) {
     const auto& s = BbSettings::Get();
@@ -193,11 +199,15 @@ void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene) {
     const auto size = BbSettings::OutputSize();
     const uint64_t config = uint64_t(size[0]) | (uint64_t(size[1]) << 16) |
         (uint64_t(s.upscaler.load()) << 32) | (uint64_t(BbSettings::RenderPreset()) << 40);
+    const auto sample = generation_sample.load(std::memory_order_relaxed);
     const bool available = gpu_budget.Observe(now, gpu_busy_ns, scene, s.framegen_real_cap, config,
-                                             generation_seconds.load(std::memory_order_relaxed));
+                                             sample.seconds, sample.sequence);
+    budget_state.store(gpu_budget.State(), std::memory_order_relaxed);
     if (gpu_available.exchange(available, std::memory_order_relaxed) != available) {
-        std::printf("Frame generation: %s (automatic GPU headroom check)\n",
-                    available ? "resumed" : "paused to preserve real FPS");
+        std::printf("Frame generation: %s (GPU %.2f ms, interpolation budget %.2f ms, cap %u)\n",
+                    available ? "resumed" : scene ? "paused to preserve real FPS" : "waiting for a 3D scene",
+                    gpu_budget.RealSeconds() * 1000, gpu_budget.GenerationSeconds() * 1000,
+                    s.framegen_real_cap);
     }
 }
 bool Supported(Metal::Device& device) {
@@ -506,8 +516,11 @@ void Generator::Interpolate(Metal::Encoder& e, const FramePtr& frame, void* disp
         [(__bridge id<MTLCommandBuffer>)e.CommandBuffer()
             addCompletedHandler:^(id<MTLCommandBuffer> completed) {
                 const double duration = completed.GPUEndTime - completed.GPUStartTime;
-                if (completed.status == MTLCommandBufferStatusCompleted && duration > 0)
-                    generation_seconds.store(duration, std::memory_order_relaxed);
+                if (completed.status == MTLCommandBufferStatusCompleted && duration > 0) {
+                    auto previous = generation_sample.load(std::memory_order_relaxed);
+                    while (!generation_sample.compare_exchange_weak(previous,
+                        GenerationSample{duration, previous.sequence + 1}, std::memory_order_relaxed)) {}
+                }
             }];
         e.KeepAlive(Metal::Object::Retain(s.effect.Get()));
         if (s.previous)

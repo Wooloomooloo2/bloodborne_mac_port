@@ -245,11 +245,13 @@ int main() {
         Expect(counter() == framegen_counter, "disabling framegen keeps both rates until restart");
         s.framegen_supported = false;
         for (int i = 0; i < 4; ++i) Present(t, true);
-        Expect(counter() == counter_before, "unsupported framegen uses the single FPS display");
+        Expect(counter() != counter_before, "unsupported requested framegen adds a visible warning");
+        const auto unsupported_counter = counter();
         s.framegen_supported = true;
         s.display_timing = {60, 0};
         for (int i = 0; i < 4; ++i) Present(t, true);
-        Expect(counter() == counter_before, "refresh-limited generation uses the single FPS display");
+        Expect(counter() != counter_before && counter() != unsupported_counter,
+               "refresh-limited generation identifies the display/cap conflict");
         s.display_timing = {120, 0};
         const std::array<BbFrameRates::Sample, 6> changing_rates{{
             {9, 18}, {99, 198}, {100, 200}, {999, 1998}, {0, 0}, {60, 120}}};

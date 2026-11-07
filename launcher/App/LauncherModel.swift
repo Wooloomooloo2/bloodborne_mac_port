@@ -18,8 +18,12 @@ final class LauncherModel: ObservableObject {
     private var gameProcess: Process?
     private let frameGenerationDeviceSupported = FrameGenerationSupport.deviceSupported
     var frameGenerationDisplay: FrameGenerationDisplay? {
-        FrameGenerationSupport.launchDisplay(preferred: config.environment(adding: env)["BB_DISPLAY"] ?? settings.display)
+        frameGenerationDisplay(for: settings)
     }
+    private func frameGenerationDisplay(for proposed: GameSettings) -> FrameGenerationDisplay? {
+        FrameGenerationSupport.launchDisplay(preferred: config.environment(adding: env)["BB_DISPLAY"] ?? proposed.display)
+    }
+    @Published var frameGenerationWarning: String?
 
     @Published var settings = GameSettings()
     @Published var config = LaunchConfig()
@@ -95,11 +99,43 @@ final class LauncherModel: ObservableObject {
             : Upscaler.launcherChoices + [settings.upscaler]
     }
     var frameGenerationUnavailableReason: String? {
-        if env["BB_METAL_FRAMEGEN"] != nil {
+        if frameGenerationIsForced {
             return "BB_METAL_FRAMEGEN overrides this choice. Remove it to use the launcher setting."
         }
-        return settings.frameGenerationUnavailableReason(deviceSupported: frameGenerationDeviceSupported,
-                                                          display: frameGenerationDisplay)
+        var proposed = settings
+        proposed.frameGeneration = true
+        return frameGenerationConfigurationProblem(proposed)
+    }
+    var frameGenerationIsForced: Bool { config.environment(adding: env)["BB_METAL_FRAMEGEN"] != nil }
+    private func frameGenerationConfigurationProblem(_ proposed: GameSettings) -> String? {
+        let launchEnv = config.environment(adding: env)
+        var effective = proposed
+        if let forced = launchEnv["BB_METAL_FRAMEGEN"] { effective.frameGeneration = forced == "1" }
+        if let upscaler = launchEnv["BB_UPSCALER"], let choice = Upscaler(rawValue: upscaler) {
+            effective.upscaler = choice
+        }
+        // Match the cap/window overrides consumed by run.sh.
+        let realCap = launchEnv["BB_FPS_LIMIT"].flatMap(Int.init)
+        if let fullscreen = launchEnv["BB_FULLSCREEN"] { effective.fullscreen = fullscreen.first == "1" }
+        if effective.frameGeneration && launchEnv["BB_FSR1"].flatMap(\.first).map({ "1yt".contains($0) }) == true {
+            return "Frame generation is unavailable with legacy FSR 1. Disable the BB_FSR1 override."
+        }
+        if effective.frameGeneration && launchEnv["BB_UPSCALER"] == "none" && !effective.ultrawide {
+            return "Remove BB_UPSCALER=none to use frame generation. Select Off in the upscaler menu for native output."
+        }
+        return effective.frameGenerationConfigurationProblem(deviceSupported: frameGenerationDeviceSupported,
+                                                               display: frameGenerationDisplay(for: proposed), realCap: realCap)
+    }
+    var frameGenerationLaunchProblem: String? { frameGenerationConfigurationProblem(settings) }
+
+    func setFrameGenerationSetting<Value>(_ keyPath: WritableKeyPath<GameSettings, Value>, to value: Value) {
+        var proposed = settings
+        proposed[keyPath: keyPath] = value
+        if let problem = frameGenerationConfigurationProblem(proposed) {
+            frameGenerationWarning = problem + " Turn off frame generation first, or choose compatible settings."
+            return
+        }
+        settings = proposed
     }
     var canPlay: Bool { !running && !checkingGame && config.gameDir != nil && gameProblem == nil }
     /// Straight into the game (no window): the toggle is off and a game folder is known.
@@ -235,6 +271,11 @@ final class LauncherModel: ObservableObject {
 
     func play() {
         guard !running, let game = config.gameDir else { return }
+        if let problem = frameGenerationLaunchProblem {
+            frameGenerationWarning = problem + " Turn off frame generation or change the conflicting setting before playing."
+            onExit?(-1)
+            return
+        }
         save()
         if GameRunner.isGameRunning {
             exitMessage = "Bloodborne is already running. Only one copy of the game can run at a time."

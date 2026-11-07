@@ -158,11 +158,12 @@ void BudgetPolicy() {
     BbFrameGen::GpuBudget budget;
     double now = 1;
     uint64_t busy = 0;
+    uint64_t sequence = 0;
     const auto sample = [&](double gpu_ms, double frame_ms = 1000. / 60,
                             uint64_t draw_count = 1100, uint64_t config = 1) {
         now += frame_ms / 1000;
         busy += uint64_t(gpu_ms * 1e6);
-        return budget.Observe(now, busy, draw_count > 100, 60, config, .004);
+        return budget.Observe(now, busy, draw_count > 100, 60, config, .004, ++sequence);
     };
     for (int i = 0; i < 120; ++i)
         Expect(!sample(1, 1000. / 60, 10), "loading frames cannot admit interpolation");
@@ -187,6 +188,29 @@ void BudgetPolicy() {
     for (int i = 0; i < 120; ++i)
         Expect(!unknown.Observe(1. + i / 60., 0, true, 60, 1),
                "missing GPU timestamps cannot claim spare time");
+
+    // The first MetalFX encode can include cold work. If a transition pauses generation
+    // before more samples arrive, that single duration must not lock out later gameplay.
+    BbFrameGen::GpuBudget cold;
+    now = 1; busy = 0;
+    auto observe = [&](double gpu_ms, bool scene, double optional_ms, uint64_t sample) {
+        now += 1. / 60;
+        busy += uint64_t(gpu_ms * 1e6);
+        return cold.Observe(now, busy, scene, 60, 1, optional_ms / 1000, sample);
+    };
+    for (int i = 0; i < 120; ++i) observe(5, true, 0, 0);
+    Expect(observe(5, true, 80, 1), "one cold interpolation sample does not suspend a light scene");
+    observe(1, false, 80, 1);
+    for (int i = 0; i < 120; ++i) observe(5, true, 80, 1);
+    Expect(observe(5, true, 80, 1), "a repeated cold timestamp cannot permanently block resumption");
+    for (uint64_t sample = 2; sample < 35; ++sample) observe(7, true, sample == 20 ? 90 : 4, sample);
+    observe(1, false, 4, 34);
+    for (int i = 0; i < 120; ++i) observe(7, true, 4, 34);
+    Expect(observe(7, true, 4, 34), "one later GPU spike does not poison the measured resume cost");
+    // Sustained expensive interpolation remains a real limit; do not keep probing it.
+    for (uint64_t sample = 35; sample < 125; ++sample) observe(20, true, 16, sample);
+    for (int i = 0; i < 120; ++i)
+        Expect(!observe(7, true, 16, 124), "sustained optional cost still prevents unsafe resumption");
 }
 
 id<MTLDevice> Dev(Metal::Device& device) { return (__bridge id<MTLDevice>)device.NativeDevice(); }

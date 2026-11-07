@@ -262,20 +262,29 @@ struct GameSettings: Equatable {
 
     /// Launcher preflight. The renderer checks the game window's own display again at runtime.
     /// Unavailable choices stay saved so changing the cap/display/upscaler does not erase them.
-    func frameGenerationUnavailableReason(deviceSupported: Bool, display: FrameGenerationDisplay?) -> String? {
+    func frameGenerationUnavailableReason(deviceSupported: Bool, display: FrameGenerationDisplay?, realCap: Int? = nil) -> String? {
         guard deviceSupported else { return "Requires macOS 26 or later and a Mac supporting MetalFX frame generation." }
         guard let display, display.refreshRate.isFinite, display.refreshRate > 0 else {
             return "The display refresh rate could not be determined."
         }
-        let required = frameCap.rawValue * 2
+        let cap = realCap ?? frameCap.rawValue
+        guard cap > 0, cap <= Int.max / 2 else { return "Set a valid real FPS cap to use frame generation." }
+        let required = cap * 2
         let rate = display.refreshRate.formatted(.number.precision(.fractionLength(0...2)))
         let minimum = display.minimumRefreshRate.formatted(.number.precision(.fractionLength(0...2)))
-        guard display.supports(realCap: frameCap.rawValue, fullscreen: fullscreen) else {
+        guard display.supports(realCap: cap, fullscreen: fullscreen) else {
             if display.minimumRefreshRate > 0, !display.requiresFullscreen || fullscreen {
                 return "The paired \(required) FPS is outside the display's variable refresh range (\(minimum)–\(rate) Hz). Change the cap or display mode."
             }
-            return "Requires at least \(required) Hz for the \(frameCap.label) FPS cap. This display reports \(rate) Hz."
+            return "Requires at least \(required) Hz for the \(cap) FPS cap. This display reports \(rate) Hz."
         }
         return nil
+    }
+
+    /// Used both when changing dependent controls and immediately before starting the game.
+    /// Loading a saved choice never erases it; the player can disable it or fix the conflict.
+    func frameGenerationConfigurationProblem(deviceSupported: Bool, display: FrameGenerationDisplay?, realCap: Int? = nil) -> String? {
+        guard frameGeneration else { return nil }
+        return frameGenerationUnavailableReason(deviceSupported: deviceSupported, display: display, realCap: realCap)
     }
 }
