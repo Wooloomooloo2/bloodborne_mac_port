@@ -14,6 +14,25 @@ endif()
 # Frame pointers keep the loader's thread dumps (watchdog, SIGUSR2 sampling) walkable.
 add_compile_options(-fno-omit-frame-pointer)
 
+# std::jthread / std::stop_token: Xcode 16's libc++ (macOS 15 SDK) keeps them behind
+# -fexperimental-library; Xcode 26 has them by default. Add the flag only when it is needed.
+if (APPLE)
+    include(CheckCXXSourceCompiles)
+    set(bb_jthread_test "#include <thread>\nint main() { std::jthread t([](std::stop_token) {}); }")
+    check_cxx_source_compiles("${bb_jthread_test}" BB_HAS_JTHREAD)
+    if (NOT BB_HAS_JTHREAD)
+        set(CMAKE_REQUIRED_FLAGS -fexperimental-library)
+        check_cxx_source_compiles("${bb_jthread_test}" BB_HAS_JTHREAD_EXPERIMENTAL)
+        unset(CMAKE_REQUIRED_FLAGS)
+        if (NOT BB_HAS_JTHREAD_EXPERIMENTAL)
+            message(FATAL_ERROR "std::jthread is unavailable: use Xcode 16 or newer")
+        endif()
+        message(STATUS "std::jthread needs -fexperimental-library (Xcode 16 libc++)")
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX,OBJCXX>:-fexperimental-library>)
+        add_link_options(-fexperimental-library)
+    endif()
+endif()
+
 # bbport: link-time optimization (BB_LTO, default on) and profile-guided optimization
 # (BB_PGO: off, generate = instrumented build writing into BB_PGO_DIR, use = build with that
 # profile). Covers bbgpu and the static libraries linked into it. No -march: the same build
