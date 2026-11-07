@@ -14,6 +14,7 @@
 #include <pthread.h>
 #include <tuple>
 #include "bbport_cpu.h"
+#include "bbport_gnm_submit.h"
 #include <type_traits>
 #include <vector>
 #include <xxhash.h>
@@ -2882,36 +2883,10 @@ s32 PS4_SYSV_ABI sceGnmSubmitAndFlipCommandBuffersForWorkload(
     u32* ccb_sizes_in_bytes, u32 vo_handle, u32 buf_idx, u32 flip_mode, s64 flip_arg) {
     LOG_DEBUG(Lib_GnmDriver, "called [buf = {}]", buf_idx);
 
-    if (count != 0) {
-        if (!dcb_gpu_addrs) {
-            LOG_ERROR(Lib_GnmDriver, "dcbGpuAddrs must not be NULL");
-            return 0x80d11000;
-        }
-        if (!dcb_sizes_in_bytes) {
-            LOG_ERROR(Lib_GnmDriver, "dcbSizesInBytes must not be NULL");
-            return 0x80d11000;
-        }
-        if (ccb_sizes_in_bytes && !ccb_gpu_addrs) {
-            LOG_ERROR(Lib_GnmDriver, "ccbGpuAddrs must not be NULL if ccbSizesInBytes is non-NULL");
-            return 0x80d11000;
-        }
-    }
-
-    for (u32 i = 0; i < count; i++) {
-        if (dcb_sizes_in_bytes[i] == 0) {
-            LOG_ERROR(Lib_GnmDriver, "Submitting a null DCB {}", i);
-            return 0x80d11000;
-        }
-        if (dcb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "dcbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      dcb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
-        if (ccb_sizes_in_bytes && ccb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "ccbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      ccb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
+    if (!BbGnm::ValidSubmit(count, dcb_gpu_addrs, dcb_sizes_in_bytes,
+                            ccb_gpu_addrs, ccb_sizes_in_bytes, true)) {
+        LOG_ERROR(Lib_GnmDriver, "Invalid submit-and-flip command batch");
+        return 0x80d11000;
     }
 
     auto* cmdbuf = dcb_gpu_addrs[count - 1];
@@ -2948,26 +2923,10 @@ s32 PS4_SYSV_ABI sceGnmSubmitCommandBuffersForWorkload(u32 workload, u32 count,
     HLE_TRACE;
     LOG_DEBUG(Lib_GnmDriver, "called");
 
-    if (!dcb_gpu_addrs || !dcb_sizes_in_bytes) {
-        LOG_ERROR(Lib_GnmDriver, "dcbGpuAddrs and dcbSizesInBytes must not be NULL");
+    if (!BbGnm::ValidSubmit(count, dcb_gpu_addrs, dcb_sizes_in_bytes,
+                            ccb_gpu_addrs, ccb_sizes_in_bytes, false)) {
+        LOG_ERROR(Lib_GnmDriver, "Invalid command batch");
         return 0x80d11000;
-    }
-
-    for (u32 i = 0; i < count; i++) {
-        if (dcb_sizes_in_bytes[i] == 0) {
-            LOG_ERROR(Lib_GnmDriver, "Submitting a null DCB {}", i);
-            return 0x80d11000;
-        }
-        if (dcb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "dcbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      dcb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
-        if (ccb_sizes_in_bytes && ccb_sizes_in_bytes[i] > 0x3ffffc) {
-            LOG_ERROR(Lib_GnmDriver, "ccbSizesInBytes[{}] ({}) is limited to (2*20)-1 DWORDS", i,
-                      ccb_sizes_in_bytes[i]);
-            return 0x80d11000;
-        }
     }
 
     std::scoped_lock lk{m_submit_lock};
