@@ -56,6 +56,12 @@ A single first-use or stalled submission cannot become a permanent cost estimate
 The FPS overlay identifies waiting for a scene, measurement, GPU pressure and display/configuration
 conflicts even when only the real-frame counter is shown. GPU pressure remains a runtime pause,
 not an incompatible saved configuration: performance depends on the scene.
+Startup admission leaves 10% of the capped frame period free, then learns the optional cost
+and reserves 5% beyond it. At 30 FPS the initial real-only limit is 30 ms; at 60 FPS it is
+15 ms. Sustained overload still pauses generation. The first pressure rejection is logged
+with GPU time, the interpolation estimate and the cap, even if generation never started.
+If native 1080p is already near 30 FPS, try MetalFX Performance with a 30-FPS cap and restart;
+changing the cap alone cannot create room for interpolation on a saturated GPU.
 
 `BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
 disables both controls for that session; remove it to use the saved preference. It never

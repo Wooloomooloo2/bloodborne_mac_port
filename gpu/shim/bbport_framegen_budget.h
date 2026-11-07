@@ -25,7 +25,10 @@ public:
             *this = {};
             configuration = config;
             real_cap = cap;
-            extra = period * .15;
+            // Leave 10% startup headroom without assuming interpolation consumes 15%
+            // of the period as well. Learn its actual cost after admission; the sustained
+            // pressure check below still rejects optional work that cannot fit.
+            extra = period * .05;
             Begin(now, busy_ns);
             return false;
         }
@@ -69,8 +72,9 @@ public:
                 overloads = 0;
             }
         } else {
-            // Separate admission/rejection thresholds avoid oscillating near the limit.
-            allowed = gpu > 0 && gpu + extra < period * .85;
+            // Reserve 5% after the measured optional cost. The former 85% limit plus a
+            // 15% initial estimate rejected usable real-only loads above 70% indefinitely.
+            allowed = gpu > 0 && gpu + extra < period * .95;
         }
         state = allowed ? BudgetState::Ready : BudgetState::Pressure;
         Begin(now, busy_ns);

@@ -2699,3 +2699,28 @@ This is functional generation/recovery evidence, not a matched performance bench
 reproduction of the owner's exact cutscene. It uses disposable save/cache/config copies and
 the existing private DLC-provider diagnostic adapter; all 61 protected save/settings hashes
 remain unchanged. No DLC-provider change, release publication or version change is included.
+
+## 2026-11-07 — Frame-generation startup headroom
+
+The owner reports a base M4 Mac mini remaining at "GPU is busy" with both 30- and 60-FPS
+caps, native 1080p and roughly 27–34 FPS without generation. That machine has not been
+tested locally. Native GPU saturation remains a possible limit; enabling a temporal
+upscaler at Performance and retaining a 30-FPS cap is the first configuration to try.
+
+The admission policy also unnecessarily rejects some usable workloads: an initial optional
+estimate of 15% combined with an 85% total limit requires the real scene to stay below 70%
+of the capped period forever, before interpolation can supply any measured cost. Reduce
+the initial estimate to 5% and admit below 95% total, leaving 10% initial headroom. Once
+available, the median measured interpolation cost replaces that estimate. Retain the
+two-window sustained-pressure fallback and no periodic probes of a saturated scene.
+
+Policy regressions model 25 ms real + 3 ms optional at 30 FPS and 13 ms + 1 ms at 60 FPS.
+The old policy rejects both; the revised policy admits and sustains them, then learns and
+rejects deliberately expensive interpolation without retrying. Existing cold-sample,
+scene/configuration reset, missing-timestamp and saturation regressions still pass.
+Log the first measured pressure rejection as well as later availability transitions, so a
+never-admitted remote machine reports its actual GPU timing and initial cost estimate.
+
+Both renderer architectures build; frame-generation and overlay fixtures pass normally
+and with Metal validation, and the independent real/displayed-rate fixture passes.
+These checks establish policy and GPU-fixture behavior, not base M4 gameplay performance.

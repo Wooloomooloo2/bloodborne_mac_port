@@ -189,6 +189,33 @@ void BudgetPolicy() {
         Expect(!unknown.Observe(1. + i / 60., 0, true, 60, 1),
                "missing GPU timestamps cannot claim spare time");
 
+    // Real gameplay can exceed the old 70%-of-period startup limit while still leaving
+    // enough room for interpolation. Model actual optional work only after admission.
+    for (const uint32_t cap : {30u, 60u}) {
+        BbFrameGen::GpuBudget moderate;
+        now = 1; busy = 0; sequence = 0;
+        bool active = false;
+        const double source_ms = cap == 30 ? 25 : 13;
+        double optional_ms = cap == 30 ? 3 : 1;
+        const auto step = [&] {
+            const double gpu_ms = source_ms + (active ? optional_ms : 0);
+            now += std::max(1. / cap, gpu_ms / 1000);
+            busy += uint64_t(gpu_ms * 1e6);
+            if (active) ++sequence;
+            active = moderate.Observe(now, busy, true, cap, 1, optional_ms / 1000, sequence);
+            return active;
+        };
+        for (int i = 0; i < 120; ++i) step();
+        Expect(active, "usable moderate GPU load is admitted at both 30 and 60 FPS");
+        for (int i = 0; i < 120; ++i)
+            Expect(step(), "measured inexpensive interpolation sustains the real-frame cap");
+        optional_ms = 1000. / cap; // genuinely too expensive; learn and reject it
+        for (int i = 0; i < 120; ++i) step();
+        Expect(!active, "expensive interpolation still falls back under sustained pressure");
+        for (int i = 0; i < 120; ++i)
+            Expect(!step(), "measured expensive work is not periodically retried");
+    }
+
     // The first MetalFX encode can include cold work. If a transition pauses generation
     // before more samples arrive, that single duration must not lock out later gameplay.
     BbFrameGen::GpuBudget cold;

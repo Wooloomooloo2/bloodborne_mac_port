@@ -202,8 +202,10 @@ void UpdateGpuBudget(double now, uint64_t gpu_busy_ns, bool scene) {
     const auto sample = generation_sample.load(std::memory_order_relaxed);
     const bool available = gpu_budget.Observe(now, gpu_busy_ns, scene, s.framegen_real_cap, config,
                                              sample.seconds, sample.sequence);
-    budget_state.store(gpu_budget.State(), std::memory_order_relaxed);
-    if (gpu_available.exchange(available, std::memory_order_relaxed) != available) {
+    const auto state = gpu_budget.State();
+    const auto previous_state = budget_state.exchange(state, std::memory_order_relaxed);
+    if (gpu_available.exchange(available, std::memory_order_relaxed) != available ||
+        (state == BudgetState::Pressure && previous_state != state)) {
         std::printf("Frame generation: %s (GPU %.2f ms, interpolation budget %.2f ms, cap %u)\n",
                     available ? "resumed" : scene ? "paused to preserve real FPS" : "waiting for a 3D scene",
                     gpu_budget.RealSeconds() * 1000, gpu_budget.GenerationSeconds() * 1000,
