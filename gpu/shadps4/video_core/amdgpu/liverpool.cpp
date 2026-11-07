@@ -18,6 +18,7 @@
 #include <time.h>
 #include "bbport_copy.h"
 #include "bbport_toggles.h"
+#include "bbport_pm4_bounds.h"
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
@@ -41,6 +42,10 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
+
+// Pin the helper's admission sizes to the packet layouts actually decoded here.
+static_assert(sizeof(AmdGpu::PM4CmdWaitRegMem) == BbPm4::WaitRegMemWords * sizeof(u32));
+static_assert(sizeof(AmdGpu::PM4CmdReleaseMem) == BbPm4::ReleaseMemWords * sizeof(u32));
 
 // bbport: bad-packet diagnostics (DumpBadPacket). Declared here, outside namespace AmdGpu: the GPU
 // library links with -undefined dynamic_lookup, so a misplaced declaration became a null call.
@@ -572,6 +577,11 @@ Liverpool::Task Liverpool::ProcessCeUpdate(std::span<const u32> ccb) {
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(ccb.data());
+        if (!BbPm4::CompletePacket(header->raw, ccb.size())) {
+            std::fprintf(stderr, "GPU: incomplete CE packet %#010x (%zu words left); buffer skipped\n",
+                         header->raw, ccb.size());
+            break;
+        }
         const u32 type = header->type;
         if (type != 3) {
             // No other types of packets were spotted so far
@@ -904,6 +914,11 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         ProcessCommands();
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
+        if (header->type != 1 && !BbPm4::CompletePacket(header->raw, dcb.size())) {
+            std::fprintf(stderr, "GPU: incomplete graphics packet %#010x (%zu words left); buffer skipped\n",
+                         header->raw, dcb.size());
+            break;
+        }
         const u32 type = header->type;
 
         switch (type) {
