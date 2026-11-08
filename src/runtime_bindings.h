@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 Mark Hall
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* Keyboard and mouse bindings for the pad emulation (runtime_pad.c): bbport.ini bind_<action>=
+/* Keyboard, mouse and controller bindings for the pad emulation (runtime_pad.c): bbport.ini bind_<action>=
  * lists up to BIND_SLOTS inputs, comma-separated, by SDL scancode name ("Space", "Left Shift",
  * "W") or mouse name ("Mouse Left", "Mouse Right", "Mouse Middle", "Mouse Back", "Mouse Forward",
  * "Wheel Up", "Wheel Down"). An absent key keeps the default, an empty one unbinds the action.
@@ -23,6 +23,16 @@ enum {
     BIND_COUNT
 };
 
+/* Controller buttons by their PlayStation names (SDL's positions: South is Cross, East Circle,
+ * West Square, North Triangle; Back/Select and the touchpad click are Touchpad). bbport.ini
+ * bind_pad_<button>=<button> sets what the game sees when that button is pressed: another
+ * button's name, or empty for nothing. An absent key keeps the button as it is. */
+enum {
+    PAD_CROSS, PAD_CIRCLE, PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2, PAD_L3, PAD_R3,
+    PAD_OPTIONS, PAD_TOUCHPAD, PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT,
+    PAD_COUNT, PAD_NONE=-1
+};
+
 /* Mouse state for runtime_bindings_held: SDL_BUTTON_MASK bits (left .. forward side button) and,
  * while a wheel step is being pressed, these. */
 #define BIND_WHEEL_UP_MASK (1u << 8)
@@ -38,6 +48,11 @@ uint64_t runtime_bindings_held(const bool *keys, uint32_t mouse);
 bool runtime_bindings_camera_keys_dpad(void);
 /* Whether any action is bound to the wheel (only then are wheel steps turned into presses). */
 bool runtime_bindings_use_wheel(void);
+/* What the game sees for a controller button (PAD_*), PAD_NONE for nothing. */
+int runtime_bindings_pad(int button);
+/* A controller button's ini key ("bind_pad_cross") and name ("Cross", "D-pad Up"). */
+const char *runtime_bindings_pad_key(int button);
+const char *runtime_bindings_pad_name(int button);
 /* The ini key of an action ("bind_cross") and its default list ("Space,Return,Keypad Enter"),
  * for logs and tests. */
 const char *runtime_bindings_key(int action);

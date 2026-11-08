@@ -10,6 +10,7 @@ struct ControlsView: View {
     @ObservedObject var model: LauncherModel
     /// The slot waiting for a key or mouse button.
     @State private var capturing: Capture?
+    @State private var showPadButtons = false
 
     struct Capture: Identifiable {
         let action: BindAction
@@ -39,6 +40,10 @@ struct ControlsView: View {
                 Section("Controller") {
                     Toggle("L3 + R3 opens the in-game menu", isOn: $model.settings.padMenuCombo)
                         .help("Pressing both sticks in opens the settings menu during play. Turn it off if you press them by accident; \u{2318}, still opens it.")
+                    LabeledContent(model.settings.padBindings.isDefault ? "Buttons as on a PlayStation pad" : "Buttons remapped") {
+                        Button("Controller Buttons\u{2026}") { showPadButtons = true }
+                    }
+                    .help("Choose what each controller button does in the game.")
                 }
                 groups(["Movement", "Camera"])
             }
@@ -56,6 +61,9 @@ struct ControlsView: View {
                 }
             }
             .formStyle(.grouped)
+        }
+        .sheet(isPresented: $showPadButtons) {
+            PadButtonsSheet(bindings: $model.settings.padBindings) { showPadButtons = false }
         }
         .sheet(item: $capturing) { capture in
             CaptureSheet(action: capture.action, slot: capture.slot,
@@ -102,6 +110,55 @@ struct ControlsView: View {
             }
         } label: {
             Text(action.label)
+        }
+    }
+}
+
+/// What each controller button presses in the game (launcher/Model/Bindings.swift PadBindings;
+/// bbport.ini bind_pad_ keys). The L3 + R3 menu shortcut always uses the sticks themselves.
+private struct PadButtonsSheet: View {
+    @Binding var bindings: PadBindings
+    let done: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Controller Buttons").font(.headline)
+            Text("Each button presses what you choose here. Xbox and other controllers use the same positions: A is Cross, B Circle, X Square, Y Triangle; View/Back is Touchpad.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .top, spacing: 24) {
+                column(Array(PadBindings.buttons.prefix(8)))
+                column(Array(PadBindings.buttons.dropFirst(8)))
+            }
+            HStack {
+                Button("Reset to Defaults") { bindings = PadBindings() }
+                    .disabled(bindings.isDefault)
+                Spacer()
+                Button("Done", action: done).keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+    }
+
+    private func column(_ buttons: [PadButton]) -> some View {
+        Grid(alignment: .leading, verticalSpacing: 6) {
+            ForEach(buttons) { button in
+                GridRow {
+                    Text(button.name).frame(width: 80, alignment: .leading)
+                    Picker(button.name, selection: $bindings[button]) {
+                        ForEach(PadBindings.buttons) { Text($0.name).tag(Optional($0.name)) }
+                        Divider()
+                        Text("Nothing").tag(String?.none)
+                    }
+                    .labelsHidden()
+                    .frame(width: 130)
+                    let shared = bindings[button].map { bindings.others(pressing: $0, besides: button) } ?? []
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                        .opacity(shared.isEmpty ? 0 : 1)
+                        .help("Also pressed by: " + shared.map(\.name).joined(separator: ", "))
+                }
+            }
         }
     }
 }

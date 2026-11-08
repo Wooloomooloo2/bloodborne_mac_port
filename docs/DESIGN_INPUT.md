@@ -50,7 +50,25 @@ only reaches the ceiling sooner. The game's own Camera speed option raises the c
    mouse counts while the camera is free; stick emulation otherwise (lock-on, cutscenes, menus).
    If it fails, step 1 stands.
 
+## Controller buttons (2026-11-08, branch `controller-remap`)
+
+Owner decision 2026-11-08: controller buttons can be remapped too, on the same model.
+- **Storage:** `bbport.ini` `bind_pad_<button>=<Button>`, the button named by its PlayStation name
+  (`Cross`, `Circle`, `Square`, `Triangle`, `L1`, `R1`, `L2`, `R2`, `L3`, `R3`, `Options`,
+  `Touchpad`, `D-pad Up/Down/Left/Right`). It sets what the game sees when that physical button
+  (SDL position: South = Cross, Back/Select = Touchpad) is pressed. Absent = itself, empty or
+  `None` = nothing, an unknown name is logged and ignored. One target per button; two buttons may
+  press the same thing. Sticks are not remappable.
+- **Triggers:** a trigger is pressed past 30/255. A trigger that stays a trigger keeps its analog
+  value; a button mapped to L2/R2 presses it fully; a trigger mapped to a button presses that
+  button.
+- `remap_buttons` (`src/runtime_pad.c`) applies it to the controller only; keyboard bindings are
+  separate. The L3 + R3 menu shortcut (host side) always uses the physical sticks.
+- **Launcher:** Controls page > Controller > "Controller Buttons…" sheet, one picker per button
+  (`PadBindings` in `launcher/Model/Bindings.swift`; `tests/test_pad.c` checks its table against
+  the C one). Tests: `tests/test_pad.c` `test_controller_remap` (SDL virtual controller).
+
 ## Not now
 
-Rebinding inside the in-game menu; controller button remapping (same model); keyboard glyphs in
+Rebinding inside the in-game menu; keyboard glyphs in
 the game's prompts (it only has PlayStation ones).

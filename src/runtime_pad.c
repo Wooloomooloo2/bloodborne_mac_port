@@ -6,6 +6,7 @@
  * defaults: WASD left stick, arrow keys right stick, Space Cross, LShift Circle, E Square,
  * Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3, O Options, Tab / Backspace touchpad left / right,
  * IJKL d-pad, Left Alt walk).
+ * Controller buttons: bbport.ini bind_pad_ keys (remap_buttons).
  * Mouse (split mode, after a click in the window): the camera (right stick); by default left
  * button R1, right L2, middle R3, side buttons R2 and L1; the camera keys are then the d-pad. */
 #define _GNU_SOURCE
@@ -106,6 +107,27 @@ static uint8_t key_axis(int negative, int positive, int reach) {
     const int v=128-(negative ? reach : 0)+(positive ? (reach>127 ? 127 : reach) : 0);
     return (uint8_t)(v<0 ? 0 : v>255 ? 255 : v);
 }
+/* The controller's buttons (bit per PAD_*) and triggers as the game sees them, after bbport.ini
+ * bind_pad_ keys (runtime_bindings.c). A trigger counts as pressed past 30 and keeps its analog
+ * value when it stays a trigger; a button that becomes L2/R2 presses it fully. */
+static void remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
+    static const uint32_t ps[PAD_COUNT]={
+        [PAD_CROSS]=BTN_CROSS, [PAD_CIRCLE]=BTN_CIRCLE, [PAD_SQUARE]=BTN_SQUARE, [PAD_TRIANGLE]=BTN_TRIANGLE,
+        [PAD_L1]=BTN_L1, [PAD_R1]=BTN_R1, [PAD_L2]=BTN_L2, [PAD_R2]=BTN_R2, [PAD_L3]=BTN_L3, [PAD_R3]=BTN_R3,
+        [PAD_OPTIONS]=BTN_OPTIONS, [PAD_TOUCHPAD]=BTN_TOUCHPAD,
+        [PAD_UP]=BTN_UP, [PAD_DOWN]=BTN_DOWN, [PAD_LEFT]=BTN_LEFT, [PAD_RIGHT]=BTN_RIGHT,
+    };
+    if (l2>30) held|=1u<<PAD_L2; else held&=~(1u<<PAD_L2);
+    if (r2>30) held|=1u<<PAD_R2; else held&=~(1u<<PAD_R2);
+    for (int b=0;b<PAD_COUNT;++b) {
+        const int to=runtime_bindings_pad(b);
+        if (to==PAD_NONE) continue;
+        const uint8_t value=b==PAD_L2 ? l2 : b==PAD_R2 ? r2 : (held>>b)&1 ? 255 : 0;
+        if (to==PAD_L2 && value>d->l2) d->l2=value;
+        if (to==PAD_R2 && value>d->r2) d->r2=value;
+        if ((held>>b)&1) d->buttons|=ps[to];
+    }
+}
 static void sample_devices(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -117,22 +139,22 @@ static void sample_devices(PadData *d) {
     const bool *k=bbgpu_split_keyboard(); /* the window is in the GPU host (split) */
     if (!k) k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
     if (g) {
-        static const struct { SDL_GamepadButton sdl; uint32_t ps; } map[]={
-            {SDL_GAMEPAD_BUTTON_SOUTH,BTN_CROSS}, {SDL_GAMEPAD_BUTTON_EAST,BTN_CIRCLE},
-            {SDL_GAMEPAD_BUTTON_WEST,BTN_SQUARE}, {SDL_GAMEPAD_BUTTON_NORTH,BTN_TRIANGLE},
-            {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,BTN_L1}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,BTN_R1},
-            {SDL_GAMEPAD_BUTTON_LEFT_STICK,BTN_L3}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK,BTN_R3},
-            {SDL_GAMEPAD_BUTTON_START,BTN_OPTIONS}, {SDL_GAMEPAD_BUTTON_BACK,BTN_TOUCHPAD},
-            {SDL_GAMEPAD_BUTTON_TOUCHPAD,BTN_TOUCHPAD},
-            {SDL_GAMEPAD_BUTTON_DPAD_UP,BTN_UP}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN,BTN_DOWN},
-            {SDL_GAMEPAD_BUTTON_DPAD_LEFT,BTN_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,BTN_RIGHT},
+        static const struct { SDL_GamepadButton sdl; int pad; } map[]={
+            {SDL_GAMEPAD_BUTTON_SOUTH,PAD_CROSS}, {SDL_GAMEPAD_BUTTON_EAST,PAD_CIRCLE},
+            {SDL_GAMEPAD_BUTTON_WEST,PAD_SQUARE}, {SDL_GAMEPAD_BUTTON_NORTH,PAD_TRIANGLE},
+            {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,PAD_L1}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,PAD_R1},
+            {SDL_GAMEPAD_BUTTON_LEFT_STICK,PAD_L3}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK,PAD_R3},
+            {SDL_GAMEPAD_BUTTON_START,PAD_OPTIONS}, {SDL_GAMEPAD_BUTTON_BACK,PAD_TOUCHPAD},
+            {SDL_GAMEPAD_BUTTON_TOUCHPAD,PAD_TOUCHPAD},
+            {SDL_GAMEPAD_BUTTON_DPAD_UP,PAD_UP}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN,PAD_DOWN},
+            {SDL_GAMEPAD_BUTTON_DPAD_LEFT,PAD_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,PAD_RIGHT},
         };
-        for (size_t i=0;i<sizeof(map)/sizeof(*map);++i) if (SDL_GetGamepadButton(g,map[i].sdl)) d->buttons|=map[i].ps;
+        uint32_t held=0;
+        for (size_t i=0;i<sizeof(map)/sizeof(*map);++i) if (SDL_GetGamepadButton(g,map[i].sdl)) held|=1u<<map[i].pad;
         d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
         d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
-        d->l2=trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)); d->r2=trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER));
-        if (d->l2>30) d->buttons|=BTN_L2;
-        if (d->r2>30) d->buttons|=BTN_R2;
+        remap_buttons(d,held,trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)),
+                      trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)));
         if (SDL_GetNumGamepadTouchpads(g)>0) {
             const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
             for (int finger=0;finger<fingers && d->touch_count<2;++finger) {

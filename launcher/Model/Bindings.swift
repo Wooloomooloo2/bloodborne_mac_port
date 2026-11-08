@@ -110,3 +110,71 @@ struct Bindings: Equatable {
         }
     }
 }
+
+/// A controller button, by its PlayStation name (src/runtime_bindings.c, same keys and names).
+struct PadButton: Identifiable, Hashable {
+    let key: String
+    let name: String
+    var id: String { key }
+}
+
+/// The controller's buttons: bbport.ini bind_pad_<button>=<button> sets what the game sees when
+/// that button is pressed (another button's name, or empty for nothing). An absent key keeps the
+/// button as it is.
+struct PadBindings: Equatable {
+    static let buttons: [PadButton] = [
+        PadButton(key: "bind_pad_cross", name: "Cross"),
+        PadButton(key: "bind_pad_circle", name: "Circle"),
+        PadButton(key: "bind_pad_square", name: "Square"),
+        PadButton(key: "bind_pad_triangle", name: "Triangle"),
+        PadButton(key: "bind_pad_l1", name: "L1"),
+        PadButton(key: "bind_pad_r1", name: "R1"),
+        PadButton(key: "bind_pad_l2", name: "L2"),
+        PadButton(key: "bind_pad_r2", name: "R2"),
+        PadButton(key: "bind_pad_l3", name: "L3"),
+        PadButton(key: "bind_pad_r3", name: "R3"),
+        PadButton(key: "bind_pad_options", name: "Options"),
+        PadButton(key: "bind_pad_touchpad", name: "Touchpad"),
+        PadButton(key: "bind_pad_dpad_up", name: "D-pad Up"),
+        PadButton(key: "bind_pad_dpad_down", name: "D-pad Down"),
+        PadButton(key: "bind_pad_dpad_left", name: "D-pad Left"),
+        PadButton(key: "bind_pad_dpad_right", name: "D-pad Right"),
+    ]
+
+    /// What each button presses in the game: a button's name, or nil for nothing.
+    private var target: [String: String?]
+
+    init() { target = Dictionary(uniqueKeysWithValues: Self.buttons.map { ($0.key, $0.name) }) }
+
+    init(ini: IniFile) {
+        self.init()
+        for button in Self.buttons {
+            guard let v = ini[button.key]?.trimmingCharacters(in: .whitespaces) else { continue }
+            if v.isEmpty || v.caseInsensitiveCompare("None") == .orderedSame {
+                target[button.key] = .some(nil)
+            } else if let match = Self.buttons.first(where: { $0.name.caseInsensitiveCompare(v) == .orderedSame }) {
+                target[button.key] = match.name
+            } // anything else: the game ignores it too
+        }
+    }
+
+    subscript(button: PadButton) -> String? {
+        get { target[button.key] ?? button.name }
+        set { target[button.key] = .some(newValue) }
+    }
+
+    var isDefault: Bool { Self.buttons.allSatisfy { self[$0] == $0.name } }
+
+    /// The other buttons that press the same thing (a warning only: two buttons may).
+    func others(pressing name: String, besides button: PadButton) -> [PadButton] {
+        Self.buttons.filter { $0 != button && self[$0] == name }
+    }
+
+    /// Only the buttons changed from the defaults are written.
+    func apply(to ini: inout IniFile) {
+        for button in Self.buttons {
+            let to = self[button]
+            ini[button.key] = to == button.name ? nil : (to ?? "")
+        }
+    }
+}
