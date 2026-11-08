@@ -78,8 +78,20 @@ if [[ -f $ARM64_PREFIX/lib/pkgconfig/sdl3.pc ]]; then
     # carries the range as a zero-fill segment the kernel maps at exec (host/guest_reservation.s,
     # host/main.c reserve_guest_range). bb-probe runs it on macOS 27 and later only: on 26 the
     # pinned segment breaks dyld's flat-namespace lookups into the executable (PR #7).
-    "${host_cc[@]}" host/guest_reservation.s -Wl,-segaddr,__GUESTRSV,0x7000000000 -Wl,-segprot,__GUESTRSV,---,--- \
-        -o out/bbgpu-host-macos27
+    rsv_link=("${host_cc[@]}" host/guest_reservation.s -Wl,-segaddr,__GUESTRSV,0x7000000000
+        -Wl,-segprot,__GUESTRSV,---,--- -o out/bbgpu-host-macos27)
+    rsv_size() { otool -l out/bbgpu-host-macos27 | awk '/segname __GUESTRSV/ {f=1} f && /vmsize/ {print $2; exit}'; }
+    "${rsv_link[@]}"
+    # Xcode 16's linker (ld-1167) writes the 0x8C00000000 zero-fill segment with vmsize 0, and
+    # macOS rejects the binary as malformed. Its classic linker gets the size right.
+    if [[ $(rsv_size) != 0x0000008c00000000 ]]; then
+        echo "bbgpu-host-macos27: this linker drops the __GUESTRSV size; relinking with -ld_classic" >&2
+        "${rsv_link[@]}" -Wl,-ld_classic 2>&1 | { grep -v -- '-ld_classic is deprecated' || true; } >&2
+        if [[ $(rsv_size) != 0x0000008c00000000 ]]; then
+            echo "bbgpu-host-macos27: __GUESTRSV is $(rsv_size), expected 0x0000008c00000000: use Xcode 26 or newer" >&2
+            exit 1
+        fi
+    fi
     echo "Built $PWD/out/bbgpu-host and out/bbgpu-host-macos27 (arm64, renderer: out/gpu-arm64/libbbgpu.dylib)"
 else
     echo "Skipped out/bbgpu-host: no arm64 dependencies (BB_DEPS_ARCH=arm64 bash scripts/macos/bootstrap_deps.sh)"
