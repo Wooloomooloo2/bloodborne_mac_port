@@ -107,9 +107,9 @@ static uint8_t key_axis(int negative, int positive, int reach) {
     const int v=128-(negative ? reach : 0)+(positive ? (reach>127 ? 127 : reach) : 0);
     return (uint8_t)(v<0 ? 0 : v>255 ? 255 : v);
 }
-/* The controller's buttons (bit per PAD_*) and triggers as the game sees them, after bbport.ini
- * bind_pad_ keys (runtime_bindings.c). A trigger counts as pressed past 30 and keeps its analog
- * value when it stays a trigger; a button that becomes L2/R2 presses it fully. */
+/* The controller's buttons (bit per PAD_* button) and triggers as the game sees them, after
+ * bbport.ini bind_pad_ keys (runtime_bindings.c). A trigger counts as pressed past 30 and keeps
+ * its analog value when it is bound to L2/R2; any other button bound there presses it fully. */
 static void remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
     static const uint32_t ps[PAD_COUNT]={
         [PAD_CROSS]=BTN_CROSS, [PAD_CIRCLE]=BTN_CIRCLE, [PAD_SQUARE]=BTN_SQUARE, [PAD_TRIANGLE]=BTN_TRIANGLE,
@@ -119,13 +119,15 @@ static void remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
     };
     if (l2>30) held|=1u<<PAD_L2; else held&=~(1u<<PAD_L2);
     if (r2>30) held|=1u<<PAD_R2; else held&=~(1u<<PAD_R2);
-    for (int b=0;b<PAD_COUNT;++b) {
-        const int to=runtime_bindings_pad(b);
-        if (to==PAD_NONE) continue;
-        const uint8_t value=b==PAD_L2 ? l2 : b==PAD_R2 ? r2 : (held>>b)&1 ? 255 : 0;
-        if (to==PAD_L2 && value>d->l2) d->l2=value;
-        if (to==PAD_R2 && value>d->r2) d->r2=value;
-        if ((held>>b)&1) d->buttons|=ps[to];
+    for (int input=0;input<PAD_COUNT;++input) {
+        for (int slot=0;slot<BIND_SLOTS;++slot) {
+            const int b=runtime_bindings_pad(input,slot);
+            if (b<0) continue;
+            const uint8_t value=b==PAD_L2 ? l2 : b==PAD_R2 ? r2 : (held>>b)&1 ? 255 : 0;
+            if (input==PAD_L2 && value>d->l2) d->l2=value;
+            if (input==PAD_R2 && value>d->r2) d->r2=value;
+            if ((held>>b)&1) d->buttons|=ps[input];
+        }
     }
 }
 static void sample_devices(PadData *d) {
@@ -144,8 +146,10 @@ static void sample_devices(PadData *d) {
             {SDL_GAMEPAD_BUTTON_WEST,PAD_SQUARE}, {SDL_GAMEPAD_BUTTON_NORTH,PAD_TRIANGLE},
             {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,PAD_L1}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER,PAD_R1},
             {SDL_GAMEPAD_BUTTON_LEFT_STICK,PAD_L3}, {SDL_GAMEPAD_BUTTON_RIGHT_STICK,PAD_R3},
-            {SDL_GAMEPAD_BUTTON_START,PAD_OPTIONS}, {SDL_GAMEPAD_BUTTON_BACK,PAD_TOUCHPAD},
-            {SDL_GAMEPAD_BUTTON_TOUCHPAD,PAD_TOUCHPAD},
+            {SDL_GAMEPAD_BUTTON_START,PAD_OPTIONS}, {SDL_GAMEPAD_BUTTON_BACK,PAD_SELECT},
+            {SDL_GAMEPAD_BUTTON_TOUCHPAD,PAD_TOUCHPAD}, {SDL_GAMEPAD_BUTTON_MISC1,PAD_MISC},
+            {SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1,PAD_PADDLE1}, {SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2,PAD_PADDLE2},
+            {SDL_GAMEPAD_BUTTON_LEFT_PADDLE1,PAD_PADDLE3}, {SDL_GAMEPAD_BUTTON_LEFT_PADDLE2,PAD_PADDLE4},
             {SDL_GAMEPAD_BUTTON_DPAD_UP,PAD_UP}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN,PAD_DOWN},
             {SDL_GAMEPAD_BUTTON_DPAD_LEFT,PAD_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,PAD_RIGHT},
         };

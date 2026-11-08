@@ -142,21 +142,41 @@ static void test_launcher_tables(void) {
     assert(actions==BIND_COUNT);
     f=fopen("launcher/Model/Bindings.swift","r");
     assert(f);
-    int pads=0;
+    int pads=0, buttons=-1;
     while (fgets(line,sizeof line,f)) {
-        const char *p=strstr(line,"PadButton(key: \"");
-        if (!p) continue;
-        char key[64], name[64];
-        assert(sscanf(p,"PadButton(key: \"%63[^\"]\", name: \"%63[^\"]",key,name)==2);
-        assert(pads<PAD_COUNT && !strcmp(runtime_bindings_pad_key(pads),key) && !strcmp(runtime_bindings_pad_name(pads),name));
-        ++pads;
+        const char *k=strstr(line,"PadAction(key: \""), *d=strstr(line,"defaults: [");
+        if (k && d) {
+            char key[64], list[128]="";
+            assert(sscanf(k,"PadAction(key: \"%63[^\"]",key)==1);
+            for (const char *p=d+11; *p && *p!=']'; ++p) if (*p!='"') strncat(list,(char[]){*p==' ' && p[-1]==',' ? 0 : *p,0},1);
+            int found=0;
+            for (int i=0;i<PAD_COUNT;++i) {
+                if (strcmp(runtime_bindings_pad_key(i),key)) continue;
+                found=1;
+                if (strcmp(runtime_bindings_pad_default(i),list)) { printf("Bindings.swift %s: %s, runtime_bindings.c: %s\n",key,list,runtime_bindings_pad_default(i)); assert(0); }
+            }
+            assert(found);
+            ++pads;
+        }
+        const char *b=strstr(line,"static let buttons = [");
+        if (b) { /* "Cross", "Circle", ... in PAD_ order */
+            buttons=0;
+            for (const char *p=strchr(b,'"'); p; p=strchr(p,'"')) {
+                const char *end=strchr(p+1,'"');
+                assert(end && buttons<PAD_BUTTON_COUNT);
+                const char *want=runtime_bindings_pad_name(buttons++);
+                assert(strlen(want)==(size_t)(end-p-1) && !strncmp(want,p+1,strlen(want)));
+                p=end+1;
+            }
+        }
     }
     fclose(f);
-    assert(pads==PAD_COUNT);
+    assert(pads==PAD_COUNT && buttons==PAD_BUTTON_COUNT);
 }
 
-/* Controller buttons (bbport.ini bind_pad_): defaults unchanged, a swap, a button onto a trigger,
- * a trigger onto a button, an unbound button, an unknown name ignored. */
+/* Controller bindings (bbport.ini bind_pad_): defaults as before, a swap, two buttons for one
+ * input, a button onto a trigger, a trigger left unbound, extra buttons (paddle, misc), unbound
+ * inputs, an unknown name ignored. */
 /* Virtual trigger axes span -32768 (released) .. 32767 (SDL scales them to 0 .. 32767). */
 static void set_pad(SDL_Joystick *joystick, const SDL_GamepadButton *down, size_t count, int16_t right_trigger) {
     for (int b=0;b<SDL_GAMEPAD_BUTTON_COUNT;++b) assert(SDL_SetJoystickVirtualButton(joystick,b,false));
@@ -179,18 +199,19 @@ static void test_controller_remap(SDL_Joystick *joystick) {
     int fd=mkstemp(path);
     assert(fd>=0);
     close(fd);
-    write_file(path,"bind_pad_cross=circle\nbind_pad_circle = Cross\nbind_pad_l1=R2\nbind_pad_r2=L1\n"
-                    "bind_pad_dpad_up=\nbind_pad_square=Bogus\nbind_pad_options=None\n");
+    write_file(path,"bind_pad_circle=cross\nbind_pad_cross = Circle , paddle 1\nbind_pad_r2=L1\nbind_pad_l1=\n"
+                    "bind_pad_dpad_up=\nbind_pad_square=Bogus,Square\nbind_pad_options=Misc\n");
     runtime_bindings_load(path);
-    assert(runtime_bindings_pad(PAD_CROSS)==PAD_CIRCLE && runtime_bindings_pad(PAD_SQUARE)==PAD_SQUARE);
+    assert(runtime_bindings_pad(PAD_CROSS,0)==PAD_CIRCLE && runtime_bindings_pad(PAD_CROSS,1)==PAD_PADDLE1 &&
+           runtime_bindings_pad(PAD_CROSS,2)==-1 && runtime_bindings_pad(PAD_SQUARE,0)==PAD_SQUARE);
     SET_PAD(-32768,SDL_GAMEPAD_BUTTON_SOUTH,SDL_GAMEPAD_BUTTON_DPAD_UP,SDL_GAMEPAD_BUTTON_START,SDL_GAMEPAD_BUTTON_WEST);
     assert(pad_read_state(1,&d)==0 && d.buttons==(BTN_CIRCLE|BTN_SQUARE));
-    SET_PAD(-32768,SDL_GAMEPAD_BUTTON_EAST,SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
-    assert(pad_read_state(1,&d)==0 && d.buttons==(BTN_CROSS|BTN_R2) && d.r2==255);
+    SET_PAD(-32768,SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1,SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,SDL_GAMEPAD_BUTTON_MISC1);
+    assert(pad_read_state(1,&d)==0 && d.buttons==(BTN_CROSS|BTN_R2|BTN_OPTIONS) && d.r2==255);
     SET_PAD(20000,SDL_GAMEPAD_BUTTON_LEFT_STICK);
-    assert(pad_read_state(1,&d)==0 && d.buttons==(BTN_L1|BTN_L3) && d.r2==0);
-    SET_PAD(-28000,SDL_GAMEPAD_BUTTON_LEFT_STICK);
-    assert(pad_read_state(1,&d)==0 && d.buttons==BTN_L3); /* a light pull is not a press */
+    assert(pad_read_state(1,&d)==0 && d.buttons==BTN_L3 && d.r2==0); /* R2 itself is unbound now */
+    SET_PAD(-32768,SDL_GAMEPAD_BUTTON_BACK);
+    assert(pad_read_state(1,&d)==0 && (d.buttons & BTN_TOUCHPAD) && d.touch_count==1); /* Select: still the touchpad */
     unlink(path);
     runtime_bindings_load(NULL);
     SET_PAD(-32768,SDL_GAMEPAD_BUTTON_LEFT_STICK);

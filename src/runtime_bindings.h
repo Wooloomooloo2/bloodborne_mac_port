@@ -23,14 +23,20 @@ enum {
     BIND_COUNT
 };
 
-/* Controller buttons by their PlayStation names (SDL's positions: South is Cross, East Circle,
- * West Square, North Triangle; Back/Select and the touchpad click are Touchpad). bbport.ini
- * bind_pad_<button>=<button> sets what the game sees when that button is pressed: another
- * button's name, or empty for nothing. An absent key keeps the button as it is. */
+/* Controller bindings: bbport.ini bind_pad_<input>=Button,Button lists up to BIND_SLOTS
+ * controller buttons that press a pad input of the game (PAD_*), like the keyboard's bind_ keys.
+ * Buttons are named by position, as on a PlayStation pad (SDL's layout: South is Cross, East
+ * Circle, West Square, North Triangle), plus Select (Back/Share/Create/View), Paddle 1-4 (Xbox
+ * Elite P1-P4, DualSense Edge back buttons) and Misc (mic, capture or Xbox Share button). An
+ * absent key keeps the default (the button of the same name; Touchpad also has Select), an
+ * empty one unbinds the input. */
 enum {
     PAD_CROSS, PAD_CIRCLE, PAD_SQUARE, PAD_TRIANGLE, PAD_L1, PAD_R1, PAD_L2, PAD_R2, PAD_L3, PAD_R3,
     PAD_OPTIONS, PAD_TOUCHPAD, PAD_UP, PAD_DOWN, PAD_LEFT, PAD_RIGHT,
-    PAD_COUNT, PAD_NONE=-1
+    PAD_COUNT,
+    /* Buttons only (after the pad inputs, which are buttons too). */
+    PAD_SELECT=PAD_COUNT, PAD_PADDLE1, PAD_PADDLE2, PAD_PADDLE3, PAD_PADDLE4, PAD_MISC,
+    PAD_BUTTON_COUNT
 };
 
 /* Mouse state for runtime_bindings_held: SDL_BUTTON_MASK bits (left .. forward side button) and,
@@ -48,10 +54,12 @@ uint64_t runtime_bindings_held(const bool *keys, uint32_t mouse);
 bool runtime_bindings_camera_keys_dpad(void);
 /* Whether any action is bound to the wheel (only then are wheel steps turned into presses). */
 bool runtime_bindings_use_wheel(void);
-/* What the game sees for a controller button (PAD_*), PAD_NONE for nothing. */
-int runtime_bindings_pad(int button);
-/* A controller button's ini key ("bind_pad_cross") and name ("Cross", "D-pad Up"). */
-const char *runtime_bindings_pad_key(int button);
+/* The controller buttons (PAD_*, PAD_SELECT...) bound to pad input `input`, -1 for an empty slot. */
+int runtime_bindings_pad(int input, int slot);
+/* A pad input's ini key ("bind_pad_cross") and default list ("Cross"); a button's name ("Cross",
+ * "D-pad Up", "Paddle 1"). For logs and tests. */
+const char *runtime_bindings_pad_key(int input);
+const char *runtime_bindings_pad_default(int input);
 const char *runtime_bindings_pad_name(int button);
 /* The ini key of an action ("bind_cross") and its default list ("Space,Return,Keypad Enter"),
  * for logs and tests. */

@@ -205,24 +205,28 @@ do {
     check(KeyCodes.name(keyCode: 0x0D) == "W" && KeyCodes.keyCode(name: "Left Shift") == 0x38 && KeyCodes.name(keyCode: 0x3F) == nil, "key codes")
     check(Bindings.canonical("left gui") == nil && Bindings.canonical("wheel up") == "Wheel Up", "reserved and mouse names")
 
-    // Controller buttons (bind_pad_).
-    let padCross = PadBindings.buttons.first { $0.key == "bind_pad_cross" }!
-    let padCircle = PadBindings.buttons.first { $0.key == "bind_pad_circle" }!
-    let padSquare = PadBindings.buttons.first { $0.key == "bind_pad_square" }!
-    let padUp = PadBindings.buttons.first { $0.key == "bind_pad_dpad_up" }!
-    check(defaults.padBindings.isDefault && !untouched.text.contains("bind_pad_"), "controller defaults write nothing")
-    let swapped = GameSettings(ini: IniFile(text: "bind_pad_cross= circle \nbind_pad_dpad_up=\nbind_pad_square=Bogus\nbind_pad_l1=None\n"))
-    check(swapped.padBindings[padCross] == "Circle" && swapped.padBindings[padUp] == nil && swapped.padBindings[padSquare] == "Square", "controller names read; unknown ignored")
-    check(swapped.padBindings.others(pressing: "Circle", besides: padCross) == [padCircle], "two buttons pressing Circle reported")
+    // Controller bindings (bind_pad_): per input, like the keyboard's.
+    let padCross = PadBindings.actions.first { $0.key == "bind_pad_cross" }!
+    let padCircle = PadBindings.actions.first { $0.key == "bind_pad_circle" }!
+    let padSquare = PadBindings.actions.first { $0.key == "bind_pad_square" }!
+    let padUp = PadBindings.actions.first { $0.key == "bind_pad_dpad_up" }!
+    let padTouch = PadBindings.actions.first { $0.key == "bind_pad_touchpad" }!
+    check(defaults.padBindings.isDefault && !untouched.text.contains("bind_pad_") && defaults.padBindings[padTouch] == ["Touchpad", "Select"], "controller defaults write nothing")
+    let swapped = GameSettings(ini: IniFile(text: "bind_pad_cross= circle , paddle 1\nbind_pad_circle=Cross\nbind_pad_dpad_up=\nbind_pad_square=Bogus,Square\n"))
+    check(swapped.padBindings[padCross] == ["Circle", "Paddle 1"] && swapped.padBindings[padUp] == [] && swapped.padBindings[padSquare] == ["Square"], "controller names read; unknown dropped")
+    var shared = swapped.padBindings
+    shared.set(padSquare, slot: 1, to: "Circle")
+    check(shared.others(using: "Circle", besides: padSquare) == [padCross], "a button used twice is reported")
     var padFile = IniFile(text: "")
     swapped.apply(to: &padFile)
-    check(padFile["bind_pad_cross"] == "Circle" && padFile["bind_pad_dpad_up"] == "" && padFile["bind_pad_l1"] == "" && padFile["bind_pad_square"] == nil, "only changed buttons written")
+    check(padFile["bind_pad_cross"] == "Circle,Paddle 1" && padFile["bind_pad_dpad_up"] == "" && padFile["bind_pad_circle"] == "Cross" && padFile["bind_pad_square"] == nil, "only changed inputs written")
     check(GameSettings(ini: padFile).padBindings == swapped.padBindings, "controller bindings round trip")
     var padBack = swapped.padBindings
-    padBack[padCross] = "Cross"
+    padBack[padCross] = ["Cross"]
+    padBack[padCircle] = ["Circle"]
     padFile = IniFile(text: "bind_pad_cross=Circle\n")
     padBack.apply(to: &padFile)
-    check(padFile["bind_pad_cross"] == nil, "back to the default removes the key")
+    check(padFile["bind_pad_cross"] == nil && padFile["bind_pad_circle"] == nil, "back to the default removes the key")
 }
 
 // Shell quoting and launch.conf (review focus 1: spaces, quotes; bash must source it).

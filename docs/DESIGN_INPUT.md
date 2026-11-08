@@ -52,21 +52,26 @@ only reaches the ceiling sooner. The game's own Camera speed option raises the c
 
 ## Controller buttons (2026-11-08, branch `controller-remap`)
 
-Owner decision 2026-11-08: controller buttons can be remapped too, on the same model.
-- **Storage:** `bbport.ini` `bind_pad_<button>=<Button>`, the button named by its PlayStation name
-  (`Cross`, `Circle`, `Square`, `Triangle`, `L1`, `R1`, `L2`, `R2`, `L3`, `R3`, `Options`,
-  `Touchpad`, `D-pad Up/Down/Left/Right`). It sets what the game sees when that physical button
-  (SDL position: South = Cross, Back/Select = Touchpad) is pressed. Absent = itself, empty or
-  `None` = nothing, an unknown name is logged and ignored. One target per button; two buttons may
-  press the same thing. Sticks are not remappable.
-- **Triggers:** a trigger is pressed past 30/255. A trigger that stays a trigger keeps its analog
-  value; a button mapped to L2/R2 presses it fully; a trigger mapped to a button presses that
-  button.
+Owner decisions 2026-11-08: controller buttons can be remapped too, on the keyboard's model, and
+the launcher listens for the button (a list of names fails players whose pad is not labelled
+like a PlayStation one, and misses paddles).
+- **Storage:** `bbport.ini` `bind_pad_<input>=Button,Button` (up to 4) for the 16 pad inputs
+  (`bind_pad_cross` ... `bind_pad_dpad_right`, `bind_pad_options`, `bind_pad_touchpad`). Buttons
+  are named by position as on a PlayStation pad (SDL's layout: South = `Cross`), plus `Select`
+  (SDL Back: Share/Create/View), `Paddle 1`-`4` (SDL right paddle 1, right 2, left 1, left 2:
+  Xbox Elite P1-P4; DualSense Edge back buttons = Paddle 1 and 3) and `Misc` (SDL Misc1: mic,
+  capture, Xbox Share). Absent = default (the same name; Touchpad = `Touchpad,Select`, the
+  0.5.14 behaviour), empty = unbound, unknown names logged and ignored. Sticks are not remappable.
+- **Triggers:** pressed past 30/255. A trigger bound to L2/R2 keeps its analog value; any other
+  button bound there presses it fully; a trigger bound elsewhere presses that input.
 - `remap_buttons` (`src/runtime_pad.c`) applies it to the controller only; keyboard bindings are
   separate. The L3 + R3 menu shortcut (host side) always uses the physical sticks.
-- **Launcher:** Controls page > Controller > "Controller Buttons…" sheet, one picker per button
-  (`PadBindings` in `launcher/Model/Bindings.swift`; `tests/test_pad.c` checks its table against
-  the C one). Tests: `tests/test_pad.c` `test_controller_remap` (SDL virtual controller).
+- **Launcher:** Controls > Controller > "Controller Buttons…" sheet: rows per input like the
+  keyboard's; click a slot, press the button. The launcher reads the controller with Apple's
+  GameController (frontmost app only) and names buttons by SDL's positions; Nintendo pads may
+  differ there (GameController names A/B by label, SDL by position). `PadBindings` in
+  `launcher/Model/Bindings.swift`; `tests/test_pad.c` checks its tables against the C ones and
+  tests the mapping on SDL's virtual controller (`test_controller_remap`).
 
 ## Not now
 
