@@ -138,10 +138,13 @@ private struct PadButtonsSheet: View {
             Text(controller.map { "\($0): click a slot, then press the button you want for it." }
                  ?? "Connect a controller, then click a slot and press the button you want for it.")
                 .font(.caption).foregroundStyle(controller == nil ? .orange : .secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .top, spacing: 24) {
-                column(Array(PadBindings.actions.prefix(8)))
-                column(Array(PadBindings.actions.dropFirst(8)))
+            Grid(alignment: .leading, verticalSpacing: 6) {
+                ForEach(PadBindings.actions) { action in
+                    GridRow {
+                        Text(action.label).lineLimit(1).frame(width: 230, alignment: .leading)
+                        row(action)
+                    }
+                }
             }
             HStack {
                 Button("Reset to Defaults") { listening = nil; bindings = PadBindings() }
@@ -158,20 +161,9 @@ private struct PadButtonsSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 760)
+        .fixedSize()
         .onReceive(poll) { _ in sample() }
         .onExitCommand { listening = nil }
-    }
-
-    private func column(_ actions: [PadAction]) -> some View {
-        Grid(alignment: .leading, verticalSpacing: 6) {
-            ForEach(actions) { action in
-                GridRow {
-                    Text(action.label).frame(width: 190, alignment: .leading)
-                    row(action)
-                }
-            }
-        }
     }
 
     private func row(_ action: PadAction) -> some View {
@@ -186,7 +178,8 @@ private struct PadButtonsSheet: View {
                     listening = waiting ? nil : Listening(action: action, slot: slot)
                 } label: {
                     Text(waiting ? "Press\u{2026}" : name ?? (slot >= 2 ? "+" : "\u{2013}"))
-                        .frame(minWidth: slot < 2 ? 70 : 16)
+                        .lineLimit(1)
+                        .frame(width: name == nil && slot >= 2 && !waiting ? 16 : 84)
                         .foregroundStyle(waiting ? Color.accentColor : name == nil ? .secondary : .primary)
                 }
                 .help(name.map { PadBindings.label($0) + " \u{2013} click, then press a controller button" }
