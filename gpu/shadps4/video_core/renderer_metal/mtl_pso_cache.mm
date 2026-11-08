@@ -26,6 +26,14 @@
 #include "video_core/renderer_metal/vk_to_mtl.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 
+// MTLGPUFamilyApple10 (M5) is declared from the macOS 26 SDK on; older SDKs (Xcode 16) use its
+// raw value so the port still builds there. The runtime check is the same either way.
+#if defined(__MAC_26_0)
+static constexpr MTLGPUFamily kGPUFamilyApple10 = MTLGPUFamilyApple10;
+#else
+static constexpr MTLGPUFamily kGPUFamilyApple10 = static_cast<MTLGPUFamily>(1010);
+#endif
+
 namespace Metal {
 
 namespace {
@@ -239,7 +247,7 @@ PsoCache::PsoCache(Device& device_, std::filesystem::path cache_dir)
     }
     if (archive_env && std::string_view{archive_env} == "render") {
         impl->archive_compute = false;
-    } else if (!archive_env && [impl->mtl_device supportsFamily:MTLGPUFamilyApple10] &&
+    } else if (!archive_env && [impl->mtl_device supportsFamily:kGPUFamilyApple10] &&
                [[NSProcessInfo processInfo]
                    isOperatingSystemAtLeastVersion:NSOperatingSystemVersion{27, 2, 0}]) {
         impl->archive_compute = false;
