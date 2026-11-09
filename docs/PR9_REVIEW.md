@@ -86,3 +86,33 @@ These changes have not had a new gameplay or second-player test. No FPS improvem
 
 The review app is a local artifact, built with LTO disabled. Its source is this local branch
 until the changes are published; it is not a production release.
+
+## Rebase onto current master, 2026-11-09
+
+Rebased the existing PR #78 history onto upstream `master` at
+`7db59c852df603931ce3ae5326318eebbf53e54e` using
+`git rebase --rebase-merges`. Original authors and merge structure are retained.
+The vendored online backend is unchanged from the previous PR head `f83caab`.
+
+Conflicts preserve the Online and Controls pages, benchmark/mod initialization,
+upstream's restartable display and launch settings, external-patch collision checks
+alongside online patch restrictions, and native-menu plus online license notices.
+
+Validation of the rebased branch:
+
+- `BB_LTO=OFF bash build_macos.sh`: x86-64 GPU library, online module and runtime,
+  arm64 GPU library, and both native GPU hosts built successfully.
+- The native launcher built and its model tests passed, including Controls,
+  online settings, sign-in, benchmark, mods and crash/session-report models.
+- Runtime, semaphore and actual online-module import-routing C fixtures passed.
+- P2P codec and loopback THD session fixtures passed, covering fresh action
+  connections, no duplicate POSTs, poll keep-alive, cursor retention, pacing,
+  timeout bounds, cancellation and repeated restarts.
+- All 66 selected Python tests passed: online configuration/loaders (11), patches
+  (28), mods (14), and launch/restart settings (13).
+- Shell launch-settings regressions and edited-script syntax checks passed.
+  `git -c core.whitespace=cr-at-eol diff --check f83caab..HEAD` passed; the full
+  historical PR still contains pre-existing whitespace in vendored sources.
+
+No authenticated gameplay, multiplayer session, or packaged-app run was performed
+for this rebase. Earlier validation and its limits above remain historical.
