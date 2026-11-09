@@ -244,7 +244,18 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   through SessionLogWriter (moved to `<pass>.log/.jsonl` next to the CSV). README has a "Coming in
   0.6" section and PR contributor credits.
 
-## Release lines (2026-10-25, owner decision)
+## Release lines (2026-11-09, owner decision; supersedes 2026-10-25 below)
+
+- **0.5.x = master**, the stable line: fixes and small features keep shipping from master.
+- **0.7 = native online play** (the game's own bells/summons/invasions through a community
+  server, PR #78's approach) on branch **`release-0.7`**, cut from master 63867d1. All 0.7 merges go
+  there. Keep it in step with master by merging master into it after each 0.5.x change (not
+  rebasing: contributors build on it). Merge condition for online: ONE combined, tested PR
+  (byebyevlad/evill33t/noelmiller), then a security review. The owner will maintain it here.
+- **0.6 (frame generation, #64) is dropped** from the plan: little value, still buggy.
+- Seamless co-op (Nightwatch, built in-house) stays a separate, later mode.
+
+## Release lines (2026-10-25, owner decision; historical)
 
 - **0.5.6 = everything on master as of 2026-10-25** (mod manager + cheats, benchmark, 16:10,
   #40/#23/#66/#32, fixes #61/#71/F9). 0.5.x is the stable line; **0.5.7** = fixes for 16 GB Macs.
