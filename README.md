@@ -583,6 +583,9 @@ example a 60 FPS patch made for jailbroken consoles) is rejected: this port appl
 - A Mac with **Apple Silicon** running **macOS 15 or newer**, with at least **16 GB** of memory
 - **Rosetta 2** (`softwareupdate --install-rosetta`)
 - **Xcode Command Line Tools** (`xcode-select --install`)
+  With Command Line Tools 27 alone, the launcher is built against an older macOS SDK that is
+  still installed (the macOS 27 SDK there lacks SwiftUI's macro plugin; the build says which SDK
+  it uses). If no older SDK is left, install the full Xcode.
 - **Homebrew** (arm64) with build tools:
   `brew install cmake ninja nasm glslang pkgconf boost cryptopp`
 - **Python 3** (patch compiler and eboot preparation scripts)
