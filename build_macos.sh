@@ -135,9 +135,10 @@ if [[ ${1:-} == --test ]]; then
     out/online-test
     # The online module's P2P frames match shadPS4 v0.20.0's codec (skips without the module).
     if [[ -f out/gpu/libbbnet.dylib ]]; then
-        ninja -C out/gpu bbnet-codec-test bbnet-session-test > out/gpu-net-test-build.log 2>&1 || { tail -40 out/gpu-net-test-build.log >&2; exit 1; }
+        ninja -C out/gpu bbnet-codec-test bbnet-session-test bbnet-rejoin-test > out/gpu-net-test-build.log 2>&1 || { tail -40 out/gpu-net-test-build.log >&2; exit 1; }
         out/gpu/bbnet-codec-test
         out/gpu/bbnet-session-test
+        out/gpu/bbnet-rejoin-test
     fi
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
