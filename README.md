@@ -32,13 +32,14 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** **0.6** will be **MetalFX frame generation** (#64, from @evill33t): it comes out as
-pre-releases first and only once it plays at least as well as with frame generation off. Other
-fixes and features keep coming as 0.5.x releases until then.
+**Releases:** 0.5.x is the stable line, with fixes and features from master. **0.7** will be
+**online play**: the game's own bells, summons and invasions through a community server. It's
+being tested in contributors' forks and will come back as one tested pull request, reviewed and
+collected on the `release-0.7` branch.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
 sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
-menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play. Online play (#9) is still in progress.
+menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play.
 
 ### New in 0.5.14: long sessions no longer freeze
 
@@ -486,7 +487,7 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
+- **0.7:** online play (bells, summons and invasions through a community server), once it has been tested in the forks.
 - A faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
