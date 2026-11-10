@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 import AppKit
 import Carbon.HIToolbox
+import GameController
 import SwiftUI
 
 /// The launcher's Controls page: mouse camera settings and the keyboard and mouse bindings
@@ -10,6 +11,7 @@ struct ControlsView: View {
     @ObservedObject var model: LauncherModel
     /// The slot waiting for a key or mouse button.
     @State private var capturing: Capture?
+    @State private var showPadButtons = false
 
     struct Capture: Identifiable {
         let action: BindAction
@@ -39,6 +41,10 @@ struct ControlsView: View {
                 Section("Controller") {
                     Toggle("L3 + R3 opens the in-game menu", isOn: $model.settings.padMenuCombo)
                         .help("Pressing both sticks in opens the settings menu during play. Turn it off if you press them by accident; \u{2318}, still opens it.")
+                    LabeledContent(model.settings.padBindings.isDefault ? "Buttons as on a PlayStation pad" : "Buttons remapped") {
+                        Button("Controller Buttons\u{2026}") { showPadButtons = true }
+                    }
+                    .help("Choose what each controller button does in the game.")
                 }
                 groups(["Movement", "Camera"])
             }
@@ -56,6 +62,9 @@ struct ControlsView: View {
                 }
             }
             .formStyle(.grouped)
+        }
+        .sheet(isPresented: $showPadButtons) {
+            PadButtonsSheet(bindings: $model.settings.padBindings) { showPadButtons = false }
         }
         .sheet(item: $capturing) { capture in
             CaptureSheet(action: capture.action, slot: capture.slot,
@@ -103,6 +112,125 @@ struct ControlsView: View {
         } label: {
             Text(action.label)
         }
+    }
+}
+
+/// The controller bindings (launcher/Model/Bindings.swift PadBindings; bbport.ini bind_pad_ keys):
+/// click a slot, then press the button on the controller. While the sheet is open the launcher
+/// reads the controller with GameController, by the same positions as the game's SDL (South is
+/// Cross). The L3 + R3 menu shortcut always uses the sticks themselves.
+private struct PadButtonsSheet: View {
+    @Binding var bindings: PadBindings
+    let done: () -> Void
+    @State private var listening: Listening?
+    @State private var held: Set<String> = []
+    @State private var controller: String?
+    private let poll = Timer.publish(every: 1.0 / 60, on: .main, in: .common).autoconnect()
+
+    struct Listening: Equatable {
+        let action: PadAction
+        let slot: Int
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Controller Buttons").font(.headline)
+            Text(controller.map { "\($0): click a slot, then press the button you want for it." }
+                 ?? "Connect a controller, then click a slot and press the button you want for it.")
+                .font(.caption).foregroundStyle(controller == nil ? .orange : .secondary)
+            Grid(alignment: .leading, verticalSpacing: 6) {
+                ForEach(PadBindings.actions) { action in
+                    GridRow {
+                        Text(action.label).lineLimit(1).frame(width: 230, alignment: .leading)
+                        row(action)
+                    }
+                }
+            }
+            HStack {
+                Button("Reset to Defaults") { listening = nil; bindings = PadBindings() }
+                    .disabled(bindings.isDefault)
+                if let listening {
+                    Button("Clear Slot") {
+                        bindings.set(listening.action, slot: listening.slot, to: nil)
+                        self.listening = nil
+                    }
+                    .disabled(listening.slot >= bindings[listening.action].count)
+                }
+                Spacer()
+                Button("Done") { listening = nil; done() }.keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .fixedSize()
+        .onReceive(poll) { _ in sample() }
+        .onExitCommand { listening = nil }
+    }
+
+    private func row(_ action: PadAction) -> some View {
+        let names = bindings[action]
+        let shown = min(Bindings.slots, max(2, names.count + (names.count >= 2 ? 1 : 0)))
+        let shared = names.flatMap { bindings.others(using: $0, besides: action) }
+        return HStack(spacing: 4) {
+            ForEach(0..<shown, id: \.self) { slot in
+                let name = slot < names.count ? names[slot] : nil
+                let waiting = listening == Listening(action: action, slot: slot)
+                Button {
+                    listening = waiting ? nil : Listening(action: action, slot: slot)
+                } label: {
+                    Text(waiting ? "Press\u{2026}" : name ?? (slot >= 2 ? "+" : "\u{2013}"))
+                        .lineLimit(1)
+                        .frame(width: name == nil && slot >= 2 && !waiting ? 16 : 84)
+                        .foregroundStyle(waiting ? Color.accentColor : name == nil ? .secondary : .primary)
+                }
+                .help(name.map { PadBindings.label($0) + " \u{2013} click, then press a controller button" }
+                      ?? "Click, then press a controller button")
+            }
+            Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                .opacity(shared.isEmpty ? 0 : 1)
+                .help("Also used by: " + shared.map(\.label).joined(separator: ", "))
+        }
+    }
+
+    /// Binds the first button that goes down while a slot is waiting (one held when the slot was
+    /// clicked has to be let go first).
+    private func sample() {
+        let pad = GCController.current ?? GCController.controllers().first
+        controller = pad.map { $0.vendorName ?? "Controller" }
+        let now = pad.map(Self.pressed) ?? []
+        if let listening, let name = PadBindings.buttons.first(where: { now.contains($0) && !held.contains($0) }) {
+            bindings.set(listening.action, slot: listening.slot, to: name)
+            self.listening = nil
+        }
+        held = now
+    }
+
+    /// The buttons held, by the game's names (SDL positions; DualSense Edge back buttons are SDL's
+    /// right and left paddle 1, Xbox Elite P1-P4 its paddles in that order).
+    private static func pressed(_ controller: GCController) -> Set<String> {
+        var names = Set<String>()
+        guard let pad = controller.extendedGamepad else { return names }
+        let buttons: [(GCControllerButtonInput?, String)] = [
+            (pad.buttonA, "Cross"), (pad.buttonB, "Circle"), (pad.buttonX, "Square"), (pad.buttonY, "Triangle"),
+            (pad.leftShoulder, "L1"), (pad.rightShoulder, "R1"), (pad.leftTrigger, "L2"), (pad.rightTrigger, "R2"),
+            (pad.leftThumbstickButton, "L3"), (pad.rightThumbstickButton, "R3"),
+            (pad.buttonMenu, "Options"), (pad.buttonOptions, "Select"),
+            (pad.dpad.up, "D-pad Up"), (pad.dpad.down, "D-pad Down"),
+            (pad.dpad.left, "D-pad Left"), (pad.dpad.right, "D-pad Right"),
+        ]
+        for (button, name) in buttons where button?.isPressed == true { names.insert(name) }
+        if let ds = pad as? GCDualSenseGamepad, ds.touchpadButton.isPressed { names.insert("Touchpad") }
+        if let ds4 = pad as? GCDualShockGamepad, ds4.touchpadButton.isPressed { names.insert("Touchpad") }
+        if let xbox = pad as? GCXboxGamepad {
+            let extra: [(GCControllerButtonInput?, String)] = [
+                (xbox.paddleButton1, "Paddle 1"), (xbox.paddleButton2, "Paddle 2"),
+                (xbox.paddleButton3, "Paddle 3"), (xbox.paddleButton4, "Paddle 4"), (xbox.buttonShare, "Misc"),
+            ]
+            for (button, name) in extra where button?.isPressed == true { names.insert(name) }
+        }
+        let profile = controller.physicalInputProfile.buttons
+        if profile[GCInputRightPaddle]?.isPressed == true { names.insert("Paddle 1") }
+        if profile[GCInputLeftPaddle]?.isPressed == true { names.insert("Paddle 3") }
+        return names
     }
 }
 

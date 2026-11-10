@@ -134,6 +134,8 @@ struct GameSettings: Equatable {
     /// in-game menu (#104).
     var padMenuCombo = true
     var bindings = Bindings()
+    /// bbport.ini bind_pad_ keys: what each controller button presses (src/runtime_bindings.c).
+    var padBindings = PadBindings()
     var effects = Dictionary(uniqueKeysWithValues: GameSettings.effects.map { ($0.key, $0.defaultOn) })
     var frameCap = FrameCap.fps60
     var gameTiming = GameTiming.fixed
@@ -182,6 +184,7 @@ struct GameSettings: Equatable {
         if let v = flag("camera_keys_dpad") { cameraKeysDpad = v }
         if let v = flag("pad_menu_combo") { padMenuCombo = v }
         bindings = Bindings(ini: ini)
+        padBindings = PadBindings(ini: ini)
         for effect in Self.effects {
             if let v = flag(effect.key) { effects[effect.key] = v }
         }
@@ -226,6 +229,7 @@ struct GameSettings: Equatable {
         ini["camera_keys_dpad"] = cameraKeysDpad ? nil : "0"
         ini["pad_menu_combo"] = padMenuCombo ? "1" : "0"
         bindings.apply(to: &ini)
+        padBindings.apply(to: &ini)
         for effect in Self.effects {
             ini[effect.key] = (effects[effect.key] ?? effect.defaultOn) ? "1" : "0"
         }
