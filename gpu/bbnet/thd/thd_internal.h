@@ -103,6 +103,9 @@ void PeersErase(std::uint16_t member_id);
 std::vector<Peer> PeersAll();
 int PeersFromMembers(const Json& members);
 Peer PeersProvisional(const std::string& id, std::uint32_t addr, std::uint16_t port);
+// Probes toward a peer whose address did not change, unless the last ones are younger than
+// min_age_ms: a NAT forgets an idle mapping, and a peer that restarted has lost its own.
+void PeersPunchAgain(std::uint16_t member_id, int min_age_ms = 15000);
 
 // ---- the session service
 bool ServerContextStart(Json& reply, std::string& error);

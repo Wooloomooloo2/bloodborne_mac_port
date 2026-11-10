@@ -95,6 +95,20 @@ endif()
 set_target_properties(bbnet-session-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     INTERPROCEDURAL_OPTIMIZATION OFF)
 
+# Summoning again after a session ended badly: the peer table's hole punches.
+add_executable(bbnet-rejoin-test EXCLUDE_FROM_ALL ../../tests/test_thd_rejoin.cpp
+    thd/thd_session.cpp thd/thd_np.cpp)
+target_include_directories(bbnet-rejoin-test PRIVATE ../../tests/thd_shim . ../third_party/httplib ../shadps4)
+target_compile_options(bbnet-rejoin-test PRIVATE -UNDEBUG)
+target_compile_definitions(bbnet-rejoin-test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(bbnet-rejoin-test PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL
+    OpenSSL::Crypto ZLIB::ZLIB)
+if (APPLE)
+    target_link_libraries(bbnet-rejoin-test PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+set_target_properties(bbnet-rejoin-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)
+
 # bbhost v0.2.30+ peers: answering their NpSignaling handshake.
 add_executable(bbnet-bbhost-signaling-test EXCLUDE_FROM_ALL ../../tests/test_thd_bbhost_signaling.cpp
     thd/thd_session.cpp thd/thd_np.cpp)
