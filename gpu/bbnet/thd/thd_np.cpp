@@ -36,6 +36,7 @@ struct Conn {
     std::uint16_t member_id = 0;
     bool announced = false;
     bool dead = false;
+    std::int64_t resolve_ms = 0;
     bool local = true;                 // the game activated it (else only a bbhost peer did)
     bool peer_activated_fired = false; // PEER_ACTIVATED sent for a connection only the peer made
 };
@@ -76,6 +77,21 @@ void announce_locked(unsigned conn_id, Conn& c) {
     const unsigned ctx = c.ctx;
     DispatchAfter(200, Prio::Signaling, [ctx, conn_id] { sig_fire(ctx, conn_id, kEvEstablished, 0); });
     DispatchAfter(400, Prio::Signaling, [ctx, conn_id] { sig_fire(ctx, conn_id, kEvActive, 0); });
+}
+
+std::string resolve_locked(Conn& c) {
+    c.resolve_ms = NowMs();
+    std::uint32_t addr = 0;
+    std::uint16_t port = 0;
+    std::string error;
+    if (ServerSignalingResolve(c.online_id, &addr, &port, error)) {
+        c.member_id = PeersProvisional(c.online_id, addr, port).member_id;
+        char text[64];
+        std::snprintf(text, sizeof(text), " (resolved %u.%u.%u.%u:%u)", addr & 0xff, (addr >> 8) & 0xff,
+                      (addr >> 16) & 0xff, addr >> 24, port);
+        return text;
+    }
+    return " (not known and not resolved: " + error + ")";
 }
 
 s32 PS4_SYSV_ABI sig_init(u64, int, int, u64) { return 0; }
@@ -526,6 +542,10 @@ int SignalingActivate(unsigned ctx, const std::string& peer, unsigned* conn_out)
                 Peer p;
                 if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
             }
+            if (!c.member_id && NowMs() - c.resolve_ms >= 1000) {
+                const std::string how = resolve_locked(c);
+                Log("sceNpSignalingActivateConnection %s -> conn %u again%s", peer.c_str(), id, how.c_str());
+            }
             announce_locked(id, c);
             if (const auto h = g_hs.find(peer); h != g_hs.end()) sig_activation_locked(peer, h->second);
             return 0;
@@ -539,20 +559,7 @@ int SignalingActivate(unsigned ctx, const std::string& peer, unsigned* conn_out)
     if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
     std::string how;
     if (!c.member_id) {
-        // The host activates its connection to the guest it summons before the guest is a room
-        // member: the server resolves the address from the guest's context_start.
-        std::uint32_t addr = 0;
-        std::uint16_t port = 0;
-        std::string error;
-        if (ServerSignalingResolve(peer, &addr, &port, error)) {
-            c.member_id = PeersProvisional(peer, addr, port).member_id;
-            char text[64];
-            std::snprintf(text, sizeof(text), " (resolved %u.%u.%u.%u:%u)", addr & 0xff, (addr >> 8) & 0xff,
-                          (addr >> 16) & 0xff, addr >> 24, port);
-            how = text;
-        } else {
-            how = " (not known and not resolved: " + error + ")";
-        }
+        how = resolve_locked(c);
     }
     g_conn[id] = c;
     *conn_out = id;
