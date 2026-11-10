@@ -50,7 +50,7 @@ only reaches the ceiling sooner. The game's own Camera speed option raises the c
    mouse counts while the camera is free; stick emulation otherwise (lock-on, cutscenes, menus).
    If it fails, step 1 stands.
 
-## Controller buttons (2026-11-08, branch `controller-remap`)
+## Controller buttons (2026-11-08, released in 0.5.15)
 
 Owner decisions 2026-11-08: controller buttons can be remapped too, on the keyboard's model, and
 the launcher listens for the button (a list of names fails players whose pad is not labelled

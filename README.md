@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-11-07)
+## Status (2026-11-10)
 
-**Current version: [mac-v0.5.14](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.14)** (download the app, or build it as below).
+**Current version: [mac-v0.5.15](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.15)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -39,7 +39,17 @@ collected on the `release-0.7` branch.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
 sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
-menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play.
+menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, and 0.5.15 makes controller buttons remappable.
+
+### New in 0.5.15: remappable controller buttons
+
+- **Controller buttons can be remapped** in the launcher: **Controls > Controller > Controller
+  Buttons…**. Click a slot and press the button you want; each action takes up to four buttons,
+  including Select/Share/View, the back paddles (Xbox Elite, DualSense Edge) and the Misc button.
+  **Reset to Defaults** puts everything back. Triggers keep their analog pull when bound to L2/R2.
+  The settings are stored as `bind_pad_` lines in `bbport.ini`; the L3 + R3 menu shortcut always
+  uses the sticks.
+- **Builds on macOS 15 with Xcode 16** (#141, from [@byebyevlad](https://github.com/byebyevlad)).
 
 ### New in 0.5.14: long sessions no longer freeze
 
@@ -50,7 +60,7 @@ menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play.
   same thing). The results now arrive in order; a 2.5-hour test session stayed at 60 FPS with
   that memory area at 3% full. No need to restart every 90 minutes any more.
 - **M5 Macs on macOS 27.2: a fix for the GPU process crash about 40 seconds after start** (#129,
-  waiting for the reporter's confirmation). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
+  confirmed by the reporter). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
   `=render` forces render-only elsewhere). Other Macs are unchanged.
 
 ### New in 0.5.13: Mac Settings in the game's menu
@@ -899,6 +909,7 @@ Thank you to everyone who sent pull requests:
   long-session crash guards (#100, #114), stale descriptor hardening (#98), the GPU watchdog
   fix (#107), and MetalFX frame
   generation (#64, in progress).
+- **[byebyevlad](https://github.com/byebyevlad)**: builds on macOS 15 with Xcode 16 (#141).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,
