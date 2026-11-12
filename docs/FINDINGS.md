@@ -2789,3 +2789,19 @@ not a gameplay FPS measurement or a base M4 result.
 Both renderer architectures build. Arm64 fixtures pass normally and with Metal
 API/shader validation; the x86-64 fixture passes under Rosetta. The reported
 Yharnam sewer scene still needs a visual A/B comparison. No release is included.
+
+A bounded integrated-renderer gameplay smoke completed a 20-second measurement
+with Metal API validation, MetalFX Temporal Quality at 1920×1080, framegen on and
+a 30-FPS cap. It used the unchanged November 7 packaged runtime, the new `dev`
+native renderer, and copies of the previously validated fresh-game save. It
+encoded more than 300 intermediate frames with no reported Metal errors and no
+shared-scaler fallback. The CSV contains 477 real frames over 20.033 seconds
+(23.81 FPS); this validation run does not establish 30→60 delivery or a gameplay
+speedup. The harness stopped its own process group after measurement.
+
+The first attempt used the checkout's existing prebuilt runtime and benchmark
+save, remained in menus and failed in guest code before gameplay (SIGBUS at
+guest offset `0x53b3260`). It is not counted as a passing gameplay test. Both
+attempts used isolated config/cache and copied saves; checked source game and
+seed-save hashes were unchanged. Evidence remains local under
+`out/framegen-stability-20261112/` in the integration worktree.
