@@ -2724,3 +2724,28 @@ never-admitted remote machine reports its actual GPU timing and initial cost est
 Both renderer architectures build; frame-generation and overlay fixtures pass normally
 and with Metal validation, and the independent real/displayed-rate fixture passes.
 These checks establish policy and GPU-fixture behavior, not base M4 gameplay performance.
+## 2026-11-12 — Framegen foreground depth/motion footprint (#64)
+
+Reported target: jitter on bridges, especially the Yharnam sewers with MetalFX
+Temporal and frame generation. The framegen capture kernel previously copied
+each raw depth/motion sample directly. It now selects the nearest valid depth
+in a 3×3 render-pixel neighbourhood and copies motion from that same sample,
+expanding thin foreground geometry's footprint without blending it with the
+background. Equal depths retain the centre vector. Invalid depths are ignored;
+non-finite vectors remain zeroed. This changes framegen snapshots only.
+
+The offscreen production-kernel regression covers a one-pixel foreground edge,
+distant perspective depths, stationary foreground over moving background,
+equal-depth ties, texture boundaries, invalid samples and sky rotation. Four
+checks fail against the previous capture kernel and pass with this change.
+Existing snapshot ownership, HUD/gamma and history tests pass. A repeated-stripe
+translation fixture uses identical endpoints one full period apart, making
+optical flow ambiguous: the generated midpoint is correct at native and 2×
+output resolution (mean absolute error 0.0000). This also rules out the initial
+motion-scale suspicion: render-pixel vectors with scale 1 are correct here, so
+the scale remains unchanged.
+
+Both renderer architectures build. The offscreen fixtures pass normally and
+with Metal API/shader validation on the local GPU. These are synthetic checks;
+the reported sewer scene, visual improvement and gameplay cost have not been
+measured. No release/version change is included.

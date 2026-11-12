@@ -288,6 +288,129 @@ void SceneDisplay(Metal::Device& device, Metal::Encoder& encoder, BbFrameGen::Ge
     encoder.KeepAlive(Metal::Object::Adopt((__bridge_retained void*)sampler));
 }
 
+void ForegroundMotion(Metal::Device& device) {
+    // One-pixel railings over a deep background must retain their own motion
+    // across the surrounding interpolation footprint. Read the production
+    // snapshots, including distant perspective depths and texture boundaries.
+    using namespace BbFrameGen;
+    Generator generator{device};
+    const auto d = Description();
+    const auto frame = generator.Prepare(d);
+    Expect(bool(frame), "foreground motion snapshot allocated");
+    if (!frame) return;
+    auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
+    auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
+    auto ui = Texture(device, d.ui_format, d.out_width, d.out_height);
+    std::vector<float> depths(d.width * d.height, 1.f);
+    std::vector<_Float16> vectors(d.width * d.height * 2, 0);
+    const auto put = [&](uint32_t x, uint32_t y, float z, float mx, float my) {
+        const auto p = y * d.width + x;
+        depths[p] = z; vectors[p * 2] = mx; vectors[p * 2 + 1] = my;
+    };
+    put(8, 8, .25f, -6, 2);
+    put(20, 8, .99999f, 3, -4); // distant foreground still differs from clear depth
+    put(32, 8, .5f, 0, 0);     // zero is valid foreground motion
+    put(31, 8, .75f, 8, 8);
+    put(44, 8, .5f, 1, 2);
+    put(43, 8, .5f, 9, 9);    // equal depth must not replace the centre's vector
+    put(0, 0, .2f, -2, -3);
+    put(d.width - 1, d.height - 1, .3f, 2, 3);
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    put(8, 24, nan, 10, 10);
+    put(20, 24, .4f, inf, 2);
+    put(32, 24, -1, 10, 10);
+    put(44, 24, 2, 10, 10);
+    put(56, 16, 1, 5, -7); // sky rotation remains valid motion
+    auto z_read = [Dev(device) newBufferWithLength:depths.size() * 4
+        options:MTLResourceStorageModeShared];
+    auto mv_read = [Dev(device) newBufferWithLength:vectors.size() * 2
+        options:MTLResourceStorageModeShared];
+    Metal::Encoder encoder{device};
+    Upload(device, encoder, depth.Get(), depths.data(), d.width, d.height, 4);
+    Upload(device, encoder, motion.Get(), vectors.data(), d.width, d.height, 4);
+    generator.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get());
+    encoder.CopyTextureToBuffer(frame->depth.Get(), 0, 0, {}, {d.width, d.height, 1},
+        {(__bridge void*)z_read, 0}, d.width * 4, d.width * d.height * 4);
+    encoder.CopyTextureToBuffer(frame->motion.Get(), 0, 0, {}, {d.width, d.height, 1},
+        {(__bridge void*)mv_read, 0}, d.width * 4, d.width * d.height * 4);
+    device.Wait(encoder.Submit());
+    const auto check = [&](uint32_t x, uint32_t y, float z, float mx, float my) {
+        const auto p = y * d.width + x;
+        return static_cast<const float*>(z_read.contents)[p] == z &&
+            float(static_cast<const _Float16*>(mv_read.contents)[p * 2]) == mx &&
+            float(static_cast<const _Float16*>(mv_read.contents)[p * 2 + 1]) == my;
+    };
+    bool footprint = true;
+    for (uint32_t y = 7; y <= 9; ++y) for (uint32_t x = 7; x <= 9; ++x)
+        footprint &= check(x, y, .25f, -6, 2);
+    Expect(footprint, "thin foreground supplies paired depth and motion to its 3x3 footprint");
+    Expect(check(19, 9, .99999f, 3, -4), "distant foreground is preserved without a depth epsilon");
+    Expect(check(32, 8, .5f, 0, 0), "stationary foreground does not borrow background motion");
+    Expect(check(44, 8, .5f, 1, 2), "centre wins equal-depth motion ties");
+    Expect(check(1, 1, .2f, -2, -3) && check(d.width - 2, d.height - 2, .3f, 2, 3),
+           "foreground selection clamps at both texture boundaries");
+    Expect(check(8, 24, 1, 0, 0) && check(32, 24, 1, 0, 0) && check(44, 24, 1, 0, 0),
+           "invalid depth cannot become foreground");
+    Expect(check(20, 24, .4f, 0, 0), "invalid foreground vector is sanitized without borrowing depth");
+    Expect(check(56, 16, 1, 5, -7), "clear sky retains its motion and depth");
+}
+
+void PeriodicMotion(Metal::Device& device) {
+    // Identical endpoints after one full pattern period make optical flow
+    // ambiguous. The game vectors must choose the half-period midpoint,
+    // both at native resolution and with lower-resolution depth/motion.
+    for (uint32_t divisor : {1u, 2u}) {
+        using namespace BbFrameGen;
+        Generator generator{device};
+        auto d = Description();
+        d.out_width = 256; d.out_height = 144;
+        d.width = d.out_width / divisor; d.height = d.out_height / divisor;
+        auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
+        auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
+        auto ui = Texture(device, d.ui_format, d.out_width, d.out_height);
+        auto displayed = Texture(device, MTLPixelFormatRGBA16Float, d.out_width, d.out_height);
+        std::vector<float> depths(d.width * d.height, .5f);
+        std::vector<_Float16> vectors(d.width * d.height * 2, 0);
+        for (size_t p = 0; p < depths.size(); ++p) vectors[p * 2] = -16.f / divisor;
+        std::vector<uint8_t> image(d.out_width * d.out_height * 4, 255);
+        for (uint32_t y = 0; y < d.out_height; ++y)
+            for (uint32_t x = 0; x < d.out_width; ++x)
+                for (uint32_t c = 0; c < 3; ++c)
+                    image[(y * d.out_width + x) * 4 + c] = x % 16 < 8 ? 255 : 0;
+        for (unsigned n = 0; n < 5; ++n, ++d.sequence) {
+            auto frame = generator.Prepare(d);
+            Expect(bool(frame), "periodic motion snapshot allocated");
+            if (!frame) return;
+            Metal::Encoder encoder{device};
+            Upload(device, encoder, depth.Get(), depths.data(), d.width, d.height, 4);
+            Upload(device, encoder, motion.Get(), vectors.data(), d.width, d.height, 4);
+            Upload(device, encoder, ui.Get(), image.data(), d.out_width, d.out_height, 4);
+            generator.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get());
+            generator.FinishUi(encoder, frame, ui.Get());
+            SceneDisplay(device, encoder, generator, frame, ui.Get(), displayed.Get());
+            generator.Interpolate(encoder, frame, displayed.Get());
+            auto readback = [Dev(device) newBufferWithLength:d.out_width * d.out_height * 8
+                options:MTLResourceStorageModeShared];
+            encoder.CopyTextureToBuffer(frame->generated.Get(), 0, 0, {},
+                {d.out_width, d.out_height, 1}, {(__bridge void*)readback, 0},
+                d.out_width * 8, d.out_width * d.out_height * 8);
+            device.Wait(encoder.Submit());
+            if (n == 4) {
+                const auto* values = static_cast<const _Float16*>(readback.contents);
+                double error = 0;
+                for (uint32_t x = 64; x < 192; ++x)
+                    error += std::abs(float(values[(72 * d.out_width + x) * 4]) -
+                                      (x % 16 < 8 ? 0.f : 1.f));
+                error /= 128;
+                std::printf("Periodic motion: %ux upscale midpoint error %.4f\n", divisor, error);
+                Expect(frame->interpolated.load() && error < .1,
+                       "game vectors resolve repeated geometry at the temporal midpoint");
+            }
+        }
+    }
+}
+
 void Gpu(Metal::Device& device) {
     using namespace BbFrameGen;
     Generator generator{device};
@@ -571,6 +694,8 @@ int main() {
     @autoreleasepool {
         Metal::Device device;
         if (BbFrameGen::Supported(device)) {
+            ForegroundMotion(device);
+            PeriodicMotion(device);
             Gpu(device);
             GammaSlices(device);
             CroppedDisplay(device);

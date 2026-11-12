@@ -99,7 +99,13 @@ With generation off or unavailable, the single-rate counter uses its original
 content-sized width.
 
 The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
-tonemapped scene/UI boundary. A second pass identifies changes made by the HUD.
+tonemapped scene/UI boundary. For frame generation, each depth/motion pair comes
+from the nearest surface in a 3×3 render-pixel neighbourhood. This expands thin
+foreground geometry's interpolation footprint without blending its vectors with
+the background. Equal-depth ties retain the centre sample. Invalid depth samples
+are ignored and non-finite vectors become zero. The temporal upscaler continues
+to receive the original field; motion remains in render pixels (MetalFX performs
+the output-resolution conversion). A second pass identifies changes made by the HUD.
 Interpolation reads through the actual video-out view after the game's gamma LUT,
 so its channel swizzle and sRGB decode match the real frame. Source coordinates
 clamp to the actual video-out texture's width and height, including native 16:10

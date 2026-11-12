@@ -37,9 +37,27 @@ kernel void capture_inputs(depth2d<float> source [[texture(0)]],
                            uint2 p [[thread_position_in_grid]]) {
     uint2 size = uint2(target.get_width(), target.get_height());
     if (any(p >= size)) return;
+    // Preserve thin foreground geometry (railings, grates, bridge edges) in
+    // the interpolation footprint. Select depth AND motion from the nearest
+    // surface in a 3x3 neighbourhood; averaging vectors blends unrelated
+    // foreground/background motion. Start at the centre so equal depths do
+    // not make a flat surface's vector jump between neighbours.
     float z = source.read(p);
-    target.write(float4(isfinite(z) ? clamp(z, 0.f, 1.f) : 1.f), p);
-    float2 mv = vectors.read(p).rg;
+    bool valid = isfinite(z) && z >= 0.f && z <= 1.f;
+    float2 mv = valid ? vectors.read(p).rg : float2(0);
+    if (!valid) z = 1.f;
+    for (int y = -1; y <= 1; ++y) for (int x = -1; x <= 1; ++x) {
+        if (x == 0 && y == 0) continue;
+        uint2 q = uint2(clamp(int2(p) + int2(x, y), int2(0), int2(size) - 1));
+        float candidate = source.read(q);
+        if (isfinite(candidate) && candidate >= 0.f && candidate <= 1.f &&
+            (!valid || candidate < z)) {
+            z = candidate;
+            mv = vectors.read(q).rg;
+            valid = true;
+        }
+    }
+    target.write(float4(z), p);
     if (!all(isfinite(mv))) mv = 0;
     motion.write(float4(clamp(mv, -float2(size)*2, float2(size)*2), 0, 0), p);
 }
