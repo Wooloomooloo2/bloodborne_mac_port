@@ -243,6 +243,9 @@ bool Supported(Metal::Device& device) {
 bool Continuous(const Description& previous, const Description& current) {
     return Valid(previous) && Valid(current) && !current.reset && previous.sequence != UINT64_MAX &&
            current.sequence == previous.sequence + 1 && SameSize(previous, current) &&
+           current.real_cap == previous.real_cap &&
+           (!current.real_cap || (current.interval * current.real_cap >= .5f &&
+                                  current.interval * current.real_cap <= 1.5f)) &&
            previous.near_plane == current.near_plane && previous.far_plane == current.far_plane &&
            previous.vertical_fov == current.vertical_fov;
 }
@@ -256,7 +259,7 @@ struct Generator::Impl {
     Metal::Device& device;
     std::vector<FramePtr> pool; // producer thread only; shared reference counts are atomic
     Metal::Object depth, change, mask, color, hud;
-    Metal::Object effect;
+    Metal::Object effect, scaler;
     Metal::Object display_vertex, display_fragment, display_pipeline;
     uint32_t display_format = 0;
     Description config{};
@@ -306,10 +309,10 @@ struct Generator::Impl {
         [ce endEncoding];
         e.KeepAlive(Metal::Object::Retain(kernel.Get()));
     }
-    bool EnsureEffect(const Description& d) {
+    bool EnsureEffect(const Description& d, void* temporal_scaler) {
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000
         if (@available(macOS 26.0, *)) {
-            if (SameSize(d, config))
+            if (SameSize(d, config) && temporal_scaler == scaler.Get())
                 return bool(effect);
             previous.reset();
             auto descriptor = [MTLFXFrameInterpolatorDescriptor new];
@@ -322,8 +325,19 @@ struct Generator::Impl {
             descriptor.depthTextureFormat = MTLPixelFormatR32Float;
             descriptor.motionTextureFormat = MTLPixelFormatRG16Float;
             descriptor.uiTextureFormat = MTLPixelFormatRGBA16Float;
+            descriptor.scaler = (__bridge id<MTLFXTemporalScaler>)temporal_scaler;
             effect = Own([descriptor
                 newFrameInterpolatorWithDevice:(__bridge id<MTLDevice>)device.NativeDevice()]);
+            if (!effect && temporal_scaler) {
+                // Sharing is optional; keep generation usable when a device/OS
+                // cannot create the combined configuration. Cache this result
+                // for the same scaler and dimensions rather than retry each frame.
+                descriptor.scaler = nil;
+                effect = Own([descriptor newFrameInterpolatorWithDevice:
+                    (__bridge id<MTLDevice>)device.NativeDevice()]);
+                std::fprintf(stderr, "Frame generation: shared scaler unavailable, using independent preprocessing\n");
+            }
+            scaler = Metal::Object::Retain(temporal_scaler);
             config = d;
             if (!effect)
                 std::fprintf(stderr, "Frame generation: no interpolator for %ux%u -> %ux%u\n",
@@ -332,6 +346,7 @@ struct Generator::Impl {
         }
 #endif
         (void)d;
+        (void)temporal_scaler;
         return false;
     }
 };
@@ -383,6 +398,7 @@ FramePtr Generator::Prepare(const Description& d) {
     frame->description = d;
     frame->scene_ready = false;
     frame->source_ui.Reset();
+    frame->scaler.Reset();
     frame->interpolated.store(false, std::memory_order_release);
     // Each use has its own lease control block. The pool owns the allocation,
     // while weak references in unpresented display buffers observe only this
@@ -395,9 +411,10 @@ FramePtr Generator::Prepare(const Description& d) {
 }
 
 void Generator::Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion,
-                        void* ui) {
+                        void* ui, void* temporal_scaler) {
     const auto& d = frame->description;
     frame->source_ui = Metal::Object::Retain(ui);
+    frame->scaler = Metal::Object::Retain(temporal_scaler);
     impl->Dispatch(e, impl->depth, {depth, motion, frame->depth.Get(), frame->motion.Get()},
                    d.width, d.height);
     e.CopyTexture(ui, 0, 0, {}, frame->before_ui.Get(), 0, 0, {}, {d.out_width, d.out_height, 1});
@@ -504,7 +521,7 @@ void Generator::Interpolate(Metal::Encoder& e, const FramePtr& frame, void* disp
     s.Dispatch(e, s.color, {(__bridge void*)view, frame->color.Get()}, d.out_width, d.out_height);
     e.KeepAlive(Own(view));
     Pin(e, frame);
-    if (!s.EnsureEffect(d)) {
+    if (!s.EnsureEffect(d, frame->scaler.Get())) {
         s.previous.reset();
         e.CopyTexture(frame->color.Get(), 0, 0, {}, frame->generated.Get(), 0, 0, {},
                       {d.out_width, d.out_height, 1});

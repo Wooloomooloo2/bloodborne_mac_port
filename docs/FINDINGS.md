@@ -2724,6 +2724,7 @@ never-admitted remote machine reports its actual GPU timing and initial cost est
 Both renderer architectures build; frame-generation and overlay fixtures pass normally
 and with Metal validation, and the independent real/displayed-rate fixture passes.
 These checks establish policy and GPU-fixture behavior, not base M4 gameplay performance.
+
 ## 2026-11-12 — Framegen foreground depth/motion footprint (#64)
 
 Reported target: jitter on bridges, especially the Yharnam sewers with MetalFX
@@ -2749,3 +2750,42 @@ Both renderer architectures build. The offscreen fixtures pass normally and
 with Metal API/shader validation on the local GPU. These are synthetic checks;
 the reported sewer scene, visual improvement and gameplay cost have not been
 measured. No release/version change is included.
+
+## 2026-11-12 — Shared MetalFX preprocessing and hitch recovery (#64)
+
+MetalFX Temporal's scaler is now supplied to the frame-interpolator descriptor.
+Each frame retains its scaler through deferred encoding and GPU completion;
+replacing it or switching providers resets interpolation history. Combined
+creation failure falls back to independent preprocessing and caches the result.
+Native, TAA and FSR continue using the independent path.
+
+Interpolation continuity now checks the configured real FPS cap: source periods
+outside 0.5–1.5 times the cap period withhold generated presentation. This covers
+stalls and rapid catch-up submissions without extending the real image's hold.
+The rejected real frame seeds history, allowing the next normal adjacent pair
+to resume. Cap changes also reset history. Policy regressions cover 30/60/120 FPS.
+
+The production MetalFX upscale/capture/gamma/interpolation fixture rasterizes a
+static rectangle with eight two-axis subpixel jitter phases and depth edges.
+After warmup its generated centre stays within 0.01 output pixels across phases
+on each axis, with shared and separate scalers. Resolved color therefore keeps
+the existing zero interpolator jitter offset. Sharing transitions also verify
+one-frame history seeding and resumption.
+
+A moving-rail fixture exposes background behind four-pixel foreground bars and
+compares the generated image to known midpoint geometry. Mean absolute linear
+color error is 0.0117, versus 0.1784 for the current real image. A depth-only
+current-pixel fallback raises error to 0.1194 by replacing valid midpoint rails;
+it is evaluated in the fixture and is not enabled in the renderer. MetalFX
+continues handling visibility rather than applying that extra mask.
+
+An opt-in offscreen benchmark (`BB_FRAMEGEN_BENCHMARK=1 out/gpu-arm64/framegen-test`)
+times complete 960×540 → 1920×1080 upscale/capture/interpolation submissions.
+Separate/shared/shared/separate order, eight warmup frames per run and 48 timed
+samples per path give medians of 2.386 ms separate and 2.148 ms shared; p95 is
+2.754/2.221 ms. This is approximately 10% less GPU time in this synthetic scene,
+not a gameplay FPS measurement or a base M4 result.
+
+Both renderer architectures build. Arm64 fixtures pass normally and with Metal
+API/shader validation; the x86-64 fixture passes under Rosetta. The reported
+Yharnam sewer scene still needs a visual A/B comparison. No release is included.

@@ -1181,13 +1181,16 @@ void TemporalUpscaler::RunScaled() {
                 .sequence = framegen_sequence, .interval = interval,
                 .near_plane = inputs.camera_near, .far_plane = inputs.camera_far,
                 .vertical_fov = inputs.vertical_fov,
+                .real_cap = BbSettings::Get().framegen_real_cap,
                 .reset = inputs.reset || !camera_motion.Continuous(),
             });
             if (pending_framegen) {
                 scheduler.Record([generator = frame_generator.get(), frame = pending_framegen,
                                   depth_texture, motion = motion_image.Get(),
+                                  scaler = BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx
+                                      ? metalfx_scaler.Get() : nullptr,
                                   ui = ui_image.Get()](Metal::Encoder& e) {
-                    generator->Capture(e, frame, depth_texture, motion, ui);
+                    generator->Capture(e, frame, depth_texture, motion, ui, scaler);
                 });
                 scheduler.GetDynamicState().Invalidate();
             }

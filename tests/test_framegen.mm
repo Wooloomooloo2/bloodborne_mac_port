@@ -5,12 +5,14 @@
 // required.
 #include "bbport_framegen.h"
 #include "bbport_framegen_budget.h"
+#include "bbport_metalfx.h"
 #include "bbport_settings.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 #include "video_core/renderer_metal/mtl_texture.h"
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
+#include <algorithm>
 #include <cmath>
 #include <chrono>
 #include <cstdio>
@@ -112,6 +114,24 @@ void Policy() {
     next.sequence++;
     next.vertical_fov *= 1.1f;
     Expect(!BbFrameGen::Continuous(previous, next), "projection change discards history");
+    for (uint32_t cap : {30u, 60u, 120u}) {
+        auto timed = previous;
+        timed.real_cap = cap;
+        timed.interval = 1.f / cap;
+        next = timed; ++next.sequence;
+        for (float periods : {.75f, 1.f, 1.25f}) {
+            next.interval = periods / cap;
+            Expect(BbFrameGen::Continuous(timed, next), "ordinary cadence variation keeps history");
+        }
+        for (float periods : {.25f, 1.75f, 2.f}) {
+            next.interval = periods / cap;
+            Expect(!BbFrameGen::Continuous(timed, next), "hitches and catch-up bursts skip interpolation");
+        }
+        auto recovered = timed; recovered.sequence = next.sequence + 1;
+        Expect(BbFrameGen::Continuous(next, recovered), "normal cadence resumes on the next adjacent pair");
+        next = timed; ++next.sequence; next.real_cap = cap / 2;
+        Expect(!BbFrameGen::Continuous(timed, next), "cap changes discard interpolation history");
+    }
     for (float interval : {0.f, -1.f, .2f, std::numeric_limits<float>::quiet_NaN()}) {
         next = previous;
         next.sequence++;
@@ -411,6 +431,243 @@ void PeriodicMotion(Metal::Device& device) {
     }
 }
 
+void SharedScalerJitter(Metal::Device& device) {
+    using namespace BbFrameGen;
+    for (bool linked : {false, true}) {
+        Generator generator{device};
+        auto d = Description();
+        auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
+        auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
+        auto input = Texture(device, d.ui_format, d.width, d.height);
+        auto ui = Metal::CreateTexture(device, {.pixel_format = d.ui_format,
+            .width = d.out_width, .height = d.out_height, .render_target = true,
+            .shader_write = true}, "shared scaler output", nullptr);
+        auto display = Texture(device, MTLPixelFormatRGBA16Float, d.out_width, d.out_height);
+        auto scaler = BbMetalFx::CreateScaler(device, {
+            .color_format = d.ui_format, .depth_format = MTLPixelFormatDepth32Float,
+            .motion_format = MTLPixelFormatRG16Float, .output_format = d.ui_format,
+            .width = d.width, .height = d.height,
+            .out_width = d.out_width, .out_height = d.out_height});
+        Expect(bool(scaler), "temporal scaler created for framegen integration");
+        if (!scaler) return;
+        std::vector<float> depths(d.width * d.height, .5f);
+        std::vector<_Float16> vectors(d.width * d.height * 2, 0);
+        double minimum = 1e9, maximum = -1e9, minimum_y = 1e9, maximum_y = -1e9;
+        for (unsigned n = 0; n < 27; ++n, ++d.sequence) {
+            // Rasterize a static bright bar with subpixel viewport shifts. Its
+            // resolved centre must stay fixed through all eight jitter phases.
+            const float jitter = (float(n % 8) + .5f) / 8.f - .5f;
+            const float jitter_y = (float((n * 3) % 8) + .5f) / 8.f - .5f;
+            std::vector<uint8_t> image(d.width * d.height * 4, 255);
+            for (uint32_t y = 0; y < d.height; ++y) for (uint32_t x = 0; x < d.width; ++x) {
+                const float left = (x - jitter) * 2.f;
+                const float top = (y - jitter_y) * 2.f;
+                const float coverage = std::max(0.f, std::min(left + 2.f, 80.f) -
+                                                        std::max(left, 48.f)) * .5f *
+                    std::max(0.f, std::min(top + 2.f, 56.f) - std::max(top, 16.f)) * .5f;
+                depths[y * d.width + x] = left + 1 >= 48 && left + 1 < 80 &&
+                    top + 1 >= 16 && top + 1 < 56 ? .2f : .8f;
+                for (unsigned c = 0; c < 3; ++c)
+                    image[(y * d.width + x) * 4 + c] = uint8_t(std::lround(coverage * 255));
+            }
+            auto frame = generator.Prepare(d);
+            Expect(bool(frame), "shared scaler frame snapshot allocated");
+            if (!frame) return;
+            Metal::Encoder encoder{device};
+            Upload(device, encoder, depth.Get(), depths.data(), d.width, d.height, 4);
+            Upload(device, encoder, motion.Get(), vectors.data(), d.width, d.height, 4);
+            Upload(device, encoder, input.Get(), image.data(), d.width, d.height, 4);
+            BbMetalFx::Encode(encoder, scaler.Get(), {
+                .color = input.Get(), .depth = depth.Get(), .motion = motion.Get(),
+                .output = ui.Get(), .content_width = d.width, .content_height = d.height,
+                .jitter_x = jitter, .jitter_y = jitter_y, .reset = n == 0});
+            const bool share = n >= 24 && n < 26 ? !linked : linked;
+            generator.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get(),
+                              share ? scaler.Get() : nullptr);
+            generator.FinishUi(encoder, frame, ui.Get());
+            SceneDisplay(device, encoder, generator, frame, ui.Get(), display.Get());
+            encoder.CopyTexture(frame->scene_display.Get(), 0, 0, {}, display.Get(), 0, 0, {},
+                                {d.out_width, d.out_height, 1});
+            generator.Interpolate(encoder, frame, display.Get());
+            auto readback = [Dev(device) newBufferWithLength:d.out_width * d.out_height * 8
+                options:MTLResourceStorageModeShared];
+            encoder.CopyTextureToBuffer(frame->generated.Get(), 0, 0, {},
+                {d.out_width, d.out_height, 1}, {(__bridge void*)readback, 0},
+                d.out_width * 8, d.out_width * d.out_height * 8);
+            device.Wait(encoder.Submit());
+            if (n == 24 || n == 26)
+                Expect(!frame->interpolated.load(), "switching scaler sharing resets framegen history");
+            if (n == 25)
+                Expect(frame->interpolated.load(), "a stable scaler resumes after one seed frame");
+            if (n >= 16 && n < 24) {
+                const auto* pixels = static_cast<const _Float16*>(readback.contents);
+                double sum = 0, weighted = 0;
+                for (uint32_t x = 0; x < d.out_width; ++x) {
+                    const float v = float(pixels[(36 * d.out_width + x) * 4]);
+                    Expect(std::isfinite(v), "jittered interpolation remains finite");
+                    sum += v; weighted += x * v;
+                }
+                const double centre = sum > 0 ? weighted / sum : -1;
+                sum = weighted = 0;
+                for (uint32_t y = 0; y < d.out_height; ++y) {
+                    const float v = float(pixels[(y * d.out_width + 64) * 4]);
+                    Expect(std::isfinite(v), "vertical jittered interpolation remains finite");
+                    sum += v; weighted += y * v;
+                }
+                const double centre_y = sum > 0 ? weighted / sum : -1;
+                minimum = std::min(minimum, centre); maximum = std::max(maximum, centre);
+                minimum_y = std::min(minimum_y, centre_y); maximum_y = std::max(maximum_y, centre_y);
+                Expect(frame->interpolated.load() && std::abs(centre - 63.5) < .5 &&
+                           std::abs(centre_y - 35.5) < .5,
+                       "resolved-color framegen does not reintroduce raster jitter");
+            }
+        }
+        std::printf("Jitter phases (%s scaler): centre x %.3f..%.3f, y %.3f..%.3f\n",
+                    linked ? "shared" : "separate", minimum, maximum, minimum_y, maximum_y);
+        Expect(maximum - minimum < .5 && maximum_y - minimum_y < .5,
+               "static generated geometry stays stable across jitter phases");
+    }
+}
+
+void MovingRails(Metal::Device& device) {
+    using namespace BbFrameGen;
+    Generator generator{device};
+    auto d = Description();
+    d.width = d.out_width = 256; d.height = d.out_height = 144;
+    auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
+    auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
+    auto ui = Texture(device, d.ui_format, d.out_width, d.out_height);
+    auto display = Texture(device, MTLPixelFormatRGBA16Float, d.out_width, d.out_height);
+    const auto foreground = [](uint32_t x, int shift) {
+        return (int(x) - 32 - shift + 256) % 24 < 4;
+    };
+    const auto background = [](uint32_t x, uint32_t y) { return (x / 8 + y / 8) % 2 ? 96u : 32u; };
+    const auto linear = [](unsigned v) {
+        const float x = float(v) / 255;
+        return x <= .04045f ? x / 12.92f : std::pow((x + .055f) / 1.055f, 2.4f);
+    };
+    for (unsigned n = 0; n < 8; ++n, ++d.sequence) {
+        std::vector<float> depths(d.width * d.height);
+        std::vector<_Float16> vectors(d.width * d.height * 2, 0);
+        std::vector<uint8_t> image(d.width * d.height * 4, 255);
+        for (uint32_t y = 0; y < d.height; ++y) for (uint32_t x = 0; x < d.width; ++x) {
+            const auto p = y * d.width + x;
+            const bool rail = foreground(x, n * 6);
+            depths[p] = rail ? .2f : .8f;
+            vectors[p * 2] = rail ? -6 : 0;
+            const auto value = rail ? 224u : background(x, y);
+            for (unsigned c = 0; c < 3; ++c) image[p * 4 + c] = value;
+        }
+        auto frame = generator.Prepare(d);
+        Expect(bool(frame), "moving rail snapshot allocated");
+        if (!frame) return;
+        Metal::Encoder encoder{device};
+        Upload(device, encoder, depth.Get(), depths.data(), d.width, d.height, 4);
+        Upload(device, encoder, motion.Get(), vectors.data(), d.width, d.height, 4);
+        Upload(device, encoder, ui.Get(), image.data(), d.width, d.height, 4);
+        generator.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get());
+        generator.FinishUi(encoder, frame, ui.Get());
+        SceneDisplay(device, encoder, generator, frame, ui.Get(), display.Get());
+        encoder.CopyTexture(frame->scene_display.Get(), 0, 0, {}, display.Get(), 0, 0, {},
+                            {d.out_width, d.out_height, 1});
+        generator.Interpolate(encoder, frame, display.Get());
+        auto readback = [Dev(device) newBufferWithLength:d.width * d.height * 8
+            options:MTLResourceStorageModeShared];
+        encoder.CopyTextureToBuffer(frame->generated.Get(), 0, 0, {}, {d.width, d.height, 1},
+            {(__bridge void*)readback, 0}, d.width * 8, d.width * d.height * 8);
+        device.Wait(encoder.Submit());
+        if (n == 7) {
+            const auto* pixels = static_cast<const _Float16*>(readback.contents);
+            double generated_error = 0, real_error = 0, fallback_error = 0;
+            unsigned count = 0;
+            for (uint32_t y = 32; y < 112; ++y) for (uint32_t x = 48; x < 208; ++x) {
+                const float expected = linear(foreground(x, n * 6 - 3) ? 224u : background(x, y));
+                const float generated = float(pixels[(y * d.width + x) * 4]);
+                const float real = linear(image[(y * d.width + x) * 4]);
+                // Evaluate the proposed depth-only fallback against known midpoint
+                // geometry. A depth change alone cannot tell which surface is visible
+                // halfway through the pair; restoring current pixels can erase rails.
+                const bool depth_change = foreground(x, n * 6) != foreground(x, (n - 1) * 6);
+                generated_error += std::abs(generated - expected);
+                real_error += std::abs(real - expected);
+                fallback_error += std::abs((depth_change ? real : generated) - expected);
+                ++count;
+            }
+            generated_error /= count; real_error /= count; fallback_error /= count;
+            std::printf("Moving rails midpoint MAE: generated %.4f, current %.4f, depth-only fallback %.4f\n",
+                        generated_error, real_error, fallback_error);
+            Expect(frame->interpolated.load() && generated_error < real_error * .6,
+                   "moving foreground and exposed background track the midpoint geometry");
+        }
+    }
+}
+
+void BenchmarkSharedScaler(Metal::Device& device) {
+    if (!std::getenv("BB_FRAMEGEN_BENCHMARK")) return;
+    using namespace BbFrameGen;
+    std::vector<double> timings[2];
+    // Counterbalance order to reduce warmup/clock bias. This times the complete
+    // offscreen upscale/capture/interpolation submission, without presentation.
+    for (bool linked : {false, true, true, false}) {
+        Generator generator{device};
+        auto d = Description();
+        d.width = 960; d.height = 540; d.out_width = 1920; d.out_height = 1080;
+        auto depth = Texture(device, MTLPixelFormatDepth32Float, d.width, d.height);
+        auto motion = Texture(device, MTLPixelFormatRG16Float, d.width, d.height);
+        auto input = Texture(device, d.ui_format, d.width, d.height);
+        auto ui = Metal::CreateTexture(device, {.pixel_format = d.ui_format,
+            .width = d.out_width, .height = d.out_height, .render_target = true,
+            .shader_write = true}, "benchmark upscale output", nullptr);
+        auto display = Texture(device, MTLPixelFormatRGBA16Float, d.out_width, d.out_height);
+        auto scaler = BbMetalFx::CreateScaler(device, {
+            .color_format = d.ui_format, .depth_format = MTLPixelFormatDepth32Float,
+            .motion_format = MTLPixelFormatRG16Float, .output_format = d.ui_format,
+            .width = d.width, .height = d.height,
+            .out_width = d.out_width, .out_height = d.out_height});
+        Expect(bool(scaler), "benchmark temporal scaler created");
+        if (!scaler) return;
+        std::vector<float> depths(d.width * d.height, .5f);
+        std::vector<_Float16> vectors(d.width * d.height * 2, 0);
+        std::vector<uint8_t> image(d.width * d.height * 4, 255);
+        for (uint32_t y = 0; y < d.height; ++y) for (uint32_t x = 0; x < d.width; ++x)
+            for (unsigned c = 0; c < 3; ++c)
+                image[(y * d.width + x) * 4 + c] = (x / 8 + y / 8) % 2 ? 192 : 32;
+        Metal::Encoder initial{device};
+        Upload(device, initial, depth.Get(), depths.data(), d.width, d.height, 4);
+        Upload(device, initial, motion.Get(), vectors.data(), d.width, d.height, 4);
+        Upload(device, initial, input.Get(), image.data(), d.width, d.height, 4);
+        device.Wait(initial.Submit());
+        for (unsigned n = 0; n < 32; ++n, ++d.sequence) {
+            auto frame = generator.Prepare(d);
+            Expect(bool(frame), "benchmark snapshot available");
+            if (!frame) return;
+            Metal::Encoder encoder{device};
+            auto cb = (__bridge id<MTLCommandBuffer>)encoder.CommandBuffer();
+            BbMetalFx::Encode(encoder, scaler.Get(), {
+                .color = input.Get(), .depth = depth.Get(), .motion = motion.Get(),
+                .output = ui.Get(), .content_width = d.width, .content_height = d.height,
+                .reset = n == 0});
+            generator.Capture(encoder, frame, depth.Get(), motion.Get(), ui.Get(),
+                              linked ? scaler.Get() : nullptr);
+            generator.FinishUi(encoder, frame, ui.Get());
+            SceneDisplay(device, encoder, generator, frame, ui.Get(), display.Get());
+            encoder.CopyTexture(frame->scene_display.Get(), 0, 0, {}, display.Get(), 0, 0, {},
+                                {d.out_width, d.out_height, 1});
+            generator.Interpolate(encoder, frame, display.Get());
+            device.Wait(encoder.Submit());
+            const double ms = (cb.GPUEndTime - cb.GPUStartTime) * 1000;
+            if (n >= 8 && ms > 0) timings[linked].push_back(ms);
+        }
+    }
+    for (unsigned i = 0; i < 2; ++i) {
+        auto& t = timings[i];
+        std::sort(t.begin(), t.end());
+        Expect(!t.empty(), "benchmark GPU timestamps available");
+        if (!t.empty()) std::printf("1080p upscale+framegen (%s scaler): median %.3f ms, p95 %.3f ms (%zu samples)\n",
+            i ? "shared" : "separate", t[t.size() / 2], t[(t.size() - 1) * 95 / 100], t.size());
+    }
+}
+
 void Gpu(Metal::Device& device) {
     using namespace BbFrameGen;
     Generator generator{device};
@@ -696,9 +953,13 @@ int main() {
         if (BbFrameGen::Supported(device)) {
             ForegroundMotion(device);
             PeriodicMotion(device);
+            SharedScalerJitter(device);
+            MovingRails(device);
+            BenchmarkSharedScaler(device);
             Gpu(device);
             GammaSlices(device);
             CroppedDisplay(device);
+            Expect(device.ErrorCount() == 0, "framegen fixtures complete without GPU errors");
         } else
             std::printf("SKIP: MetalFX frame interpolation unsupported\n");
     }

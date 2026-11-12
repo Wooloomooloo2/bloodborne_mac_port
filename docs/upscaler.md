@@ -106,6 +106,14 @@ the background. Equal-depth ties retain the centre sample. Invalid depth samples
 are ignored and non-finite vectors become zero. The temporal upscaler continues
 to receive the original field; motion remains in render pixels (MetalFX performs
 the output-resolution conversion). A second pass identifies changes made by the HUD.
+
+MetalFX Temporal also shares its scaler with the interpolator, allowing MetalFX
+to reuse preprocessing. The frame retains the scaler through deferred encoding
+and GPU completion. Changing the scaler or switching to/from an independent
+provider resets interpolation history; unsupported combined configurations fall
+back to independent preprocessing. Resolved color continues to use zero jitter
+offset in the interpolator. An offscreen two-axis jitter test covers this boundary.
+
 Interpolation reads through the actual video-out view after the game's gamma LUT,
 so its channel swizzle and sRGB decode match the real frame. Source coordinates
 clamp to the actual video-out texture's width and height, including native 16:10
@@ -146,15 +154,17 @@ display policy prevents this pacing-induced loss of real FPS; interpolation stil
 GPU work and cannot guarantee an unchanged real rate in a GPU-limited scene.
 
 Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
-timing, and gaps in real-frame sequence reset history. Menus/loading screens with
+timing, cap changes, and gaps in real-frame sequence reset history. Source periods
+outside 0.5–1.5 times the configured cap period also withhold generated presentation;
+the current real frame seeds history so the next normal adjacent pair can resume.
+Menus/loading screens with
 no matching scene use real frames. Unsupported devices/SDKs retain normal
 presentation. The legacy FSR 1 presenter pass and 10-bit video-out conversion use
 real frames alone. The MetalFX effect is encoded on the existing render queue;
 there is no extra interpolation queue or CPU wait per generated frame.
 
-This remains experimental: interpolation currently sees the composited display
-image, and the mask restores the current HUD footprint rather than reconstructing
-the scene hidden by the previous HUD. Moving/fading HUD elements, transparency and
+This remains experimental: interpolation uses the pre-HUD scene through the retail
+gamma pass, and the mask restores the current HUD footprint. Moving/fading HUD elements, transparency and
 disocclusions can still leave artifacts. Extended gameplay, input latency, GPU cost,
 and long-session behavior still require QA.
 

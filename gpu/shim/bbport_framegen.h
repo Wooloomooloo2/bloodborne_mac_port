@@ -37,6 +37,7 @@ struct Description {
     uint32_t width{}, height{}, out_width{}, out_height{}, ui_format{};
     uint64_t sequence{};
     float interval{}, near_plane{}, far_plane{}, vertical_fov{}; // seconds, radians
+    uint32_t real_cap{}; // zero: no configured-cadence check (standalone callers)
     bool reset{};
 };
 
@@ -47,14 +48,15 @@ struct Description {
 struct Frame {
     Description description;
     Metal::Object depth, motion, before_ui, ui_change, ui_mask, color, generated;
-    Metal::Object source_ui, scene_display, real;
+    Metal::Object source_ui, scene_display, real, scaler;
     bool scene_ready = false; // recorder thread, reset for every lease
     std::atomic<bool> interpolated{false};
 };
 using FramePtr = std::shared_ptr<Frame>;
 
 // Only contiguous real frames with finite camera/timing inputs can share
-// history.
+// history. A configured cap also rejects stalls and catch-up bursts; the
+// rejected frame seeds history so the next normal pair can resume.
 bool Continuous(const Description& previous, const Description& current);
 // Offset of the real image from its intermediate's absolute deadline. Measured cadence
 // validates timing only: acquisition delays must never accumulate in later pairs.
@@ -71,8 +73,10 @@ class Generator {
     // generation.
     FramePtr Prepare(const Description& description);
     // Recorder thread, in scene order: before the first HUD draw, then before
-    // display copy.
-    void Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion, void* ui);
+    // display copy. An optional MetalFX temporal scaler shares its preprocessing
+    // with the interpolator. The frame retains it through GPU completion.
+    void Capture(Metal::Encoder& e, const FramePtr& frame, void* depth, void* motion, void* ui,
+                 void* temporal_scaler = nullptr);
     void FinishUi(Metal::Encoder& e, const FramePtr& frame, void* ui);
     // Verified retail gamma pass only. Replay its exact scene view/LUT/sampler
     // against the pre-HUD snapshot, into the real display target's pixel format.
