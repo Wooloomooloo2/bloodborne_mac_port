@@ -465,7 +465,7 @@ do {
 // High-resolution ultrawide selection on memory-constrained Macs.
 do {
     let gib: UInt64 = 1024 * 1024 * 1024
-    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440)] {
+    for size in [PixelSize(3440, 1440), PixelSize(3840, 1620), PixelSize(5120, 1440)] {
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 16 * gib) != nil, "16 GB wide memory warning")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 24 * gib) == nil, "24 GB boundary")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
@@ -481,7 +481,7 @@ do {
           && Resolution.ultrawideMemoryWarning(PixelSize(1920, 1200), memoryBytes: 16 * gib) == nil, "16:10 memory warning")
     check(Resolution.wideLabel(PixelSize(1920, 1200)) == "1920 × 1200 · 16:10" && Resolution.wideLabel(PixelSize(3440, 1440)).hasSuffix("21:9")
           && Resolution.wideLabel(PixelSize(2560, 1080)).hasSuffix("21:9") && Resolution.wideLabel(PixelSize(5120, 1440)).hasSuffix("32:9")
-          && Resolution.wideLabel(PixelSize(5120, 2160)).hasSuffix("21:9"), "aspect labels")
+          && Resolution.wideLabel(PixelSize(3840, 1620)).hasSuffix("21:9") && Resolution.wideLabel(PixelSize(5120, 2160)).hasSuffix("21:9"), "aspect labels")
     let sixteen = GameSettings(ini: IniFile(text: "ultrawide_res=2560x1600\n"))
     check(sixteen.ultrawide && sixteen.wideOutput == PixelSize(2560, 1600), "16:10 from bbport.ini")
 }
