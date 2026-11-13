@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-11-07)
+## Status (2026-11-10)
 
-**Current version: [mac-v0.5.14](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.14)** (download the app, or build it as below).
+**Current version: [mac-v0.5.15](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.15)** (download the app, or build it as below).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -32,13 +32,24 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** **0.6** will be **MetalFX frame generation** (#64, from @evill33t): it comes out as
-pre-releases first and only once it plays at least as well as with frame generation off. Other
-fixes and features keep coming as 0.5.x releases until then.
+**Releases:** 0.5.x is the stable line, with fixes and features from master. **0.7** will be
+**online play**: the game's own bells, summons and invasions through a community server. It's
+being tested in contributors' forks and will come back as one tested pull request, reviewed and
+collected on the `release-0.7` branch.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
 sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
-menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play. Online play (#9) is still in progress.
+menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, and 0.5.15 makes controller buttons remappable.
+
+### New in 0.5.15: remappable controller buttons
+
+- **Controller buttons can be remapped** in the launcher: **Controls > Controller > Controller
+  Buttons…**. Click a slot and press the button you want; each action takes up to four buttons,
+  including Select/Share/View, the back paddles (Xbox Elite, DualSense Edge) and the Misc button.
+  **Reset to Defaults** puts everything back. Triggers keep their analog pull when bound to L2/R2.
+  The settings are stored as `bind_pad_` lines in `bbport.ini`; the L3 + R3 menu shortcut always
+  uses the sticks.
+- **Builds on macOS 15 with Xcode 16** (#141, from [@byebyevlad](https://github.com/byebyevlad)).
 
 ### New in 0.5.14: long sessions no longer freeze
 
@@ -49,7 +60,7 @@ menu, and 0.5.14 fixes the freeze after 1.5 to 2 hours of play. Online play (#9)
   same thing). The results now arrive in order; a 2.5-hour test session stayed at 60 FPS with
   that memory area at 3% full. No need to restart every 90 minutes any more.
 - **M5 Macs on macOS 27.2: a fix for the GPU process crash about 40 seconds after start** (#129,
-  waiting for the reporter's confirmation). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
+  confirmed by the reporter). The Metal pipeline archive keeps only render pipelines there (`BB_METAL_ARCHIVE=0` turns the archive off,
   `=render` forces render-only elsewhere). Other Macs are unchanged.
 
 ### New in 0.5.13: Mac Settings in the game's menu
@@ -492,7 +503,7 @@ the log.
   67 times a frame (372 Metal encoders per frame); skipping tessellation altogether as an upper
   bound saves 1–2 ms of GPU time per frame (6.6–7.5 → 5.6 ms). Keeping those draws inside the pass is next
   (Mojahed's #39 starts on it).
-- **0.6:** MetalFX frame generation (#64), as pre-releases first. Online co-op (#9) after that.
+- **0.7:** online play (bells, summons and invasions through a community server), once it has been tested in the forks.
 - A faster, more direct mouse camera.
 - Confirm the missing-geometry fix on more Macs; the frame-time judder.
 - Signing and notarisation of the downloadable app (today it must be released from quarantine).
@@ -589,6 +600,9 @@ example a 60 FPS patch made for jailbroken consoles) is rejected: this port appl
 - A Mac with **Apple Silicon** running **macOS 15 or newer**, with at least **16 GB** of memory
 - **Rosetta 2** (`softwareupdate --install-rosetta`)
 - **Xcode Command Line Tools** (`xcode-select --install`)
+  With Command Line Tools 27 alone, the launcher is built against an older macOS SDK that is
+  still installed (the macOS 27 SDK there lacks SwiftUI's macro plugin; the build says which SDK
+  it uses). If no older SDK is left, install the full Xcode.
 - **Homebrew** (arm64) with build tools:
   `brew install cmake ninja nasm glslang pkgconf boost cryptopp`
 - **Python 3** (patch compiler and eboot preparation scripts)
@@ -1008,6 +1022,7 @@ Thank you to everyone who sent pull requests:
   long-session crash guards (#100, #114), stale descriptor hardening (#98), the GPU watchdog
   fix (#107), and MetalFX frame
   generation (#64, in progress).
+- **[byebyevlad](https://github.com/byebyevlad)**: builds on macOS 15 with Xcode 16 (#141).
 
 Thanks also to everyone who reports issues and tests builds on their Macs. Reports, logs and
 measurements that shaped recent releases came from @noelmiller, @MojahedAbushawish, @DiAvisoo,

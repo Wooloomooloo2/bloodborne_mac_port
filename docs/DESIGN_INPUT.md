@@ -50,7 +50,30 @@ only reaches the ceiling sooner. The game's own Camera speed option raises the c
    mouse counts while the camera is free; stick emulation otherwise (lock-on, cutscenes, menus).
    If it fails, step 1 stands.
 
+## Controller buttons (2026-11-08, released in 0.5.15)
+
+Owner decisions 2026-11-08: controller buttons can be remapped too, on the keyboard's model, and
+the launcher listens for the button (a list of names fails players whose pad is not labelled
+like a PlayStation one, and misses paddles).
+- **Storage:** `bbport.ini` `bind_pad_<input>=Button,Button` (up to 4) for the 16 pad inputs
+  (`bind_pad_cross` ... `bind_pad_dpad_right`, `bind_pad_options`, `bind_pad_touchpad`). Buttons
+  are named by position as on a PlayStation pad (SDL's layout: South = `Cross`), plus `Select`
+  (SDL Back: Share/Create/View), `Paddle 1`-`4` (SDL right paddle 1, right 2, left 1, left 2:
+  Xbox Elite P1-P4; DualSense Edge back buttons = Paddle 1 and 3) and `Misc` (SDL Misc1: mic,
+  capture, Xbox Share). Absent = default (the same name; Touchpad = `Touchpad,Select`, the
+  0.5.14 behaviour), empty = unbound, unknown names logged and ignored. Sticks are not remappable.
+- **Triggers:** pressed past 30/255. A trigger bound to L2/R2 keeps its analog value; any other
+  button bound there presses it fully; a trigger bound elsewhere presses that input.
+- `remap_buttons` (`src/runtime_pad.c`) applies it to the controller only; keyboard bindings are
+  separate. The L3 + R3 menu shortcut (host side) always uses the physical sticks.
+- **Launcher:** Controls > Controller > "Controller Buttons…" sheet: rows per input like the
+  keyboard's; click a slot, press the button. The launcher reads the controller with Apple's
+  GameController (frontmost app only) and names buttons by SDL's positions; Nintendo pads may
+  differ there (GameController names A/B by label, SDL by position). `PadBindings` in
+  `launcher/Model/Bindings.swift`; `tests/test_pad.c` checks its tables against the C ones and
+  tests the mapping on SDL's virtual controller (`test_controller_remap`).
+
 ## Not now
 
-Rebinding inside the in-game menu; controller button remapping (same model); keyboard glyphs in
+Rebinding inside the in-game menu; keyboard glyphs in
 the game's prompts (it only has PlayStation ones).

@@ -110,3 +110,100 @@ struct Bindings: Equatable {
         }
     }
 }
+
+/// A pad input of the game that controller buttons can press (src/runtime_bindings.c, same ini
+/// keys and defaults).
+struct PadAction: Identifiable, Hashable {
+    let key: String
+    let label: String
+    let defaults: [String]
+    var id: String { key }
+}
+
+/// The controller bindings: bbport.ini bind_pad_<input>=Button,Button, buttons named by position
+/// as on a PlayStation pad, plus Select, the paddles and Misc. An absent key is the default (the
+/// button of the same name), an empty one unbinds.
+struct PadBindings: Equatable {
+    static let buttons = ["Cross", "Circle", "Square", "Triangle", "L1", "R1", "L2", "R2", "L3", "R3", "Options", "Touchpad", "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right", "Select", "Paddle 1", "Paddle 2", "Paddle 3", "Paddle 4", "Misc"]
+
+    static let actions: [PadAction] = [
+        PadAction(key: "bind_pad_r1", label: "Attack (R1)", defaults: ["R1"]),
+        PadAction(key: "bind_pad_r2", label: "Charged attack (R2)", defaults: ["R2"]),
+        PadAction(key: "bind_pad_l1", label: "Transform weapon (L1)", defaults: ["L1"]),
+        PadAction(key: "bind_pad_l2", label: "Firearm (L2)", defaults: ["L2"]),
+        PadAction(key: "bind_pad_circle", label: "Dodge, sprint (Circle)", defaults: ["Circle"]),
+        PadAction(key: "bind_pad_r3", label: "Lock on (R3)", defaults: ["R3"]),
+        PadAction(key: "bind_pad_cross", label: "Interact, confirm (Cross)", defaults: ["Cross"]),
+        PadAction(key: "bind_pad_square", label: "Quick item (Square)", defaults: ["Square"]),
+        PadAction(key: "bind_pad_triangle", label: "Blood Vial (Triangle)", defaults: ["Triangle"]),
+        PadAction(key: "bind_pad_l3", label: "L3", defaults: ["L3"]),
+        PadAction(key: "bind_pad_dpad_up", label: "D-pad up", defaults: ["D-pad Up"]),
+        PadAction(key: "bind_pad_dpad_down", label: "D-pad down", defaults: ["D-pad Down"]),
+        PadAction(key: "bind_pad_dpad_left", label: "D-pad left (left-hand weapon)", defaults: ["D-pad Left"]),
+        PadAction(key: "bind_pad_dpad_right", label: "D-pad right (right-hand weapon)", defaults: ["D-pad Right"]),
+        PadAction(key: "bind_pad_options", label: "Menu (Options)", defaults: ["Options"]),
+        PadAction(key: "bind_pad_touchpad", label: "Gestures (touchpad)", defaults: ["Touchpad", "Select"]),
+    ]
+
+    /// How a button is shown: its position on other pads where the name alone is unclear.
+    static func label(_ name: String) -> String {
+        switch name {
+        case "Select": "Select (Share, Create, View)"
+        case "Misc": "Misc (mic, capture, Xbox Share)"
+        default: name
+        }
+    }
+
+    private var bound: [String: [String]]
+
+    init() { bound = Dictionary(uniqueKeysWithValues: Self.actions.map { ($0.key, $0.defaults) }) }
+
+    init(ini: IniFile) {
+        self.init()
+        for action in Self.actions {
+            if let v = ini[action.key] { bound[action.key] = Self.parse(v) }
+        }
+    }
+
+    /// Names as the game reads them: trimmed, case-insensitive, unknown ones dropped, at most
+    /// `Bindings.slots`.
+    static func parse(_ value: String) -> [String] {
+        let names = value.split(separator: ",").compactMap { part in
+            let name = part.trimmingCharacters(in: .whitespaces)
+            return buttons.first { $0.caseInsensitiveCompare(name) == .orderedSame }
+        }
+        return Array(names.prefix(Bindings.slots))
+    }
+
+    subscript(action: PadAction) -> [String] {
+        get { bound[action.key] ?? action.defaults }
+        set { bound[action.key] = Array(newValue.prefix(Bindings.slots)) }
+    }
+
+    /// Puts `name` in slot `slot` of `action` (past the end: appended); nil clears the slot.
+    mutating func set(_ action: PadAction, slot: Int, to name: String?) {
+        var names = self[action]
+        if let name {
+            if let same = names.firstIndex(of: name) { names.remove(at: same) }
+            if slot < names.count { names[slot] = name } else { names.append(name) }
+        } else if slot < names.count {
+            names.remove(at: slot)
+        }
+        self[action] = names
+    }
+
+    var isDefault: Bool { Self.actions.allSatisfy { self[$0] == $0.defaults } }
+
+    /// The other inputs a button presses (a warning only: one button may press several).
+    func others(using name: String, besides action: PadAction) -> [PadAction] {
+        Self.actions.filter { $0 != action && self[$0].contains(name) }
+    }
+
+    /// Only the inputs changed from the defaults are written.
+    func apply(to ini: inout IniFile) {
+        for action in Self.actions {
+            let names = self[action]
+            ini[action.key] = names == action.defaults ? nil : names.joined(separator: ",")
+        }
+    }
+}

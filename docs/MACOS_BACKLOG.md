@@ -995,8 +995,8 @@ Each item: what was done for now, what the refinement is, and where it lives.
   - **Direct camera (spike, about a day):** find the camera's yaw/pitch in game memory and add the
     mouse motion to them while the camera is free (not locked on, not in cutscenes or menus);
     stick fallback otherwise. No speed ceiling, 1:1 feel.
-  - Rebinding in the in-game menu (today: the launcher, applied at the next start); controller
-    button remapping on the same model.
+  - Rebinding in the in-game menu (today: the launcher, applied at the next start). Controller
+    button remapping: done 2026-11-08, released in 0.5.15 (docs/DESIGN_INPUT.md).
 
 - **Updater trust (2026-10-20, launcher About + updates).** The launcher's updater
   (`launcher/App/Updater.swift`) checks the download against GitHub's SHA-256 asset digest, the
