@@ -207,10 +207,21 @@ struct CrashReport: Equatable {
     var issueURL: URL { issueLink().url }
 
     /// The user's home folder and any other /Users/<name> become ~, so reports don't carry names.
+    /// Online secrets kept in the files (`thd_token=`, `shadnet_password=` in bbport.ini, their
+    /// BB_ variables) become <redacted>.
     static func redact(_ text: String, home: String) -> String {
+        let text = redactSecrets(text)
         guard text.contains("/Users/") else { return text } // most lines (the session log redacts every line)
         var result = home.isEmpty ? text : text.replacingOccurrences(of: home, with: "~")
         result = result.replacingOccurrences(of: #"/Users/[^/\s:]+"#, with: "~", options: .regularExpression)
         return result
+    }
+
+    /// The value of a secret key; `keychain` (the secret is elsewhere) and empty values stay.
+    static func redactSecrets(_ text: String) -> String {
+        guard text.range(of: "token", options: .caseInsensitive) != nil
+                || text.range(of: "password", options: .caseInsensitive) != nil else { return text }
+        return text.replacingOccurrences(of: #"(?i)\b((?:BB_)?(?:thd_token|shadnet_password|shadnet_token))([ \t]*=[ \t]*["']?)(?!keychain\b)[^\s"',]+"#,
+                                         with: "$1$2<redacted>", options: .regularExpression)
     }
 }

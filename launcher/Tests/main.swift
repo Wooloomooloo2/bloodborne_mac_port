@@ -344,6 +344,11 @@ do {
     let signal = CrashReport(status: 139, log: "nothing\nuseful", logName: "game.log", system: mac, settings: [], home: home)
     check(signal.cause == nil && signal.summary == "The game stopped unexpectedly (signal 11)." && signal.report.contains("nothing\nuseful"), "signal status, end of log")
     check(CrashReport.redact("/Users/someone/x and /Users/hunter/y", home: home) == "~/x and ~/y", "other user folders redacted")
+    let ini = "online=1\nthd_online_id=Hunter\nthd_token=abc123.def\nshadnet_password = \"p@ss\"\nthd_token=keychain\nshadnet_token=\nsaves=/Users/hunter/s"
+    check(CrashReport.redact(ini, home: home) == "online=1\nthd_online_id=Hunter\nthd_token=<redacted>\nshadnet_password = \"<redacted>\"\nthd_token=keychain\nshadnet_token=\nsaves=~/s",
+          "online secrets in bbport.ini redacted, keychain and empty kept")
+    check(CrashReport.redact("export BB_THD_TOKEN=xyz BB_SHADNET_PASSWORD=pw", home: home) == "export BB_THD_TOKEN=<redacted> BB_SHADNET_PASSWORD=<redacted>",
+          "online secrets in variables redacted")
 
     let query = URLComponents(url: crash.issueURL, resolvingAgainstBaseURL: false)!.queryItems ?? []
     check(crash.issueURL.absoluteString.hasPrefix("https://github.com/Wooloomooloo2/bloodborne_mac_port/issues/new?"), "issue link")
