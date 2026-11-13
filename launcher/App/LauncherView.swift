@@ -403,6 +403,12 @@ struct LauncherView: View {
         SecureField("Password", text: $model.newShadnetPassword,
                     prompt: Text(model.shadnetPasswordStored ? "Stored in your keychain; type to replace it" : "Kept in your login keychain"))
             .disabled(model.online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty)
+        if model.online.shadnetAccepted && model.online.online
+            && model.online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty {
+            Label("No account yet: the game will say you are not signed in to the PlayStation Network. Enter your shadNet account name, then the password.",
+                  systemImage: "exclamationmark.circle")
+                .font(.caption).foregroundStyle(.red)
+        }
         Text(model.online.shadnetAccepted
              ? "Register at shadnet.shadps4.net. The password goes to your login keychain when the settings are saved (Play, or quitting), never into the file or the log."
              : "Off until you accept the warning above: the game won't sign in to shadNet.")
