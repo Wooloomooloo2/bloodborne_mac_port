@@ -13,6 +13,8 @@
 # Online play (the online module, gpu/bbnet; run.sh):
 #   online=1                 online play on (BB_ONLINE=1); the secrets below are read (file or
 #                            keychain) and exported only then
+#   The shadNet keys below are used only with online_pool=shadnet and shadnet_insecure_ok=1 (the
+#   launcher's warning accepted: the shadNet protocol sends the password unencrypted).
 #   shadnet_server=host:port the shadNet server (BB_SHADNET_SERVER; default srv.shadps4.net:31313)
 #   shadnet_webapi=url       its WebAPI (BB_SHADNET_WEBAPI; default http://<server host>:31315)
 #   shadnet_npid=name        the shadNet account (BB_SHADNET_NPID) ...
@@ -25,8 +27,8 @@
 #   p2p_port=3658            the UDP port for co-op traffic (BB_P2P_PORT; 3658, the PS4's, by
 #                            default; 0 = any free port; a busy port falls back to a free one)
 #   online_pool=huntersdream bells and summons through The Hunter's Dream (BB_NET_BACKEND=thd), the
-#                            default; online_pool=shadnet picks a shadNet server instead (also the
-#                            choice when no pool is named but only a shadNet account is) ...
+#                            default; online_pool=shadnet picks a shadNet server instead, opt-in:
+#                            only together with shadnet_insecure_ok=1 ...
 #   thd_online_id=name       ... with the Discord-linked account (BB_THD_ONLINE_ID) ...
 #   thd_token=secret         ... and its token (BB_THD_TOKEN; `scripts/online.py signin` writes both),
 #                            or thd_token=keychain: item service bbport-huntersdream, account = the
@@ -37,7 +39,7 @@
 # Values already in the environment win. Bash 3.2 (macOS /bin/bash) compatible.
 bb_launch_settings() { # ini file
     local line cap='' full='' hud='' compress='' online='' server='' webapi='' npid='' password='' community='' upnp='' p2p=''
-    local pool='' thd_id='' thd_token='' timing='' display=''
+    local pool='' shadnet_ok='' thd_id='' thd_token='' timing='' display=''
     # Clear values exported from the previous config, keeping explicit caller overrides.
     if [[ ${BB_LAUNCH_AUTO_LIMIT:-} == "${BB_FPS_LIMIT:-unset}" ]]; then unset BB_FPS_LIMIT; fi
     if [[ ${BB_LAUNCH_AUTO_FULLSCREEN:-} == "${BB_FULLSCREEN:-unset}" ]]; then unset BB_FULLSCREEN; fi
@@ -63,6 +65,7 @@ bb_launch_settings() { # ini file
         if [[ $line =~ ^upnp=([01])$ ]]; then upnp=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^p2p_port=([0-9]{1,5})$ ]]; then p2p=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^online_pool=(shadnet|huntersdream)$ ]]; then pool=${BASH_REMATCH[1]}; fi
+        if [[ $line =~ ^shadnet_insecure_ok=([01])$ ]]; then shadnet_ok=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_online_id=(.+)$ ]]; then thd_id=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^thd_token=(.+)$ ]]; then thd_token=${BASH_REMATCH[1]}; fi
         if [[ $line =~ ^texture_compression=([01])$ ]]; then compress=${BASH_REMATCH[1]}; fi
@@ -73,6 +76,16 @@ bb_launch_settings() { # ini file
     # The password and the token are looked up and exported only for online play (online=1, or
     # BB_ONLINE=1 from the environment, which wins): offline, no secret enters the environment.
     if [[ ${BB_ONLINE:-$online} != 1 ]]; then password='' thd_token=''; fi
+    # The pool: The Hunter's Dream unless the file says shadnet. shadNet is opt-in: its protocol
+    # sends the password unencrypted, so its account is used only after the player accepted that
+    # in the launcher (shadnet_insecure_ok=1); otherwise its keys are dropped, keychain unread.
+    [[ -n $pool ]] || pool=huntersdream
+    if [[ $pool != shadnet || $shadnet_ok != 1 ]]; then
+        if [[ $pool == shadnet && ${BB_ONLINE:-$online} == 1 ]]; then
+            echo "Online: shadNet is opt-in: accept its warning in the launcher's Online tab (shadnet_insecure_ok=1); not signing in to shadNet" >&2
+        fi
+        server='' webapi='' npid='' password=''
+    fi
     # Secrets kept in the login keychain instead of the file (`security find-generic-password`;
     # BB_KEYCHAIN_TOOL names another command, for tests). A lookup that finds nothing leaves the
     # value empty; an explicit "keychain" that finds nothing is reported.
@@ -108,11 +121,6 @@ bb_launch_settings() { # ini file
     if [[ -n $community && -z ${BB_COMMUNITY_SERVER:-} ]]; then export BB_COMMUNITY_SERVER=$community; fi
     if [[ -n $upnp && -z ${BB_UPNP:-} ]]; then export BB_UPNP=$upnp; fi
     if [[ -n $p2p && -z ${BB_P2P_PORT:-} ]]; then export BB_P2P_PORT=$p2p; fi
-    # The pool: The Hunter's Dream unless the file says shadnet, or names a shadNet account and
-    # no Hunter's Dream one (a file from before the pool key).
-    if [[ -z $pool ]]; then
-        if [[ -n $npid && -z $thd_id ]]; then pool=shadnet; else pool=huntersdream; fi
-    fi
     if [[ $pool == huntersdream && -z ${BB_NET_BACKEND:-} ]]; then export BB_NET_BACKEND=thd; fi
     if [[ -n $thd_id && -z ${BB_THD_ONLINE_ID:-} ]]; then export BB_THD_ONLINE_ID=$thd_id; fi
     if [[ -n $thd_token && -z ${BB_THD_TOKEN:-} ]]; then export BB_THD_TOKEN=$thd_token; fi

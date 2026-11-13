@@ -60,6 +60,9 @@ struct OnlineSettings: Equatable {
     var shadnetServer = ""
     var shadnetNpid = ""
     var shadnetPassword = StoredSecret.none
+    /// The player accepted that shadNet sends the password unencrypted (`shadnet_insecure_ok=1`):
+    /// shadNet is opt-in, launch_settings.sh ignores its account without this.
+    var shadnetAccepted = false
     var thdOnlineId = ""
     var thdToken = StoredSecret.none
     var upnp = true
@@ -79,12 +82,8 @@ struct OnlineSettings: Equatable {
         shadnetPassword = StoredSecret(iniValue: ini["shadnet_password"])
         thdOnlineId = ini["thd_online_id"] ?? ""
         thdToken = StoredSecret(iniValue: ini["thd_token"])
-        if let v = ini["online_pool"], let p = OnlinePool(rawValue: v) {
-            pool = p
-        } else {
-            // launch_settings.sh: a file naming only a shadNet account is from before the pool key.
-            pool = !shadnetNpid.isEmpty && thdOnlineId.isEmpty ? .shadnet : .huntersdream
-        }
+        if let v = ini["online_pool"], let p = OnlinePool(rawValue: v) { pool = p }
+        if let v = flag("shadnet_insecure_ok") { shadnetAccepted = v }
         if let v = flag("upnp") { upnp = v }
         if let v = ini["p2p_port"], let port = Self.port(from: v) { p2pPort = port }
     }
@@ -106,11 +105,15 @@ struct OnlineSettings: Equatable {
         let npid = shadnetNpid.trimmingCharacters(in: .whitespaces)
         ini["shadnet_npid"] = npid.isEmpty ? nil : npid
         ini["shadnet_password"] = shadnetPassword.iniValue
+        ini["shadnet_insecure_ok"] = shadnetAccepted ? "1" : nil
         ini["thd_online_id"] = thdOnlineId.isEmpty ? nil : thdOnlineId
         ini["thd_token"] = thdToken.iniValue
         ini["upnp"] = upnp ? "1" : "0"
         ini["p2p_port"] = String(p2pPort)
     }
+
+    /// bbport.ini says shadNet and the player accepted its warning (launch_settings.sh's rule).
+    var usesShadnet: Bool { pool == .shadnet && shadnetAccepted }
 
     /// A password or token written in the file: run.sh wants that file owner-only.
     var hasSecretInFile: Bool { shadnetPassword.isInFile || thdToken.isInFile }

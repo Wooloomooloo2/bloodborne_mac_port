@@ -377,8 +377,9 @@ do {
     check(defaults.shadnetServer == "" && defaults.shadnetNpid == "" && defaults.shadnetPassword == .none, "default shadNet: nothing")
     check(defaults.thdOnlineId == "" && defaults.thdToken == .none && !defaults.hasSecretInFile, "default Hunter's Dream: nothing")
 
-    let read = OnlineSettings(ini: IniFile(text: "online=1\nonline_pool=shadnet\nshadnet_server=example.org:31313\nshadnet_npid=hunter\nshadnet_password=keychain\nthd_online_id=dreamer\nthd_token=abc123\nupnp=0\np2p_port=0\ncommunity_server=https://example.org\n"))
-    check(read.online && read.pool == .shadnet && read.shadnetServer == "example.org:31313" && read.shadnetNpid == "hunter", "read shadNet keys")
+    check(!defaults.shadnetAccepted && !defaults.usesShadnet, "shadNet is opt-in")
+    let read = OnlineSettings(ini: IniFile(text: "online=1\nonline_pool=shadnet\nshadnet_insecure_ok=1\nshadnet_server=example.org:31313\nshadnet_npid=hunter\nshadnet_password=keychain\nthd_online_id=dreamer\nthd_token=abc123\nupnp=0\np2p_port=0\ncommunity_server=https://example.org\n"))
+    check(read.online && read.pool == .shadnet && read.shadnetAccepted && read.usesShadnet && read.shadnetServer == "example.org:31313" && read.shadnetNpid == "hunter", "read shadNet keys")
     check(read.shadnetPassword == .keychain && read.thdOnlineId == "dreamer" && read.thdToken == .inFile("abc123"), "read secrets as stored")
     check(!read.upnp && read.p2pPort == 0 && read.hasSecretInFile, "read upnp, port, a token in the file")
     // The shell's rules: flags are exactly 0 or 1; a bad port or pool is ignored.
@@ -387,9 +388,10 @@ do {
     check(OnlineSettings.port(from: "3658") == 3658 && OnlineSettings.port(from: "0") == 0 && OnlineSettings.port(from: "65535") == 65535, "ports")
     check(OnlineSettings.port(from: "65536") == nil && OnlineSettings.port(from: "") == nil && OnlineSettings.port(from: "12a") == nil, "bad ports")
     check(OnlineSettings.port(from: "-1") == nil && OnlineSettings.port(from: "123456") == nil && OnlineSettings.port(from: "٣") == nil, "digits only, five at most")
-    // The pool when the file names none (launch_settings.sh): shadNet only for a file that holds
-    // only a shadNet account.
-    check(OnlineSettings(ini: IniFile(text: "online=1\nshadnet_npid=hunter\n")).pool == .shadnet, "only a shadNet account: shadNet")
+    // The pool when the file names none (launch_settings.sh): The Hunter's Dream; shadNet is opt-in.
+    check(OnlineSettings(ini: IniFile(text: "online=1\nshadnet_npid=hunter\n")).pool == .huntersdream, "only a shadNet account: still The Hunter's Dream")
+    let unaccepted = OnlineSettings(ini: IniFile(text: "online_pool=shadnet\nshadnet_insecure_ok=yes\n"))
+    check(unaccepted.pool == .shadnet && !unaccepted.shadnetAccepted && !unaccepted.usesShadnet, "shadNet chosen, warning not accepted")
     check(OnlineSettings(ini: IniFile(text: "shadnet_npid=hunter\nthd_online_id=dreamer\n")).pool == .huntersdream, "both accounts: The Hunter's Dream")
     check(OnlineSettings(ini: IniFile(text: "online=1\n")).pool == .huntersdream, "no account: The Hunter's Dream")
 
@@ -402,7 +404,7 @@ do {
     let back = OnlineSettings(ini: file)
     check(back.online == read.online && back.pool == read.pool && back.shadnetNpid == read.shadnetNpid, "round trip accounts")
     check(back.shadnetPassword == .keychain && back.thdToken == .inFile("abc123") && back.thdOnlineId == "dreamer", "round trip secrets unchanged")
-    check(back.upnp == read.upnp && back.p2pPort == read.p2pPort, "round trip upnp and port")
+    check(back.upnp == read.upnp && back.p2pPort == read.p2pPort && back.shadnetAccepted, "round trip upnp, port, shadNet opt-in")
     check(file["online"] == "1" && file["online_pool"] == "shadnet" && file["upnp"] == "0" && file["p2p_port"] == "0", "keys as the shell reads them")
     check(file["shadnet_server"] == nil && file["shadnet_password"] == "keychain" && file["thd_token"] == "abc123", "blank server removed; secrets as read")
     check(file["community_server"] == "https://example.org" && file["shadnet_webapi"] == "http://example.org:31315" && file["upscaler"] == "metalfx", "other keys kept")
@@ -412,7 +414,9 @@ do {
     cleared.online = false
     cleared.upnp = true
     cleared.p2pPort = 65535
+    cleared.shadnetAccepted = false
     cleared.apply(to: &file)
+    check(file["shadnet_insecure_ok"] == nil, "opt-in withdrawn: key removed")
     check(file["shadnet_npid"] == nil && file["online"] == "0" && file["upnp"] == "1" && file["p2p_port"] == "65535", "cleared account; flags written explicitly")
     // The shell reads what the launcher wrote (scripts/launch_settings.sh).
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("launcher-online-\(getpid()).ini")

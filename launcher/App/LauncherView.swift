@@ -297,9 +297,14 @@ struct LauncherView: View {
                 .pickerStyle(.segmented)
                 if model.online.pool == .huntersdream {
                     huntersDreamRows
-                } else {
+                }
+            }
+            if model.online.pool == .shadnet {
+                shadnetWarning
+                Section("shadNet account") {
                     shadnetRows
                 }
+                .disabled(!model.online.shadnetAccepted)
             }
             Section("Connection") {
                 Toggle("Ask the router to forward the co-op port (UPnP)", isOn: $model.online.upnp)
@@ -373,6 +378,24 @@ struct LauncherView: View {
         }
     }
 
+    /// shadNet is opt-in: its protocol sends the password in clear, so the player reads why and
+    /// accepts it before the account is used (`shadnet_insecure_ok=1`, launch_settings.sh).
+    private var shadnetWarning: some View {
+        Section("shadNet: read this first") {
+            Label {
+                Text("shadNet sends your password unencrypted").font(.headline)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            }
+            Text("The shadNet protocol has no encryption. Your account name and password travel to the shadNet server as plain text, so anyone who can see your network traffic (public or shared Wi-Fi, your network provider, anything between you and the server) can read them.")
+            Text("Make a shadNet account just for this game, with a username and password you have never used anywhere else: not your Apple Account, email, PlayStation, Discord, Steam or any other account. If you have used this password anywhere else, change it there.")
+                .fontWeight(.semibold)
+            Text("The Hunter's Dream pool doesn't have this problem: it signs in with Discord over an encrypted connection and never sees a password.")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("I understand: use shadNet, with a password I use nowhere else", isOn: $model.online.shadnetAccepted)
+        }
+    }
+
     @ViewBuilder private var shadnetRows: some View {
         TextField("Server", text: $model.online.shadnetServer, prompt: Text(OnlineSettings.defaultShadnetServer))
         TextField("Account name", text: $model.online.shadnetNpid, prompt: Text("Your shadNet online id"))
@@ -380,7 +403,9 @@ struct LauncherView: View {
         SecureField("Password", text: $model.newShadnetPassword,
                     prompt: Text(model.shadnetPasswordStored ? "Stored in your keychain; type to replace it" : "Kept in your login keychain"))
             .disabled(model.online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty)
-        Text("Register at shadnet.shadps4.net. The shadNet protocol is unencrypted, so use a password you use nowhere else; it goes to your login keychain when the settings are saved (Play, or quitting), never into the file or the log.")
+        Text(model.online.shadnetAccepted
+             ? "Register at shadnet.shadps4.net. The password goes to your login keychain when the settings are saved (Play, or quitting), never into the file or the log."
+             : "Off until you accept the warning above: the game won't sign in to shadNet.")
             .font(.caption).foregroundStyle(.secondary)
     }
 }

@@ -839,8 +839,9 @@ python3 scripts/online.py signin --ini ~/Library/Application\ Support/Bloodborne
 
 which writes `online_pool=huntersdream`, `thd_online_id=` and `thd_token=` (keep the token to
 yourself) and leaves the rest of the file alone. The Hunter's Dream is the default pool: a file
-that names no pool uses it, unless it holds only a shadNet account; `online_pool=shadnet` picks
-the shadNet pool. The log then starts with `Co-op: The Hunter's Dream as ...`.
+that names no pool uses it. shadNet is opt-in, because its protocol sends the password
+unencrypted: `online_pool=shadnet` picks it only together with `shadnet_insecure_ok=1` (the
+launcher's warning accepted), and its account should use a password used nowhere else. The log then starts with `Co-op: The Hunter's Dream as ...`.
 That backend is Supermedo's port of droogie's bbhost (`gpu/bbnet/thd`, GPL-3.0-or-later).
 The server tells clients apart by their name and version and asks each port for its own:
 `run.sh` presents this build as `bbport-mac <version>` (the repository's latest `mac-v` tag)

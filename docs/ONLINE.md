@@ -66,12 +66,17 @@ alone.
 
 ### shadNet
 
+**shadNet is opt-in, because its protocol is unencrypted:** the account name and password go to
+the server as plain text, readable by anyone who can see your network traffic (public or shared
+Wi-Fi, your provider). Make an account just for this game, with a username and password you have
+never used anywhere else.
+
 Register at [shadnet.shadps4.net](https://shadnet.shadps4.net). In the **Online** tab set the
-pool to **shadNet server** and fill in the account name and the password (and another server
-address, if not shadPS4's public one). The password goes to your login keychain (item
-`bbport-shadnet`, account = the name) when the settings are saved; the field then reads
-*Stored in your keychain* and stays empty. Mind that the shadNet protocol itself is unencrypted
-(see *What online play exposes* in the README): use a password you use nowhere else.
+pool to **shadNet server**, read the warning and tick *I understand* (bbport.ini
+`shadnet_insecure_ok=1`; without it the game never signs in to shadNet). Then fill in the
+account name and the password (and another server address, if not shadPS4's public one). The
+password goes to your login keychain (item `bbport-shadnet`, account = the name) when the
+settings are saved; the field then reads *Stored in your keychain* and stays empty.
 
 From Terminal instead (the command prompts for the password; nothing is echoed):
 
@@ -80,8 +85,8 @@ python3 scripts/online.py keychain shadnet --npid YourOnlineId --ini ~/Library/A
 ```
 
 That writes `shadnet_npid=YourOnlineId` and `shadnet_password=keychain`. Set
-`online_pool=shadnet` (a file with only a shadNet account and no pool line is taken as shadNet
-too).
+`online_pool=shadnet` and, having read the warning above, `shadnet_insecure_ok=1` (without both
+the shadNet account is ignored and the pool is The Hunter's Dream).
 
 ### The connection
 

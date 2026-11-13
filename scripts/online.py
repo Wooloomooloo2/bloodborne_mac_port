@@ -332,6 +332,8 @@ def run(a):
         else:
             print(f'online_pool=huntersdream\nthd_online_id={online_id}\nthd_token={token}')
     elif a.command == 'keychain':
+        print('shadNet sends the account name and password unencrypted: use a password you use '
+              'nowhere else.', file=sys.stderr)
         secret = getpass.getpass(f'shadNet password for {a.npid}: ')
         if not secret:
             sys.exit('no password entered')
@@ -339,7 +341,8 @@ def run(a):
         print(f'Password stored in the login keychain (bbport-shadnet, {a.npid})', file=sys.stderr)
         if a.ini:
             write_ini_keys(a.ini, {'shadnet_npid': a.npid, 'shadnet_password': 'keychain'})
-            print(f'shadnet_npid and shadnet_password=keychain written to {a.ini}', file=sys.stderr)
+            print(f'shadnet_npid and shadnet_password=keychain written to {a.ini}; shadNet is opt-in: '
+                  'also set online_pool=shadnet and shadnet_insecure_ok=1', file=sys.stderr)
     else:
         for name, address, ok, detail in check(server, webapi, community):
             print(f'{name}: {address}: {"reachable" if ok else "not reachable"} {detail}'.rstrip())

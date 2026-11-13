@@ -157,7 +157,8 @@ final class LauncherModel: ObservableObject {
         } else {
             p2pPortText = String(online.p2pPort)
         }
-        if !newShadnetPassword.isEmpty && !online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty {
+        // Only after the player opted in to shadNet (the field is disabled until then).
+        if online.usesShadnet && !newShadnetPassword.isEmpty && !online.shadnetNpid.trimmingCharacters(in: .whitespaces).isEmpty {
             do {
                 try online.storeShadnetPassword(newShadnetPassword, secrets: secrets)
                 newShadnetPassword = ""
