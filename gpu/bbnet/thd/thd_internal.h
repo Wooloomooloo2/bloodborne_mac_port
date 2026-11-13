@@ -77,6 +77,13 @@ void SetP2pPortBound(int port);
 int StunRttUs();
 
 // ---- the peer table
+// A room has at most 64 members (the game's joinedSlotMask is 64 bits). Member ids and room sizes
+// from the server outside 1..64 are not believed.
+constexpr std::uint16_t kMaxMembers = 64;
+inline std::uint16_t MemberSlot(long long value, std::uint16_t fallback) {
+    return value >= 1 && value <= kMaxMembers ? static_cast<std::uint16_t>(value) : fallback;
+}
+
 struct Peer {
     std::uint16_t member_id = 0;
     std::string online_id;

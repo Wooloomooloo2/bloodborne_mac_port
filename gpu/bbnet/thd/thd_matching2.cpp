@@ -127,6 +127,7 @@ constexpr int kErrTerminatedByMyself = static_cast<int>(0x80550E18);
 // A response the game reads during its callback; the last few stay alive.
 struct Held {
     std::vector<std::uint8_t> bytes;
+    std::int64_t made_ms = 0;
 };
 
 struct M2 {
@@ -157,8 +158,15 @@ T* Hold(std::size_t extra = 0) {
     auto held = std::make_unique<Held>();
     held->bytes.assign(sizeof(T) + extra, 0);
     T* p = reinterpret_cast<T*>(held->bytes.data());
+    held->made_ms = NowMs();
     g.held.push_back(std::move(held));
-    if (g.held.size() > 8) g.held.erase(g.held.begin());
+    // Freed by age, not count: a burst of server events must not free a response before the
+    // callback that delivers it has run (the dispatch queue may run late). The hard cap bounds a
+    // flood.
+    const std::int64_t now = NowMs();
+    while (g.held.size() > 8 && (now - g.held.front()->made_ms > 60000 || g.held.size() > 4096)) {
+        g.held.erase(g.held.begin());
+    }
     return p;
 }
 
@@ -240,12 +248,14 @@ void schedule_dead(const std::vector<std::uint16_t>& ids, int error, std::uint64
 
 CreateJoinRoomResponse* build_room_response(std::uint64_t room_id, std::uint16_t self_id, std::uint16_t owner_id,
                                             std::uint16_t max_slot) {
-    const std::vector<Peer> peers = room_peers();
+    std::vector<Peer> peers = room_peers();
+    max_slot = MemberSlot(max_slot, 5);
+    if (peers.size() >= max_slot) peers.resize(max_slot - 1); // never more members than slots
     const std::size_t n = peers.size() + 1;
     auto* resp = Hold<CreateJoinRoomResponse>(sizeof(RoomDataInternal) + n * sizeof(RoomMemberDataInternal));
     auto* room = reinterpret_cast<RoomDataInternal*>(resp + 1);
     auto* members = reinterpret_cast<RoomMemberDataInternal*>(room + 1);
-    room->maxSlot = max_slot ? max_slot : 5;
+    room->maxSlot = max_slot;
     room->publicSlots = room->maxSlot;
     room->openPublicSlots = static_cast<std::uint16_t>(room->maxSlot > n ? room->maxSlot - n : 0);
     room->serverId = 1;
@@ -450,7 +460,7 @@ void on_server_event(const Json& ev) {
     }
     if (name == "room_member_joined") {
         std::lock_guard lk(g.mu);
-        const auto mid = static_cast<std::uint16_t>(IntOf(ev, "MemberId", 0));
+        const std::uint16_t mid = MemberSlot(IntOf(ev, "MemberId", 0), 0);
         if (defer_for_join_locked(ev)) return;
         if (!g.in_room || !mid || mid == g.member_id) return;
         if (static_cast<std::uint64_t>(IntOf(ev, "RoomId", 0)) != g.room_id) return;
@@ -479,7 +489,7 @@ void on_server_event(const Json& ev) {
     }
     if (name == "room_member_left") {
         std::lock_guard lk(g.mu);
-        const auto mid = static_cast<std::uint16_t>(IntOf(ev, "MemberId", 0));
+        const std::uint16_t mid = MemberSlot(IntOf(ev, "MemberId", 0), 0);
         if (defer_for_join_locked(ev)) return;
         if (static_cast<std::uint64_t>(IntOf(ev, "RoomId", 0)) != g.room_id) return;
         Peer p;
@@ -524,7 +534,7 @@ void on_server_event(const Json& ev) {
     if (name == "room_member_kicked") {
         std::lock_guard lk(g.mu);
         const auto room = static_cast<std::uint64_t>(IntOf(ev, "RoomId", 0));
-        const auto mid = static_cast<std::uint16_t>(IntOf(ev, "MemberId", 0));
+        const std::uint16_t mid = MemberSlot(IntOf(ev, "MemberId", 0), 0);
         if (room != g.room_id || mid != g.member_id) return;
         const std::vector<std::uint8_t> opt = b64_decode(StrOf(ev, "OptData"));
         room_gone_locked(kEvKickedOut, kCauseKickout, opt.data(), opt.size(), "kicked by the host");
@@ -700,9 +710,9 @@ s32 PS4_SYSV_ABI m2_create_join_room(unsigned ctx, const std::uint8_t* reqp, con
             if (!error) {
                 g.session_id = sid;
                 g.room_id = room;
-                g.member_id = static_cast<std::uint16_t>(IntOf(reply, "MemberId", 1));
+                g.member_id = MemberSlot(IntOf(reply, "MemberId", 1), 1);
                 g.owner_id = g.member_id;
-                g.max_slot = static_cast<std::uint16_t>(IntOf(reply, "MaxMembers", max_slot));
+                g.max_slot = MemberSlot(IntOf(reply, "MaxMembers", max_slot), MemberSlot(max_slot, 5));
                 g.is_host = true;
                 g.in_room = true;
                 g.room_since_ms = NowMs();
@@ -749,9 +759,9 @@ s32 PS4_SYSV_ABI m2_join_room(unsigned ctx, const std::uint8_t* reqp, const Requ
             if (!error) {
                 g.session_id = StrOf(reply, "SessionId");
                 g.room_id = room;
-                g.member_id = static_cast<std::uint16_t>(IntOf(reply, "MemberId", 2));
-                g.owner_id = static_cast<std::uint16_t>(IntOf(reply, "OwnerMemberId", 1));
-                g.max_slot = static_cast<std::uint16_t>(IntOf(reply, "MaxMembers", 5));
+                g.member_id = MemberSlot(IntOf(reply, "MemberId", 2), 2);
+                g.owner_id = MemberSlot(IntOf(reply, "OwnerMemberId", 1), 1);
+                g.max_slot = MemberSlot(IntOf(reply, "MaxMembers", 5), 5);
                 g.is_host = false;
                 g.in_room = true;
                 g.room_since_ms = NowMs();

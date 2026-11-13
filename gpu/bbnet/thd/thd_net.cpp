@@ -776,7 +776,8 @@ s32 PS4_SYSV_ABI net_bind(int s, const void* addr, int len) {
     sockaddr_in sa{};
     sa.sin_family = AF_INET;
     sa.sin_port = in.port;
-    sa.sin_addr.s_addr = INADDR_ANY;
+    // A loopback address the game asked for stays loopback; anything else listens on all.
+    sa.sin_addr.s_addr = (in.addr & 0xff) == 127 ? in.addr : INADDR_ANY;
     if (::bind(sock.fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) < 0) return net_fail();
     return 0;
 }
@@ -1153,6 +1154,13 @@ bool P2pStun(const char* host, std::uint16_t sport, int timeout_ms, std::uint32_
     return true;
 }
 
+// Probing threads at once: the addresses come from the server, so a bad one could otherwise make
+// us spray probes at any host (each thread sends up to 80 over 20 s).
+namespace {
+constexpr int kMaxPunches = 8;
+std::atomic<int> g_punches{0};
+} // namespace
+
 void P2pPunch(const char* label, std::uint32_t addr, std::uint16_t port_host, std::uint32_t local_addr,
               std::uint16_t local_port) {
     std::shared_ptr<UdpPort> port;
@@ -1181,6 +1189,11 @@ void P2pPunch(const char* label, std::uint32_t addr, std::uint16_t port_host, st
         targets.push_back(b);
     }
     const std::string name = label ? label : "peer";
+    if (g_punches.fetch_add(1) >= kMaxPunches) {
+        g_punches.fetch_sub(1);
+        Log("net: punch %s skipped: %d already running", name.c_str(), kMaxPunches);
+        return;
+    }
     std::thread([port, targets, name] {
         const auto start = std::chrono::steady_clock::now();
         int sent = 0;
@@ -1201,6 +1214,7 @@ void P2pPunch(const char* label, std::uint32_t addr, std::uint16_t port_host, st
         write_ipv4(ip, sizeof(ip), targets[0].sin_addr.s_addr);
         Log("net: punch %s %s:%u: %d probes, %s", name.c_str(), ip, bswap16(targets[0].sin_port), sent,
             heard ? "peer heard" : "nothing heard");
+        g_punches.fetch_sub(1);
     }).detach();
 }
 

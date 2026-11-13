@@ -519,7 +519,7 @@ int PeersFromMembers(const Json& members) {
     int n = 0;
     for (const Json& m : members) {
         Peer p;
-        p.member_id = static_cast<std::uint16_t>(IntOf(m, "MemberId", 0));
+        p.member_id = MemberSlot(IntOf(m, "MemberId", 0), 0);
         if (!p.member_id) continue;
         p.online_id = StrOf(m, "OnlineId");
         p.addr = AddrOf(StrOf(m, "Addr"));
