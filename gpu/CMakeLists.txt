@@ -461,3 +461,12 @@ endif()
 add_executable(upload-reservation-test EXCLUDE_FROM_ALL ../tests/test_upload_reservation.cpp)
 target_include_directories(upload-reservation-test PRIVATE shim)
 target_compile_options(upload-reservation-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+if (APPLE)
+    add_executable(metalfx-test EXCLUDE_FROM_ALL ../tests/test_metalfx.mm shim/bbport_metalfx.mm
+        shim/common/logging/log.cpp shim/common/assert.cpp)
+    target_include_directories(metalfx-test PRIVATE shim shadps4)
+    target_compile_options(metalfx-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+    target_link_libraries(metalfx-test PRIVATE bbmetal_core fmt::fmt
+        "-framework Metal" "-framework MetalFX" "-framework Foundation")
+    set_source_files_properties(../tests/test_metalfx.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()

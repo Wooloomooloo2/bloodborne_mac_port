@@ -21,6 +21,7 @@ namespace BbMetalFx {
 
 /// Whether `device` supports the MetalFX temporal scaler.
 bool Supported(Metal::Device& device);
+bool SpatialSupported(Metal::Device& device);
 
 /// What a scaler is made for: the MTLPixelFormat of each texture, the input (render) and output
 /// sizes, and whether the colour is linear HDR (auto exposure) or the tonemapped frame.
@@ -28,6 +29,7 @@ struct Config {
     uint32_t color_format{}, depth_format{}, motion_format{}, output_format{};
     uint32_t width{}, height{}, out_width{}, out_height{};
     bool hdr{};
+    bool spatial{};
 
     bool operator==(const Config&) const = default;
 };
@@ -53,6 +55,7 @@ struct Frame {
 /// scaler alive until that command buffer completes. Call inside a Scheduler::Record closure:
 /// the scaler's per-frame properties are set here, on the thread that encodes.
 void Encode(Metal::Encoder& e, void* scaler, const Frame& frame);
+void EncodeSpatial(Metal::Encoder& e, void* scaler, const Frame& frame);
 
 /// The jitter signs per axis: BB_METALFX_JITTER="sx,sy" (default 1,1; a malformed value is
 /// ignored) times BB_METALFX_JITTER_SIGN (one factor for both axes, default 1). Null: unset.

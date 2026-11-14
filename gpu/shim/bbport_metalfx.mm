@@ -11,6 +11,15 @@
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_encoder.h"
 
+// Spatial MetalFX requires its input texture to exactly match the descriptor.
+// Cache a cropped input for the guest's aligned/padded render targets.
+@interface BbSpatialState : NSObject
+@property(nonatomic, strong) id<MTLFXSpatialScaler> scaler;
+@property(nonatomic, strong) id<MTLTexture> input;
+@end
+@implementation BbSpatialState
+@end
+
 namespace BbMetalFx {
 
 bool Supported(Metal::Device& device) {
@@ -18,7 +27,26 @@ bool Supported(Metal::Device& device) {
     return mtl && [MTLFXTemporalScalerDescriptor supportsDevice:mtl];
 }
 
+bool SpatialSupported(Metal::Device& device) {
+    return [MTLFXSpatialScalerDescriptor supportsDevice:(__bridge id<MTLDevice>)device.NativeDevice()];
+}
+
 Metal::Object CreateScaler(Metal::Device& device, const Config& c) {
+    if (c.spatial) {
+        auto d = [MTLFXSpatialScalerDescriptor new];
+        d.colorTextureFormat = MTLPixelFormat(c.color_format);
+        d.outputTextureFormat = MTLPixelFormat(c.output_format);
+        d.inputWidth = c.width; d.inputHeight = c.height;
+        d.outputWidth = c.out_width; d.outputHeight = c.out_height;
+        d.colorProcessingMode = c.hdr ? MTLFXSpatialScalerColorProcessingModeHDR
+                                     : MTLFXSpatialScalerColorProcessingModePerceptual;
+        auto scaler = [d newSpatialScalerWithDevice:(__bridge id<MTLDevice>)device.NativeDevice()];
+        if (!scaler) std::fprintf(stderr, "MetalFX Spatial: cannot create %ux%u -> %ux%u scaler\n",
+                                  c.width, c.height, c.out_width, c.out_height);
+        if (!scaler) return {};
+        auto state = [BbSpatialState new]; state.scaler = scaler;
+        return Metal::Object::Adopt((__bridge_retained void*)state);
+    }
     const auto start = std::chrono::steady_clock::now();
     id<MTLFXTemporalScaler> scaler = nil;
     @autoreleasepool {
@@ -47,6 +75,34 @@ Metal::Object CreateScaler(Metal::Device& device, const Config& c) {
     std::printf("MetalFX: temporal scaler %ux%u -> %ux%u (%s, %.0f ms)\n", c.width, c.height,
                 c.out_width, c.out_height, c.hdr ? "HDR" : "tonemapped", ms);
     return Metal::Object::Adopt((__bridge_retained void*)scaler);
+}
+
+void EncodeSpatial(Metal::Encoder& e, void* scaler_ptr, const Frame& f) {
+    auto state = (__bridge BbSpatialState*)scaler_ptr;
+    auto scaler = state.scaler;
+    auto color = (__bridge id<MTLTexture>)f.color;
+    e.EndEncoding();
+    if (color.width != scaler.inputWidth || color.height != scaler.inputHeight ||
+        (color.usage & scaler.colorTextureUsage) != scaler.colorTextureUsage) {
+        if (!state.input) {
+            auto d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:scaler.colorTextureFormat
+                width:scaler.inputWidth height:scaler.inputHeight mipmapped:NO];
+            d.storageMode = MTLStorageModePrivate; d.usage = scaler.colorTextureUsage;
+            state.input = [color.device newTextureWithDescriptor:d];
+        }
+        if (!state.input) return;
+        auto blit = [(__bridge id<MTLCommandBuffer>)e.CommandBuffer() blitCommandEncoder];
+        [blit copyFromTexture:color sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0,0,0)
+            sourceSize:MTLSizeMake(scaler.inputWidth,scaler.inputHeight,1)
+            toTexture:state.input destinationSlice:0 destinationLevel:0 destinationOrigin:MTLOriginMake(0,0,0)];
+        [blit endEncoding]; color = state.input;
+    }
+    scaler.colorTexture = color;
+    scaler.outputTexture = (__bridge id<MTLTexture>)f.output;
+    scaler.inputContentWidth = f.content_width;
+    scaler.inputContentHeight = f.content_height;
+    [scaler encodeToCommandBuffer:(__bridge id<MTLCommandBuffer>)e.CommandBuffer()];
+    e.KeepAlive(Metal::Object::Retain(scaler_ptr));
 }
 
 void Encode(Metal::Encoder& e, void* scaler_ptr, const Frame& f) {
