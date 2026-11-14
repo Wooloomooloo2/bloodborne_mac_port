@@ -8,6 +8,7 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <stdatomic.h>
 
 enum { TYPE_ERRORCHECK = 1, TYPE_RECURSIVE = 2, TYPE_NORMAL = 3 }; /* 4: adaptive, error-checking here */
 
@@ -57,7 +58,35 @@ static int native_cond_broadcast(NativeCond *c) { return pthread_cond_broadcast(
 
 RuntimeSyncHook runtime_sync_hook;
 typedef struct { int type; } GuestAttr;
-typedef struct { NativeMutex native; } GuestMutex;
+typedef struct {
+    NativeMutex native;
+    int type;
+    unsigned depth; /* recursive owner only, while native is held */
+    _Atomic uintptr_t owner;
+} GuestMutex;
+static _Thread_local char recursive_owner_token;
+static uintptr_t recursive_owner(void) { return (uintptr_t)&recursive_owner_token; }
+static void note_locked(GuestMutex *m) {
+    if (m->type != TYPE_RECURSIVE) return;
+    ++m->depth;
+    atomic_store_explicit(&m->owner, recursive_owner(), memory_order_release);
+}
+static int guest_cond_wait(NativeCond *c, GuestMutex *m, uint64_t deadline) {
+    if (m->type != TYPE_RECURSIVE) return native_cond_wait(c, &m->native, deadline);
+    if (atomic_load_explicit(&m->owner, memory_order_acquire) != recursive_owner()) return EPERM;
+    const unsigned depth = m->depth;
+    /* FreeBSD libthr releases every recursive level around a condition wait.
+     * Host pthread_cond_wait releases just one: retain that last lock until its
+     * atomic wait, then restore the exact guest depth after reacquisition. */
+    for (unsigned i = 1; i < depth; ++i) native_unlock(&m->native);
+    m->depth = 0;
+    atomic_store_explicit(&m->owner, 0, memory_order_release);
+    const int e = native_cond_wait(c, &m->native, deadline);
+    for (unsigned i = 1; i < depth; ++i) native_lock(&m->native);
+    m->depth = depth;
+    atomic_store_explicit(&m->owner, recursive_owner(), memory_order_release);
+    return e;
+}
 static size_t created, locks, unlocks;
 static int32_t orbis_error(int e) {
     if (!e) return 0;
@@ -102,6 +131,9 @@ static ABI int32_t mutex_init(GuestMutex **out, GuestAttr **attr, const char *na
     CHECK_LOW_ADDR(mutex);
     int e = native_init(&mutex->native, type);
     if (e) { runtime_low_free(mutex); return orbis_error(e); }
+    mutex->type = type;
+    mutex->depth = 0;
+    atomic_init(&mutex->owner, 0);
     *out = mutex; ++created; return 0;
 }
 static HostMutex static_init = HOST_MUTEX_INIT;
@@ -126,7 +158,7 @@ static ABI int32_t mutex_lock(GuestMutex **mutex) {
     runtime_thread_set_blocked("mutex", (uintptr_t)mutex);
     e = orbis_error(native_lock(&(*mutex)->native));
     runtime_thread_clear_blocked();
-    if (!e) ++locks;
+    if (!e) { note_locked(*mutex); ++locks; }
     RUNTIME_SYNC("mutex_lock", *mutex, e);
     return e;
 }
@@ -134,7 +166,7 @@ static ABI int32_t mutex_trylock(GuestMutex **mutex) {
     int32_t e = ensure_mutex(mutex);
     if (e) return e;
     e = orbis_error(native_trylock(&(*mutex)->native));
-    if (!e) ++locks;
+    if (!e) { note_locked(*mutex); ++locks; }
     RUNTIME_SYNC("mutex_trylock", *mutex, e);
     return e;
 }
@@ -142,6 +174,11 @@ static ABI int32_t mutex_unlock(GuestMutex **mutex) {
     if (!mutex || (uintptr_t)*mutex == 2) return orbis_error(EINVAL);
     if ((uintptr_t)*mutex < 2) return orbis_error(EPERM);
     RUNTIME_SYNC("mutex_unlock", *mutex, 0);
+    GuestMutex *m = *mutex;
+    if (m->type == TYPE_RECURSIVE &&
+        atomic_load_explicit(&m->owner, memory_order_acquire) == recursive_owner()) {
+        if (--m->depth == 0) atomic_store_explicit(&m->owner, 0, memory_order_release);
+    }
     int32_t e = orbis_error(native_unlock(&(*mutex)->native));
     if (!e) ++unlocks;
     return e;
@@ -161,7 +198,7 @@ static ABI int32_t mutex_timedlock(GuestMutex **mutex, uint32_t usec) {
     runtime_thread_set_blocked("mutex_timed", (uintptr_t)mutex);
     e = timed_error(native_timedlock(&(*mutex)->native, deadline_after(usec)));
     runtime_thread_clear_blocked();
-    if (!e) ++locks;
+    if (!e) { note_locked(*mutex); ++locks; }
     RUNTIME_SYNC("mutex_timedlock", *mutex, e);
     return e;
 }
@@ -204,7 +241,7 @@ static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
     ++waits;
     RUNTIME_SYNC("cond_wait:unlock", *mutex, 0);
     runtime_thread_set_blocked("condvar", (uintptr_t)cond);
-    int32_t res = orbis_error(native_cond_wait(&(*cond)->native, &(*mutex)->native, 0));
+    int32_t res = orbis_error(guest_cond_wait(&(*cond)->native, *mutex, 0));
     runtime_thread_clear_blocked();
     RUNTIME_SYNC("cond_wait:lock", *mutex, res);
     return res;
@@ -216,7 +253,7 @@ static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, uint64_t de
     ++waits;
     RUNTIME_SYNC("cond_timedwait:unlock", *mutex, 0);
     runtime_thread_set_blocked("condvar_timed", (uintptr_t)cond);
-    int32_t res = timed_error(native_cond_wait(&(*cond)->native, &(*mutex)->native, deadline ? deadline : 1));
+    int32_t res = timed_error(guest_cond_wait(&(*cond)->native, *mutex, deadline ? deadline : 1));
     runtime_thread_clear_blocked();
     RUNTIME_SYNC("cond_timedwait:lock", *mutex, res);
     return res;
