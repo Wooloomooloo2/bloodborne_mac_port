@@ -67,8 +67,10 @@ public:
         jitter = value;
     }
 
-    [[nodiscard]] bool Enabled() const noexcept {
-        return debug_overlay || for_upscaler;
+    [[nodiscard]] bool Enabled() const noexcept;
+    /// Only the current frame's admitted main-camera constants; no stale loading-screen camera.
+    [[nodiscard]] std::array<float,4> ProjectionForFrame() const noexcept {
+        return frame_has_camera && current.valid ? current.proj : std::array<float,4>{};
     }
 
     /// Both cameras and the scene depth of the current frame are known.

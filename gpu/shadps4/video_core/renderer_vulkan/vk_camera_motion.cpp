@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "bbport_toggles.h"
+#include "bbport_settings.h"
 #include "common/assert.h"
 
 #include "video_core/buffer_cache/buffer.h"
@@ -91,6 +92,10 @@ CameraMotion::CameraMotion(Metal::Device& device_, Scheduler& scheduler_,
 }
 
 CameraMotion::~CameraMotion() = default;
+
+bool CameraMotion::Enabled() const noexcept {
+    return debug_overlay || for_upscaler || BbSettings::Get().screen_lighting != 0;
+}
 
 float CameraMotion::VerticalFov() const noexcept {
     return 2.0f * std::atan(1.0f / current.proj[1]);
