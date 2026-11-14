@@ -32,7 +32,7 @@ struct UpdateView: View {
                 get: { model.config.testBuilds }, set: { model.setUpdatePreference(testBuilds: $0) }))
                 .help("Also offer pre-releases and test builds: early fixes that may not be finished.")
             Toggle("Online play beta (0.7)", isOn: Binding(
-                get: { model.config.onlineBeta }, set: { model.setOnlineBeta($0) }))
+                get: { model.onlineBeta }, set: { model.setOnlineBeta($0) }))
                 .disabled(updater.busy)
                 .help("Offer the online play beta: the game's own co-op and messages through a community server. Unfinished; turn it off to go back to the regular version.")
             buttons

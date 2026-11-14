@@ -45,8 +45,9 @@ struct LaunchConfig: Equatable {
     /// Automatic update checks; nil until the player answers the first-run question.
     var checkUpdates: Bool?
     var testBuilds = false
-    /// The online play beta channel (0.7).
-    var onlineBeta = false
+    /// The online play beta channel (0.7); nil until the player chooses: then a beta build counts
+    /// as in it (a beta downloaded by hand isn't offered the way back at once).
+    var onlineBeta: Bool?
     var skippedVersion: String?
     var lastUpdateCheck: Date?
     private(set) var dataDir: URL?
@@ -92,7 +93,7 @@ struct LaunchConfig: Equatable {
         ini["BB_SHOW_LAUNCHER"] = showLauncher ? "1" : "0"
         ini["BB_CHECK_UPDATES"] = checkUpdates.map { $0 ? "1" : "0" }
         ini["BB_UPDATE_TEST_BUILDS"] = testBuilds ? "1" : nil
-        ini["BB_UPDATE_ONLINE_BETA"] = onlineBeta ? "1" : nil
+        ini["BB_UPDATE_ONLINE_BETA"] = onlineBeta.map { $0 ? "1" : "0" }
         ini["BB_UPDATE_SKIP"] = skippedVersion.map(Shell.quote)
         ini["BB_UPDATE_CHECKED"] = lastUpdateCheck.map { String(Int($0.timeIntervalSince1970)) }
     }
