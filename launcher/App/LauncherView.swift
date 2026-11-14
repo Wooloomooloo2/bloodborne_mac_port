@@ -220,9 +220,7 @@ struct LauncherView: View {
                     .foregroundStyle(.green)
                 Text("Play Beta (below) starts the online beta; Play starts this version, as before.")
                     .font(.caption).foregroundStyle(.secondary)
-                if model.onlineBeta {
-                    Button("Leave the Beta…") { model.setOnlineBeta(false) }
-                }
+                Button("Leave the Beta…") { model.setOnlineBeta(false) }
             } else if model.onlineBeta {
                 Text("You joined the beta, but it isn't installed yet.")
                 Button("Download the Beta…", action: model.checkForUpdatesNow)

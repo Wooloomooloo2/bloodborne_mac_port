@@ -19,9 +19,10 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-11-10)
+## Status (2026-11-14)
 
-**Current version: [mac-v0.5.15](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.15)** (download the app, or build it as below).
+**Current version: [mac-v0.5.16](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.16)** (download the app, or build it as below).
+**Online play beta: [0.7.0 beta 2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.7.0-beta2)**, installed as a second app next to the regular one (in 0.5.16: **Join the Beta…** on the launcher's General page).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
 saves load, and the game runs at a **locked 60 FPS** at 1080p and 1440p native, and now at
@@ -32,14 +33,33 @@ through its own **native Metal renderer**. Expect occasional rendering glitches 
 The target is a locked 60 FPS (the game's physics run at 30 Hz), with even frame pacing, at the
 highest resolution each Mac allows; 90 and 120 FPS caps are there for ProMotion displays.
 
-**Releases:** 0.5.x is the stable line, with fixes and features from master. **0.7** will be
-**online play**: the game's own bells, summons and invasions through a community server. It's
-being tested in contributors' forks and will come back as one tested pull request, reviewed and
-collected on the `release-0.7` branch.
+**Releases:** 0.5.x is the stable line, with fixes and features from master. **0.7** is
+**online play**: the game's own bells, summons and messages through a community server, as betas
+from the `release-0.7` branch. A beta installs as **Bloodborne Beta.app** next to Bloodborne.app,
+so the regular version stays playable; it updates to newer betas only.
 The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB Macs (#69)
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
 sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
-menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, and 0.5.15 makes controller buttons remappable.
+menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, 0.5.15 makes controller buttons
+remappable, and 0.5.16 adds save backups, the online play beta and MetalFX Spatial.
+
+### New in 0.5.16: save backups, the online play beta, MetalFX Spatial
+
+- **Online play beta.** The launcher's **General** page invites you to the 0.7 beta: **Join the
+  Beta…** installs **Bloodborne Beta** next to this app (this version stays playable), and **Play
+  Beta** starts it. **Leave the Beta…** moves it to the Trash. The beta can share your saves
+  (default, backed up before every beta launch) or play its own copy.
+- **Save backups**, on a new **Saves & Folders** page (with the game and save folders): **Back Up
+  Now**, a list of backups with **Restore** (your current saves are backed up first) and **Delete**,
+  and a choosable **Backup folder** (`BB_BACKUP_DIR` in `launch.conf`). Automatic backups before
+  every beta launch, the first launch of a new version and the first with new mods or cheats; the
+  newest 10 of those stay, your own stay until deleted.
+- **MetalFX Spatial** as an upscaler (#90, from [@evill33t](https://github.com/evill33t)): lighter
+  on the GPU than temporal MetalFX, with more shimmer in motion.
+- **3840×1620 (21:9)** native resolution for 5K2K monitors (#93), under **Ultrawide or 16:10**.
+- **Safety checks on the game's GPU commands** (#135, #137, #138, from
+  [@evill33t](https://github.com/evill33t)): malformed submit batches and out-of-range data are
+  refused instead of crashing the GPU process.
 
 ### New in 0.5.15: remappable controller buttons
 

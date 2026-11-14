@@ -777,7 +777,8 @@ final class LauncherModel: ObservableObject {
     /// Joining asks first, then looks for the beta at once (installed next to this app); leaving
     /// offers to move the beta app to the Trash.
     func setOnlineBeta(_ on: Bool) {
-        guard on != onlineBeta, !updater.busy, !isBetaApp else { return }
+        // (Leaving also works for a beta installed by hand, with the switch never turned on.)
+        guard on != onlineBeta || (!on && otherApp != nil), !updater.busy, !isBetaApp else { return }
         let alert = NSAlert()
         if on {
             alert.alertStyle = .warning
