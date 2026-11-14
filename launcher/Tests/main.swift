@@ -604,27 +604,33 @@ do {
     check(newest(nil) == "mac-v0.5.2", "dev build: newest release")
     check((try? Updates.releases(json: Data("{\"message\":\"rate limited\"}".utf8), includeTestBuilds: false)) == nil, "API error is an error")
 
-    // Online play betas: their own zip name, offered only with the beta channel; leaving the beta
-    // offers the newest regular version, even a lower number.
+    // Online play betas: their own zip name and app (Bloodborne Beta.app, next to the regular one).
+    // The regular app is offered regular versions and, with the switch, the beta to install beside
+    // it; the beta app newer betas only.
     check(v("0.7.0-beta1").isBeta && v("0.7.0-beta1-3-g0b50589").isBeta && !v("0.7.0-test1").isBeta && !v("0.7.0").isBeta, "beta versions")
     let betaJSON = Data(("[" + [release("mac-v0.7.0-beta2", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip"),
                                 release("mac-v0.5.17"), release("mac-v0.5.16-test1", prerelease: true),
                                 release("mac-v0.7.0-beta1", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta1.zip"),
                                 release("mac-v0.5.16")]
         .joined(separator: ",") + "]").utf8)
-    func offered(_ current: String, tests: Bool = false, betas: Bool = false) -> (tag: String, isBeta: Bool, isReturn: Bool)? {
-        guard let r = (try? Updates.newest(json: betaJSON, current: v(current), includeTestBuilds: tests, includeBetas: betas)) ?? nil
-        else { return nil }
-        return (r.tag, r.isBeta, r.isReturn)
+    func offered(_ current: String, tests: Bool = false, betaApp: Bool = false) -> String? {
+        ((try? Updates.newest(json: betaJSON, current: v(current), includeTestBuilds: tests, betaApp: betaApp)) ?? nil)?.tag
     }
-    check(offered("0.5.16")?.tag == "mac-v0.5.17" && offered("0.5.16", tests: true)?.tag == "mac-v0.5.17", "betas not offered without the channel, also not as test builds")
-    check(offered("0.5.16", betas: true).map { $0.tag == "mac-v0.7.0-beta2" && $0.isBeta && !$0.isReturn } == true, "joining: the newest beta")
-    check((try? Updates.releases(json: betaJSON, includeTestBuilds: false, includeBetas: true))?.first?.zip.lastPathComponent
-          == "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip", "the beta's own zip")
-    check(offered("0.7.0-beta1", betas: true)?.tag == "mac-v0.7.0-beta2" && offered("0.7.0-beta2", betas: true) == nil, "next beta; up to date")
-    check(offered("0.7.0-beta2").map { $0.tag == "mac-v0.5.17" && $0.isReturn && !$0.isBeta } == true, "leaving: back to the newest regular version")
-    check(offered("0.7.0-beta2", tests: true)?.tag == "mac-v0.5.17", "leaving with test builds: still the regular line")
-    check(offered("0.5.17", betas: false)?.tag == nil && offered("0.7.0")?.tag == nil, "no return from a regular version")
+    func beta(installed: String?) -> String? {
+        ((try? Updates.newestBeta(json: betaJSON, installed: installed.map(v))) ?? nil)?.tag
+    }
+    check(offered("0.5.16") == "mac-v0.5.17" && offered("0.5.16", tests: true) == "mac-v0.5.17" && offered("0.5.17") == nil,
+          "the regular app: never a beta as its own update")
+    check(beta(installed: nil) == "mac-v0.7.0-beta2" && beta(installed: "0.7.0-beta1") == "mac-v0.7.0-beta2"
+          && beta(installed: "0.7.0-beta2") == nil, "the beta to install next to it, unless as new")
+    check((try? Updates.newestBeta(json: betaJSON, installed: nil))??.zip.lastPathComponent == "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip", "the beta's own zip")
+    check(offered("0.7.0-beta1", betaApp: true) == "mac-v0.7.0-beta2" && offered("0.7.0-beta2", betaApp: true) == nil, "the beta app: next beta; up to date")
+    check(offered("0.7.0-beta2", tests: true, betaApp: true) == nil, "the beta app: never a regular version")
+    check(Updates.isBetaApp(bundleIdentifier: Updates.betaBundleIdentifier) && !Updates.isBetaApp(bundleIdentifier: Updates.bundleIdentifier)
+          && Updates.appName(beta: true) == "Bloodborne Beta.app", "beta identity")
+    let betaInfo: [String: Any] = ["CFBundleIdentifier": Updates.betaBundleIdentifier, "CFBundleVersion": "0.7.0-beta2"]
+    check(Updates.unpackedProblem(info: betaInfo, expected: v("0.7.0-beta2"), beta: true) == nil
+          && Updates.unpackedProblem(info: betaInfo, expected: v("0.7.0-beta2")) != nil, "the beta download is the beta app")
     // Updaters before 0.5.16 look for Bloodborne-macOS-*.zip only, so they never see a beta.
     check(!"Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip".hasPrefix("Bloodborne-macOS-"), "old updaters skip betas")
 
@@ -668,12 +674,18 @@ do {
     check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_ONLINE_BETA"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
     check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
     check(LaunchConfig(ini: IniFile(text: "BB_UPDATE_ONLINE_BETA=0\n")).onlineBeta == false, "left the beta: remembered")
+    var withBackups = LaunchConfig()
+    withBackups.backupDir = URL(fileURLWithPath: "/Volumes/Backup/Bloodborne saves")
+    var backupConf = IniFile(text: "")
+    withBackups.apply(to: &backupConf)
+    check(LaunchConfig(ini: backupConf).backupDir?.path == "/Volumes/Backup/Bloodborne saves"
+          && LaunchConfig(ini: backupConf).extraEnvironment["BB_BACKUP_DIR"] == nil, "backup folder round trip, not passed to the game")
 }
 
 // High-resolution ultrawide selection on memory-constrained Macs.
 do {
     let gib: UInt64 = 1024 * 1024 * 1024
-    for size in [PixelSize(3440, 1440), PixelSize(5120, 1440)] {
+    for size in [PixelSize(3440, 1440), PixelSize(3840, 1620), PixelSize(5120, 1440)] {
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 16 * gib) != nil, "16 GB wide memory warning")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 24 * gib) == nil, "24 GB boundary")
         check(Resolution.ultrawideMemoryWarning(size, memoryBytes: 64 * gib) == nil, "64 GB wide selection")
@@ -689,7 +701,7 @@ do {
           && Resolution.ultrawideMemoryWarning(PixelSize(1920, 1200), memoryBytes: 16 * gib) == nil, "16:10 memory warning")
     check(Resolution.wideLabel(PixelSize(1920, 1200)) == "1920 × 1200 · 16:10" && Resolution.wideLabel(PixelSize(3440, 1440)).hasSuffix("21:9")
           && Resolution.wideLabel(PixelSize(2560, 1080)).hasSuffix("21:9") && Resolution.wideLabel(PixelSize(5120, 1440)).hasSuffix("32:9")
-          && Resolution.wideLabel(PixelSize(5120, 2160)).hasSuffix("21:9"), "aspect labels")
+          && Resolution.wideLabel(PixelSize(3840, 1620)).hasSuffix("21:9") && Resolution.wideLabel(PixelSize(5120, 2160)).hasSuffix("21:9"), "aspect labels")
     let sixteen = GameSettings(ini: IniFile(text: "ultrawide_res=2560x1600\n"))
     check(sixteen.ultrawide && sixteen.wideOutput == PixelSize(2560, 1600), "16:10 from bbport.ini")
 }
@@ -1093,16 +1105,23 @@ do {
           && ModImport.baseName(of: URL(fileURLWithPath: "/d/.zip")) == "Mod", "import base name")
     check(ModImport.uniqueName("X", existing: ["Y"]) == "X" && ModImport.uniqueName("X", existing: ["x", "X 2"]) == "X 3", "import collisions")
 
-    // Backups: rotation keeps the newest five dated folders, the signature ignores order.
+    // Backups: rotation keeps the newest automatic ones and all of the player's; the signature ignores order.
     let names = ["2026-10-20 10.00.00", "2026-10-21 10.00.00", "2026-10-25 09.00.00", "2026-10-22 10.00.00", "last.json",
                  "2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "notes"]
-    check(SaveBackup.toDelete(names) == ["2026-10-21 10.00.00", "2026-10-20 10.00.00"], "rotation: \(SaveBackup.toDelete(names))")
-    check(SaveBackup.toDelete(Array(names.prefix(3))).isEmpty, "fewer than five")
+    check(SaveBackup.toDelete(names, keep: 5) == ["2026-10-21 10.00.00", "2026-10-20 10.00.00"], "rotation: \(SaveBackup.toDelete(names, keep: 5))")
+    check(SaveBackup.toDelete(Array(names.prefix(3))).isEmpty, "fewer than the limit")
+    check(SaveBackup.toDelete(names, reasons: ["2026-10-20 10.00.00": .manual], keep: 5) == ["2026-10-21 10.00.00"], "the player's own stay")
     let signature = ModSignature(mods: ["B", "A"], cheats: ["z", "y"])
     check(signature == ModSignature(mods: ["A", "B"], cheats: ["y", "z"]) && signature.mods == ["A", "B"], "signature sorted")
     check(!SaveBackup.needed(ModSignature(mods: [], cheats: []), last: nil), "nothing on: no backup")
     check(SaveBackup.needed(signature, last: nil) && !SaveBackup.needed(signature, last: signature)
           && SaveBackup.needed(signature, last: ModSignature(mods: ["A"], cheats: ["y", "z"])), "backup per new set")
+    let none = ModSignature(mods: [], cheats: [])
+    func reason(_ mods: ModSignature = ModSignature(mods: [], cheats: []), _ version: String = "0.5.16", last: String? = "0.5.16", beta: Bool = false) -> SaveBackupReason? {
+        SaveBackup.launchReason(mods: mods, lastMods: none, version: version, lastVersion: last, isBeta: beta)
+    }
+    check(reason() == nil && reason(last: "0.5.15") == .version && reason(last: nil) == .version, "new version")
+    check(reason(signature) == .mods && reason(beta: true) == .beta && reason(none, "0.7.0-beta1", last: "0.5.16", beta: true) == .beta, "mods; every beta launch")
     var date = DateComponents()
     (date.year, date.month, date.day, date.hour, date.minute, date.second) = (2026, 10, 25, 9, 5, 7)
     let when = Calendar.current.date(from: date)!
@@ -1114,19 +1133,40 @@ do {
     for name in names where SaveBackup.isBackupName(name) {
         try? fm.createDirectory(at: files.backups.appendingPathComponent(name), withIntermediateDirectories: true)
     }
-    let made = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    let made = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, reason: .manual, version: "0.5.16", now: when)
     check(made?.lastPathComponent == "2026-10-25 09.05.07"
           && fm.fileExists(atPath: files.backups.appendingPathComponent("2026-10-25 09.05.07/savedata/0/slot/userdata0000").path), "backup copied")
-    check(SaveBackup.lastSignature(backups: files.backups) == signature, "signature recorded")
-    let kept = ((try? fm.contentsOfDirectory(atPath: files.backups.path)) ?? []).filter(SaveBackup.isBackupName).sorted()
-    check(kept == ["2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "2026-10-25 09.00.00", "2026-10-25 09.05.07"],
-          "newest five kept: \(kept)")
-    let again = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    let listed = SaveBackup.list(backups: files.backups)
+    check(listed.count == 8 && listed.first?.name == "2026-10-25 09.05.07" && listed.first?.reason == .manual
+          && listed.first?.info?.version == "0.5.16" && listed.first?.date == when, "listed newest first with info")
+    check(listed.last?.reason == .mods && listed.last?.info == nil, "older backups: made for mods")
+    try? SaveBackup.record(backups: files.backups, signature: signature, version: "0.5.16")
+    check(SaveBackup.lastSignature(backups: files.backups) == signature && SaveBackup.lastVersion(backups: files.backups) == "0.5.16", "launch recorded")
+    let again = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, reason: .beta, version: "0.7.0-beta1", now: when)
     check(again?.lastPathComponent == "2026-10-25 09.05.07 2", "same second: a second folder")
     let empty = data.appendingPathComponent("no-saves")
     var copiedNothing = false
-    do { copiedNothing = try SaveBackup.backUp(saveFolder: empty, backups: files.backups, signature: ModSignature(mods: ["C"], cheats: []), now: when) == nil } catch {}
-    check(copiedNothing && SaveBackup.lastSignature(backups: files.backups)?.mods == ["C"], "no saves yet: nothing copied, set recorded")
+    do { copiedNothing = try SaveBackup.backUp(saveFolder: empty, backups: files.backups, reason: .mods, version: "0.5.16", now: when) == nil } catch {}
+    check(copiedNothing, "no saves yet: nothing copied")
+
+    // Restore: the current saves are backed up first, then replaced.
+    let older = files.backups.appendingPathComponent("2026-10-24 10.00.00")
+    try? fm.createDirectory(at: older.appendingPathComponent("savedata/0/slot"), withIntermediateDirectories: true)
+    try? Data("old".utf8).write(to: older.appendingPathComponent("savedata/0/slot/userdata0000"))
+    if let entry = SaveBackup.list(backups: files.backups).first(where: { $0.name == "2026-10-24 10.00.00" }) {
+        do {
+            try SaveBackup.restore(entry, saveFolder: save, backups: files.backups, version: "0.5.16", now: when.addingTimeInterval(60))
+            check((try? String(contentsOf: save.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "old", "restored")
+            let replaced = SaveBackup.list(backups: files.backups).first
+            check(replaced?.reason == .restore && (try? String(contentsOf: replaced!.saves.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "save",
+                  "the replaced saves are a backup")
+        } catch { check(false, "restore failed: \(error)") }
+    } else { check(false, "backup to restore not listed") }
+    var refused = false
+    if let bare = SaveBackup.list(backups: files.backups).first(where: { $0.name == "2026-10-20 10.00.00" }) {
+        do { try SaveBackup.restore(bare, saveFolder: save, backups: files.backups, version: "0.5.16") } catch { refused = true }
+    }
+    check(refused && (try? String(contentsOf: save.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "old", "an empty backup is refused, saves untouched")
     try? fm.removeItem(at: data)
 }
 
@@ -1148,6 +1188,9 @@ do {
     check(env["BB_FRAME_STATS"] == "1" && env["MTL_HUD_ENABLED"] == "1" && env["BB_FPS"] == "uncap", "extra launch.conf variables, environment wins")
     check(env["BB_GAME_DIR"] == nil && env["BB_UPDATE_CHECKED"] == nil && env["OTHER"] == nil && env["bb_lower"] == nil, "launcher keys and others stay out")
 }
+
+let spatialSettings = GameSettings(ini: IniFile(text: "upscaler=metalfx_spatial\npreset=1\n"))
+check(spatialSettings.upscaler == .metalfx_spatial, "spatial choice survives launcher load")
 
 // The relaunch after an update: the new copy opens only once the old one has exited.
 do {

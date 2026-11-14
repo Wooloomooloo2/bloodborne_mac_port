@@ -14,11 +14,10 @@ struct ReleaseUpdate: Equatable {
     var digest: String?
     /// A pre-release on GitHub or a test tag (mac-v0.5.2-test1): offered only with "Include test builds".
     var isTestBuild = false
-    /// An online play beta (its zip is Bloodborne-OnlineBeta-macOS-<version>.zip): offered only
-    /// with "Online play beta".
+    /// An online play beta (its zip is Bloodborne-OnlineBeta-macOS-<version>.zip, holding
+    /// Bloodborne Beta.app): installed next to the regular app, which offers it only with "Online
+    /// play beta"; the beta app updates itself to newer betas only.
     var isBeta = false
-    /// Back from a beta to the newest regular version, although its number may be lower.
-    var isReturn = false
 }
 
 /// Update checks against the repository's GitHub releases (launcher/App/Updater.swift does the
@@ -26,6 +25,14 @@ struct ReleaseUpdate: Equatable {
 enum Updates {
     static let repository = "Wooloomooloo2/bloodborne_mac_port"
     static let bundleIdentifier = "io.github.wooloomooloo2.bloodborne-mac-port"
+    /// The beta app (package_app.sh for -beta versions): its own identity, so it sits next to the
+    /// regular app.
+    static let betaBundleIdentifier = bundleIdentifier + ".beta"
+    static let appName = "Bloodborne.app"
+    static let betaAppName = "Bloodborne Beta.app"
+
+    static func isBetaApp(bundleIdentifier id: String?) -> Bool { id == betaBundleIdentifier }
+    static func appName(beta: Bool) -> String { beta ? betaAppName : appName }
     static let releasesAPI = URL(string: "https://api.github.com/repos/\(repository)/releases?per_page=30")!
     static let repositoryPage = URL(string: "https://github.com/\(repository)")!
     /// Automatic checks: once a day, when the launcher window shows.
@@ -84,17 +91,23 @@ enum Updates {
     }
 
     /// The release to offer over `current` (nil: up to date). `skipping`: a version the player
-    /// chose to skip; still offered by a check they ask for. A beta with betas turned off is
-    /// offered the newest regular version, even an older one (`isReturn`).
-    static func newest(json: Data, current: ReleaseVersion?, includeTestBuilds: Bool, includeBetas: Bool = false,
+    /// chose to skip; still offered by a check they ask for. The regular app is offered regular
+    /// versions; the beta app (`betaApp`) newer betas only.
+    static func newest(json: Data, current: ReleaseVersion?, includeTestBuilds: Bool, betaApp: Bool = false,
                        skipping: String? = nil) throws -> ReleaseUpdate? {
-        guard var best = try releases(json: json, includeTestBuilds: includeTestBuilds, includeBetas: includeBetas).first
-        else { return nil }
-        if let current, !best.version.isNewer(than: current) {
-            guard current.isBeta, !includeBetas, best.version != current else { return nil }
-            best.isReturn = true
-        }
+        let candidates = try releases(json: json, includeTestBuilds: includeTestBuilds, includeBetas: betaApp)
+        guard let best = candidates.first(where: { $0.isBeta == betaApp }) else { return nil }
+        if let current, !best.version.isNewer(than: current) { return nil }
         return best.version.text == skipping ? nil : best
+    }
+
+    /// The beta to install next to the regular app: the newest, unless the one installed
+    /// (`installed`, its version) is as new.
+    static func newestBeta(json: Data, installed: ReleaseVersion?) throws -> ReleaseUpdate? {
+        guard let best = try releases(json: json, includeTestBuilds: true, includeBetas: true).first(where: \.isBeta)
+        else { return nil }
+        if let installed, !best.version.isNewer(than: installed) { return nil }
+        return best
     }
 
     /// nil when this copy of the app can replace itself, else why not.
@@ -131,9 +144,9 @@ enum Updates {
         return ["/bin/sh", "-c", script, "bloodborne-relaunch", String(pid), bundle.path, opener]
     }
 
-    static func unpackedProblem(info: [String: Any], expected: ReleaseVersion) -> String? {
-        guard info["CFBundleIdentifier"] as? String == bundleIdentifier else {
-            return "The download is not Bloodborne.app (bundle identifier \(info["CFBundleIdentifier"] as? String ?? "missing"))."
+    static func unpackedProblem(info: [String: Any], expected: ReleaseVersion, beta: Bool = false) -> String? {
+        guard info["CFBundleIdentifier"] as? String == (beta ? betaBundleIdentifier : bundleIdentifier) else {
+            return "The download is not \(appName(beta: beta)) (bundle identifier \(info["CFBundleIdentifier"] as? String ?? "missing"))."
         }
         let version = info["CFBundleVersion"] as? String ?? "missing"
         return version == expected.text ? nil : "The download contains version \(version), not \(expected.text)."

@@ -186,14 +186,16 @@ bool TemporalUpscaler::Active() const {
     return enabled && !failed &&
            (BbSettings::Get().upscaler == BbSettings::UpscalerFsr3 ||
             BbSettings::Get().upscaler == BbSettings::UpscalerTaa ||
-            BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx) &&
+            BbSettings::Get().upscaler == BbSettings::UpscalerMetalFx ||
+            BbSettings::Get().upscaler == BbSettings::UpscalerSpatial) &&
            !BbToggle::Disabled(1u << 24);
 }
 
 bool TemporalUpscaler::ReactiveOn() const {
     return BbSettings::Get().reactive && !BbToggle::Disabled(1u << 27) &&
            BbSettings::Get().upscaler != BbSettings::UpscalerTaa &&
-           BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx; // MetalFX: no mask input
+           BbSettings::Get().upscaler != BbSettings::UpscalerMetalFx &&
+           BbSettings::Get().upscaler != BbSettings::UpscalerSpatial; // MetalFX: no mask input
 }
 
 void TemporalUpscaler::OnSceneColor(VideoCore::ImageId color) {
@@ -240,7 +242,7 @@ bool TemporalUpscaler::OnFrameStart() {
                 // What runs (an unavailable provider falls back); the saved choice is kept.
                 const auto& v = BbSettings::Get();
                 BbSettings::Get().upscaler.store(BbSettings::FallbackUpscaler(
-                    provider, v.metalfx_supported, v.fsr3_supported, v.preset));
+                    provider, v.metalfx_supported, v.fsr3_supported, v.preset, v.spatial_supported));
             }
             std::fclose(f);
         }
@@ -257,7 +259,7 @@ bool TemporalUpscaler::OnFrameStart() {
         failed = false;
     }
     const bool active = Active();
-    const bool jitter_on = active && settings.jitter && !BbToggle::Disabled(1u << 25);
+    const bool jitter_on = active && upscaler != BbSettings::UpscalerSpatial && settings.jitter && !BbToggle::Disabled(1u << 25);
     const int output = settings.output_res.load();
     const bool output_changed = !scaled_session && applied_output != output;
     if (output_changed) {
@@ -390,7 +392,7 @@ bool TemporalUpscaler::EnsureResources(u32 w, u32 h, u32 ow, u32 oh, bool hdr) {
                       : Metal::Object{};
     }
     taa_next = 0;
-    if (upscaler != BbSettings::UpscalerMetalFx) {
+    if (upscaler != BbSettings::UpscalerMetalFx && upscaler != BbSettings::UpscalerSpatial) {
         metalfx_scaler = {}; // its memory, while another provider runs
     }
     if (upscaler == BbSettings::UpscalerFsr3) {
@@ -564,6 +566,7 @@ bool TemporalUpscaler::Resolve(const ResolveInputs& in) {
     case BbSettings::UpscalerTaa:
         // TAA's own sharpen covers the menu's whole 0..2.
         return ResolveTaa(in);
+    case BbSettings::UpscalerSpatial:
     case BbSettings::UpscalerMetalFx:
         if (!ResolveMetalFx(in)) {
             return false;
@@ -715,6 +718,7 @@ bool TemporalUpscaler::ResolveMetalFx(const ResolveInputs& in) {
         .out_width = in.out_width,
         .out_height = in.out_height,
         .hdr = in.hdr,
+        .spatial = BbSettings::Get().upscaler == BbSettings::UpscalerSpatial,
     };
     bool fresh = false;
     if (!metalfx_scaler || config != metalfx_config) {
@@ -739,8 +743,9 @@ bool TemporalUpscaler::ResolveMetalFx(const ResolveInputs& in) {
         .reset = in.reset || fresh,
     };
     scheduler.EndRendering();
-    scheduler.Record([scaler = metalfx_scaler.Get(), frame](Metal::Encoder& e) {
-        BbMetalFx::Encode(e, scaler, frame);
+    scheduler.Record([scaler = Metal::Object::Retain(metalfx_scaler.Get()), frame, spatial = config.spatial](Metal::Encoder& e) {
+        if (spatial) BbMetalFx::EncodeSpatial(e, scaler.Get(), frame);
+        else BbMetalFx::Encode(e, scaler.Get(), frame);
     });
     return true;
 }
@@ -843,7 +848,8 @@ void TemporalUpscaler::Run() {
         input_color = color.GetImage();
         input_depth = depth.GetImage();
     }
-    camera_motion.RecordMotion(input_depth, motion_image.Get(), w, h);
+    if (BbSettings::Get().upscaler != BbSettings::UpscalerSpatial)
+        camera_motion.RecordMotion(input_depth, motion_image.Get(), w, h);
     const bool has_reactive = mask_ready || RecordReactive(input_color);
     const ResolveInputs inputs{
         .color = input_color,
@@ -1085,7 +1091,8 @@ void TemporalUpscaler::RunScaled() {
         depth_texture = depth.GetImage();
     }
     scheduler.EndRendering();
-    camera_motion.RecordMotion(depth_texture, motion_image.Get(), w, h);
+    if (BbSettings::Get().upscaler != BbSettings::UpscalerSpatial)
+        camera_motion.RecordMotion(depth_texture, motion_image.Get(), w, h);
 
     const ResolveInputs inputs{
         .color = color_texture,

@@ -8,7 +8,7 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
-    private enum Page: Hashable { case general, advanced, controls, online }
+    private enum Page: Hashable { case general, saves, advanced, controls, online }
     @State private var page = Page.general
 
     var body: some View {
@@ -20,6 +20,7 @@ struct LauncherView: View {
             // forever with the window frozen (#47, sampled by the reporter).
             Picker("", selection: $page) {
                 Text("General").tag(Page.general)
+                Text("Saves & Folders").tag(Page.saves)
                 Text("Advanced").tag(Page.advanced)
                 Text("Controls").tag(Page.controls)
                 Text("Online").tag(Page.online)
@@ -31,6 +32,7 @@ struct LauncherView: View {
             Group {
                 switch page {
                 case .general: general
+                case .saves: SavesView(model: model)
                 case .advanced: advanced
                 case .controls: ControlsView(model: model)
                 case .online: onlineTab
@@ -46,6 +48,12 @@ struct LauncherView: View {
                     .disabled(model.running)
                 UpdateBadge(updater: model.updater)
                 Spacer()
+                // (Folders live on their own page: say why Play is off from any page.)
+                if page != .saves, !model.running, !model.checkingGame, model.gameProblem != nil || model.config.gameDir == nil {
+                    Button("Choose the game folder…") { page = .saves }
+                        .buttonStyle(.link)
+                        .foregroundStyle(.red)
+                }
                 if let progress = model.benchmark.progress {
                     Text(progress).foregroundStyle(.secondary).lineLimit(1)
                 } else if let message = model.exitMessage {
@@ -70,8 +78,15 @@ struct LauncherView: View {
                         .controlSize(.large)
                         .disabled(!model.canPlay)
                         .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
+                    if model.otherApp != nil {
+                        Button(model.isBetaApp ? "Play Regular Version" : "Play Beta", action: model.playOtherApp)
+                            .controlSize(.large)
+                            .disabled(model.running)
+                            .help(model.isBetaApp ? "Start the regular Bloodborne app's version instead (this window closes)."
+                                  : "Start the online play beta (Bloodborne Beta, next to this app) instead; this window closes.")
+                    }
                     Button(action: model.play) {
-                        Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                        Text(model.running ? "Running…" : model.isBetaApp ? "Play Beta" : "Play").frame(minWidth: 80)
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
@@ -161,6 +176,13 @@ struct LauncherView: View {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
                     .disabled(model.settings.ultrawide)
+                    if model.settings.upscaler == .metalfx_spatial {
+                        Text("Spatial: lighter on the GPU, shimmers more in motion.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if model.settings.upscaler == .metalfx {
+                        Text("MetalFX temporal: recommended for a steadier image in motion.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }
@@ -176,21 +198,46 @@ struct LauncherView: View {
             }
             .formStyle(.grouped)
             Form {
+                if !model.isBetaApp {
+                    onlineBetaInvite
+                }
                 Section("Effects") {
                     ForEach(GameSettings.visualEffects) { effect in
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
                     Toggle("Show FPS", isOn: $model.settings.showFPS)
                 }
-                Section("Locations") {
-                    FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
-                              problem: model.checkingGame ? nil : model.gameProblem,
-                              choose: model.chooseGameFolder, reset: model.resetGameFolder)
-                    FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
-                              choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
-                }
             }
             .formStyle(.grouped)
+        }
+    }
+
+    /// The regular app's invitation to the online play beta (Bloodborne Beta.app next to it).
+    @ViewBuilder private var onlineBetaInvite: some View {
+        Section("Online play (beta)") {
+            if model.otherApp != nil {
+                Label("Bloodborne Beta is installed next to this app", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Play Beta (below) starts the online beta; Play starts this version, as before.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.onlineBeta {
+                    Button("Leave the Beta…") { model.setOnlineBeta(false) }
+                }
+            } else if model.onlineBeta {
+                Text("You joined the beta, but it isn't installed yet.")
+                Button("Download the Beta…", action: model.checkForUpdatesNow)
+                    .buttonStyle(.borderedProminent)
+                Button("Leave the Beta") { model.setOnlineBeta(false) }
+                    .buttonStyle(.link)
+            } else {
+                Label("Online play is here, as a beta", systemImage: "globe")
+                    .font(.headline)
+                Text("Co-op with the bells, messages, bloodstains and ghosts through a community server. It installs as a second app, Bloodborne Beta: **this version stays as it is and stays playable**, and you choose which one to start. Your saves are backed up before every beta launch.")
+                    .font(.callout)
+                Button("Join the Beta…") { model.setOnlineBeta(true) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.running)
+            }
         }
     }
 
@@ -416,7 +463,7 @@ struct LauncherView: View {
     }
 }
 
-private struct FolderRow: View {
+struct FolderRow: View {
     let title: String
     let path: String
     let problem: String?

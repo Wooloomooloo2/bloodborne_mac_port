@@ -10,6 +10,7 @@
 
 #include <array>
 #include <atomic>
+#include "bbport_upload_reservation.h"
 
 #include "common/assert.h"
 #include "common/types.h"
@@ -36,19 +37,16 @@ public:
     /// Stage A: `size` bytes at `alignment`; returns the ring offset, or nullopt when the ring is
     /// still in use by the GPU (the caller leaves the binding to stage B).
     std::optional<u64> Allocate(u64 size, u64 alignment) {
-        u64 at = (position + alignment - 1) & ~(alignment - 1);
-        if (at % Capacity + size > Capacity) {
-            at += Capacity - at % Capacity; // wrap to the ring start
-        }
-        const auto in_use = [&] { return at + size > Capacity && at + size - Capacity > retired; };
-        if (in_use()) {
+        auto reservation = BbUpload::Reserve(position, retired, size, alignment, Capacity);
+        if (!reservation) {
             Retire();
-            if (in_use()) {
+            reservation = BbUpload::Reserve(position, retired, size, alignment, Capacity);
+            if (!reservation) {
                 return std::nullopt;
             }
         }
-        position = at + size;
-        return at % Capacity;
+        position = reservation->end;
+        return reservation->offset;
     }
 
     [[nodiscard]] u8* Data(u64 offset) noexcept {

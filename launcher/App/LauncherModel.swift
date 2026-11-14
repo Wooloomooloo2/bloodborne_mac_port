@@ -18,7 +18,7 @@ final class LauncherModel: ObservableObject {
     let secrets: SecretStore
     let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
     let benchmark = BenchmarkRunner()
-    private let env = ProcessInfo.processInfo.environment
+    private let env = LauncherModel.environment()
     private var confFile = IniFile()
     private var settingsFile = IniFile()
     private var updaterChanges: AnyCancellable?
@@ -64,10 +64,24 @@ final class LauncherModel: ObservableObject {
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
 
+    /// The process environment; the beta app reads and writes its own launch.conf (a copy of the
+    /// regular app's at its first start).
+    private static func environment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        guard Updates.isBetaApp(bundleIdentifier: Bundle.main.bundleIdentifier), (env["BB_LAUNCH_CONF"] ?? "").isEmpty,
+              case .packaged? = Layout.detect(bundleURL: Bundle.main.bundleURL, info: Bundle.main.infoDictionary ?? [:])
+        else { return env }
+        let beta = Layout.betaLaunchConf(env)
+        let regular = beta.deletingLastPathComponent().appendingPathComponent("launch.conf")
+        if !FileManager.default.fileExists(atPath: beta.path) { try? FileManager.default.copyItem(at: regular, to: beta) }
+        env["BB_LAUNCH_CONF"] = beta.path
+        return env
+    }
+
     init(layout: Layout, secrets: SecretStore = LoginKeychain()) {
         self.layout = layout
         self.secrets = secrets
-        dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
+        dataDir = layout.dataDir(env: env, config: LaunchConfig())
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -123,6 +137,7 @@ final class LauncherModel: ObservableObject {
         confFile = IniFile(contentsOf: confURL)
         config = LaunchConfig(ini: confFile)
         if config.gameDir == nil { config.gameDir = layout.defaultGameDir() }
+        refreshOtherApp()
         dataDir = layout.dataDir(env: env, config: config)
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
@@ -430,25 +445,139 @@ final class LauncherModel: ObservableObject {
         }
     }
 
-    /// Mods and cheats can change what ends up in the save: the first launch with a set not seen
-    /// before copies the save folder to <data>/save-backups/<date>/savedata (the newest five
-    /// stay). False: the copy failed and the player cancelled.
+    /// Automatic backups before a launch (<data>/save-backups/<date>/savedata, the newest
+    /// SaveBackup.keep stay): every beta launch, the first launch of a new version, the first with
+    /// a new set of mods or cheats. False: the copy failed and the player cancelled.
     private func backUpSavesIfNeeded() -> Bool {
         refreshEnabledMods()
-        let backups = modFiles.backups
+        let backups = backupDir
         let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
-        guard SaveBackup.needed(signature, last: SaveBackup.lastSignature(backups: backups)) else { return true }
+        guard let reason = SaveBackup.launchReason(mods: signature, lastMods: SaveBackup.lastSignature(backups: backups),
+                                                   version: appVersion, lastVersion: SaveBackup.lastVersion(backups: backups),
+                                                   isBeta: updater.current?.isBeta == true) else { return true }
         do {
-            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, signature: signature)
+            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, reason: reason, version: appVersion)
+            try SaveBackup.record(backups: backups, signature: signature, version: appVersion)
             return true
         } catch {
             let alert = NSAlert()
             alert.messageText = "Your save could not be backed up"
-            alert.informativeText = "The launcher backs up your save before the first launch with a new set of mods or cheats, and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
+            alert.informativeText = "The launcher backs up your save before this launch (\(reason.label.lowercased())), and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
             alert.addButton(withTitle: "Play Anyway")
             alert.addButton(withTitle: "Cancel")
             return alert.runModal() == .alertFirstButtonReturn
         }
+    }
+
+    // MARK: Save backups (the Backups window)
+
+    @Published var saveBackups: [SaveBackupEntry] = []
+    @Published var backupMessage: String?
+
+    func refreshBackups() { saveBackups = SaveBackup.list(backups: backupDir) }
+
+    /// The default backup folder, or the one chosen (launch.conf BB_BACKUP_DIR).
+    var defaultBackupDir: URL { dataDir.appendingPathComponent("save-backups") }
+    var backupDir: URL { config.backupDir ?? defaultBackupDir }
+    @Published private(set) var backingUp = false
+    @Published private(set) var backupProblem: String?
+
+    func backUpNow() {
+        guard !backingUp else { return }
+        backingUp = true
+        let (saves, backups, version) = (saveDir, backupDir, appVersion)
+        Task {
+            let result = await Task.detached { () -> Result<URL?, Error> in
+                Result { try SaveBackup.backUp(saveFolder: saves, backups: backups, reason: .manual, version: version) }
+            }.value
+            switch result {
+            case .success(nil):
+                backupMessage = "There are no saves to back up yet."
+            case let .success(folder?):
+                let size = ByteCountFormatter.string(fromByteCount: SaveBackup.size(folder), countStyle: .file)
+                backupMessage = "Backed up at \(Date().formatted(date: .omitted, time: .standard)) (\(size)) to \(folder.path)."
+            case let .failure(error):
+                backupMessage = "The backup failed: \(error.localizedDescription)"
+            }
+            backingUp = false
+            refreshBackups()
+        }
+    }
+
+    func chooseBackupFolder() {
+        guard let url = pickFolder("Choose the folder for your save backups.", start: backupDir) else { return }
+        setBackupFolder(url)
+    }
+
+    func resetBackupFolder() { setBackupFolder(defaultBackupDir) }
+
+    /// A new backup folder; the backups in the old one can move along.
+    private func setBackupFolder(_ url: URL) {
+        let old = backupDir
+        guard url.standardizedFileURL.path != old.standardizedFileURL.path else { return }
+        if let problem = SaveFolder.problem(url, create: true) {
+            backupProblem = problem
+            return
+        }
+        let existing = SaveBackup.list(backups: old)
+        if !existing.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Move your \(existing.count) backup\(existing.count == 1 ? "" : "s") to the new folder?"
+            alert.informativeText = "They are moved from \(old.path) to \(url.path). Otherwise they stay where they are, and the Backups window lists the new folder's only."
+            alert.addButton(withTitle: "Move Backups")
+            alert.addButton(withTitle: "Leave Them")
+            if alert.runModal() == .alertFirstButtonReturn {
+                let fm = FileManager.default
+                for name in existing.map(\.name) + [SaveBackup.recordName, SaveBackup.versionRecordName] {
+                    let from = old.appendingPathComponent(name), to = url.appendingPathComponent(name)
+                    guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { continue }
+                    do { try fm.moveItem(at: from, to: to) } catch {
+                        backupProblem = "Moving \(name) failed: \(error.localizedDescription)"
+                        return
+                    }
+                }
+            }
+        }
+        config.backupDir = url.standardizedFileURL.path == defaultBackupDir.standardizedFileURL.path ? nil : url
+        backupProblem = nil
+        save()
+        refreshBackups()
+    }
+
+    func restoreBackup(_ entry: SaveBackupEntry) {
+        guard !running, !GameRunner.isGameRunning else {
+            backupMessage = "Quit the game before restoring a backup."
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Restore the saves from \(entry.name)?"
+        alert.informativeText = "Your current saves are backed up first (\"\(SaveBackupReason.restore.label)\" in the list), then replaced by this backup's."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try SaveBackup.restore(entry, saveFolder: saveDir, backups: backupDir, version: appVersion)
+            backupMessage = "Restored the saves from \(entry.name)."
+        } catch {
+            backupMessage = "The restore failed; your saves are as they were: \(error.localizedDescription)"
+        }
+        refreshBackups()
+    }
+
+    func deleteBackup(_ entry: SaveBackupEntry) {
+        let alert = NSAlert()
+        alert.messageText = "Delete the backup from \(entry.name)?"
+        alert.informativeText = "It is moved to the Trash."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: entry.folder, resultingItemURL: nil)
+            backupMessage = nil
+        } catch {
+            backupMessage = "The backup was not deleted: \(error.localizedDescription)"
+        }
+        refreshBackups()
     }
 
     /// The Stop button is for a game started with Play (the benchmark runs its own launches).
@@ -555,8 +684,8 @@ final class LauncherModel: ObservableObject {
         guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()
         save()
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
-                                   skipping: config.skippedVersion, manual: false) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, offerBeta: onlineBeta,
+                                   installedBeta: installedBetaVersion, skipping: config.skippedVersion, manual: false) }
     }
 
     /// Automatic checks are off until the player agrees: asked once, at the first start with the
@@ -575,14 +704,17 @@ final class LauncherModel: ObservableObject {
 
     /// The app menu's Check for Updates….
     func checkForUpdatesNow() {
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
-                                   skipping: nil, manual: true) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, offerBeta: onlineBeta,
+                                   installedBeta: installedBetaVersion, skipping: nil, manual: true) }
     }
 
     func installUpdate() {
         guard let update = updater.available, !running else { return }
         save()
-        Task { await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL) }
+        Task {
+            await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL)
+            refreshOtherApp()
+        }
     }
 
     func skipUpdate() {
@@ -598,32 +730,100 @@ final class LauncherModel: ObservableObject {
         save()
     }
 
-    /// In the online play beta: as chosen, else whether this app is a beta.
-    var onlineBeta: Bool { config.onlineBeta ?? updater.current?.isBeta ?? false }
+    // MARK: The online play beta (Bloodborne Beta.app next to the regular app)
 
-    /// The online play beta: joining asks first, then looks for the beta at once; leaving looks
-    /// for the way back to the regular version.
+    var isBetaApp: Bool { updater.isBetaApp }
+    /// The regular app offers the beta (to install next to it).
+    var onlineBeta: Bool { config.onlineBeta ?? false }
+    /// The other app of the pair next to this one: the beta from the regular app, and back.
+    @Published private(set) var otherApp: URL?
+
+    func refreshOtherApp() {
+        let here = Bundle.main.bundleURL
+        let other = here.deletingLastPathComponent().appendingPathComponent(Updates.appName(beta: !isBetaApp))
+        let identifier = isBetaApp ? Updates.bundleIdentifier : Updates.betaBundleIdentifier
+        let info = NSDictionary(contentsOf: other.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
+        otherApp = info?["CFBundleIdentifier"] as? String == identifier && other.path != here.path ? other : nil
+    }
+
+    /// The beta next to the regular app: its version, for the update check.
+    var installedBetaVersion: ReleaseVersion? {
+        guard !isBetaApp, let otherApp else { return nil }
+        let info = NSDictionary(contentsOf: otherApp.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
+        return (info?["CFBundleVersion"] as? String).flatMap(ReleaseVersion.init)
+    }
+
+    /// Play Beta (or Play Regular Version in the beta): the other app starts the game and this
+    /// launcher quits.
+    func playOtherApp() {
+        guard let otherApp, !running else { return }
+        save()
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = ["--play"]
+        configuration.createsNewApplicationInstance = true
+        // The same data folder (a test run's, or the default): only these are passed on.
+        configuration.environment = env.filter { ["HOME", "BB_DATA_DIR"].contains($0.key) }
+        NSWorkspace.shared.openApplication(at: otherApp, configuration: configuration) { _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    self.exitMessage = "\(otherApp.deletingPathExtension().lastPathComponent) did not open: \(error.localizedDescription)"
+                } else {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    /// Joining asks first, then looks for the beta at once (installed next to this app); leaving
+    /// offers to move the beta app to the Trash.
     func setOnlineBeta(_ on: Bool) {
-        guard on != onlineBeta, !updater.busy else { return }
+        guard on != onlineBeta, !updater.busy, !isBetaApp else { return }
+        let alert = NSAlert()
         if on {
-            let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Try the online play beta?"
             alert.informativeText = """
-                The beta (version 0.7) adds the game's own online play: messages, bloodstains, ghosts and co-op with the bells, through a community server. It is unfinished: invasions don't work yet, and you may meet bugs the regular version doesn't have.
+                The beta (version 0.7) adds the game's own online play: messages, bloodstains, ghosts and co-op with the bells, through a community server. It is unfinished: invasions don't work yet, and you may meet bugs this version doesn't have.
 
-                The beta replaces this app, like an update. Your saves and settings stay as they are. While online play is on, mods and cheats are off.
-
-                To go back, turn the beta off here: the regular version is offered again.
+                It installs as a second app, Bloodborne Beta, next to this one: this version stays, and the launcher's Play Beta starts the beta. Before every beta launch your saves are backed up; in the beta you can also give it its own copy of the saves. While online play is on, mods and cheats are off.
                 """
             alert.addButton(withTitle: "Join the Beta")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+        } else if let otherApp {
+            alert.messageText = "Move Bloodborne Beta to the Trash?"
+            alert.informativeText = "It is no longer offered either way. Your saves and settings stay; backups made before beta launches are in the Backups window."
+            alert.addButton(withTitle: "Move to Trash")
+            alert.addButton(withTitle: "Keep It")
+            if alert.runModal() == .alertFirstButtonReturn {
+                if (try? FileManager.default.trashItem(at: otherApp, resultingItemURL: nil)) == nil {
+                    exitMessage = "Bloodborne Beta could not be moved to the Trash (is it open?)."
+                }
+                refreshOtherApp()
+            }
         }
         config.onlineBeta = on
         config.skippedVersion = nil
         save()
-        checkForUpdatesNow()
+        if on { checkForUpdatesNow() }
+    }
+
+    // MARK: The beta's saves: shared with the regular app (default) or its own copy
+
+    var betaSaveDir: URL { dataDir.appendingPathComponent("savedata-beta") }
+    var betaOwnSaves: Bool { isBetaApp && config.saveDir?.standardizedFileURL.path == betaSaveDir.standardizedFileURL.path }
+
+    func setBetaOwnSaves(_ own: Bool) {
+        guard isBetaApp, own != betaOwnSaves, !running else { return }
+        if own {
+            try? FileManager.default.createDirectory(at: betaSaveDir, withIntermediateDirectories: true)
+            setSaveFolder(betaSaveDir) // (offers to copy the shared saves into it)
+        } else {
+            // Back to the regular app's save folder (launch.conf's BB_SAVE_DIR, else the default).
+            let regular = IniFile(contentsOf: confURL.deletingLastPathComponent().appendingPathComponent("launch.conf"))
+            setSaveFolder(LaunchConfig(ini: regular).saveDir ?? SaveFolder.defaultURL(dataDir: dataDir))
+        }
+        save()
     }
 
     var updateInstallProblem: String? { Updates.installProblem(layout: layout, bundle: Bundle.main.bundleURL) }

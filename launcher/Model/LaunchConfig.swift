@@ -41,6 +41,8 @@ enum Shell {
 struct LaunchConfig: Equatable {
     var gameDir: URL?
     var saveDir: URL?
+    /// Where save backups go (absent: <data>/save-backups).
+    var backupDir: URL?
     var showLauncher = true
     /// Automatic update checks; nil until the player answers the first-run question.
     var checkUpdates: Bool?
@@ -54,7 +56,7 @@ struct LaunchConfig: Equatable {
     /// Other BB_* / MTL_* / MVK_* assignments (diagnostics such as BB_FRAME_STATS=1): passed on to
     /// the game; a variable already set in the environment wins (#69).
     private(set) var extraEnvironment: [String: String] = [:]
-    static let ownKeys: Set<String> = ["BB_GAME_DIR", "BB_SAVE_DIR", "BB_SHOW_LAUNCHER", "BB_CHECK_UPDATES",
+    static let ownKeys: Set<String> = ["BB_GAME_DIR", "BB_SAVE_DIR", "BB_BACKUP_DIR", "BB_SHOW_LAUNCHER", "BB_CHECK_UPDATES",
                                        "BB_UPDATE_TEST_BUILDS", "BB_UPDATE_ONLINE_BETA", "BB_UPDATE_SKIP", "BB_UPDATE_CHECKED",
                                        "BB_LAUNCH_CONF"]
 
@@ -67,6 +69,7 @@ struct LaunchConfig: Equatable {
         }
         gameDir = path("BB_GAME_DIR")
         saveDir = path("BB_SAVE_DIR")
+        backupDir = path("BB_BACKUP_DIR")
         dataDir = path("BB_DATA_DIR")
         if let v = ini["BB_SHOW_LAUNCHER"] { showLauncher = Shell.unquote(v) != "0" }
         if let v = ini["BB_CHECK_UPDATES"] { checkUpdates = Shell.unquote(v) != "0" }
@@ -90,6 +93,7 @@ struct LaunchConfig: Equatable {
     func apply(to ini: inout IniFile) {
         ini["BB_GAME_DIR"] = gameDir.map { Shell.quote($0.path) }
         ini["BB_SAVE_DIR"] = saveDir.map { Shell.quote($0.path) }
+        ini["BB_BACKUP_DIR"] = backupDir.map { Shell.quote($0.path) }
         ini["BB_SHOW_LAUNCHER"] = showLauncher ? "1" : "0"
         ini["BB_CHECK_UPDATES"] = checkUpdates.map { $0 ? "1" : "0" }
         ini["BB_UPDATE_TEST_BUILDS"] = testBuilds ? "1" : nil
