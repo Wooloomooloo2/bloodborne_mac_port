@@ -145,7 +145,8 @@ public:
     // dispatch. Slots: buffers 0-30, textures 0-127, samplers 0-15.
     // Bindings are unretained pointers that stay bound until replaced, into new Metal encoders
     // (which get every bound slot again) but not across Submit: a new command buffer starts
-    // unbound, as in Vulkan, so objects may be freed once their command buffer was submitted.
+    // unbound, as in Vulkan. Callers must keep resources alive through GPU completion via
+    // deferred deletion or KeepAlive; submitting alone does not make them safe to free.
     void SetBuffer(Stage stage, u32 slot, BufferRef buffer);
     /// Copies `size` bytes now. Up to 4 KiB they go inline (setBytes); more go through a
     /// temporary shared buffer kept until the command buffer completes.
@@ -157,6 +158,12 @@ public:
     void SetVertexBuffer(u32 slot, BufferRef buffer, u32 stride);
     void SetTexture(Stage stage, u32 slot, void* texture); ///< id<MTLTexture>
     void SetSampler(Stage stage, u32 slot, void* sampler); ///< id<MTLSamplerState>
+
+    /// Per-Encoder lifetime counters, collected only with BB_ENCODER_STATS=1. `emitted`
+    /// counts resource-binding Metal calls; `skipped` counts identical setter requests.
+    /// BB_METAL_BINDING_CACHE=0 keeps the original setters for performance comparisons.
+    struct BindingStats { u64 emitted{}, skipped{}; };
+    [[nodiscard]] BindingStats GetBindingStats() const noexcept;
 
     void Draw(Primitive primitive, u32 vertex_count, u32 instance_count = 1, u32 first_vertex = 0,
               u32 first_instance = 0);
