@@ -555,7 +555,7 @@ final class LauncherModel: ObservableObject {
         guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()
         save()
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: config.onlineBeta,
+        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
                                    skipping: config.skippedVersion, manual: false) }
     }
 
@@ -575,7 +575,7 @@ final class LauncherModel: ObservableObject {
 
     /// The app menu's Check for Updates….
     func checkForUpdatesNow() {
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: config.onlineBeta,
+        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
                                    skipping: nil, manual: true) }
     }
 
@@ -598,10 +598,13 @@ final class LauncherModel: ObservableObject {
         save()
     }
 
+    /// In the online play beta: as chosen, else whether this app is a beta.
+    var onlineBeta: Bool { config.onlineBeta ?? updater.current?.isBeta ?? false }
+
     /// The online play beta: joining asks first, then looks for the beta at once; leaving looks
     /// for the way back to the regular version.
     func setOnlineBeta(_ on: Bool) {
-        guard on != config.onlineBeta, !updater.busy else { return }
+        guard on != onlineBeta, !updater.busy else { return }
         if on {
             let alert = NSAlert()
             alert.alertStyle = .warning

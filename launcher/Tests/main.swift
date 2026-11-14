@@ -651,7 +651,7 @@ do {
     // launch.conf keeps the update preferences.
     var conf = IniFile(text: "BB_GAME_DIR=/g\n")
     var config = LaunchConfig(ini: conf)
-    check(config.checkUpdates == nil && !config.testBuilds && !config.onlineBeta && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
+    check(config.checkUpdates == nil && !config.testBuilds && config.onlineBeta == nil && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
     config.checkUpdates = false
     config.testBuilds = true
     config.onlineBeta = true
@@ -661,12 +661,13 @@ do {
     check(LaunchConfig(ini: conf) == config && LaunchConfig(ini: conf).checkUpdates == false, "update preferences round trip")
     check(conf["BB_UPDATE_CHECKED"] == "2000000000" && conf["BB_CHECK_UPDATES"] == "0" && conf["BB_UPDATE_ONLINE_BETA"] == "1", "update keys written")
     config.testBuilds = false
-    config.onlineBeta = false
+    config.onlineBeta = nil
     config.skippedVersion = nil
     config.checkUpdates = nil
     config.apply(to: &conf)
     check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_ONLINE_BETA"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
     check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
+    check(LaunchConfig(ini: IniFile(text: "BB_UPDATE_ONLINE_BETA=0\n")).onlineBeta == false, "left the beta: remembered")
 }
 
 // High-resolution ultrawide selection on memory-constrained Macs.
