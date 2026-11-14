@@ -37,8 +37,13 @@ list(FILTER BBNET_SOURCES EXCLUDE REGEX
 # The Hunter's Dream backend (thd/, from droogie's bbhost through the Windows port, GPL-3.0):
 # BB_NET_BACKEND=thd puts its NP and sceNet code in front of shadPS4's.
 file(GLOB BBNET_THD_SOURCES CONFIGURE_DEPENDS thd/*.cpp)
-add_library(bbnet SHARED ${BBNET_SOURCES} ${BBNET_THD_SOURCES} "${SHADNET_PROTO_OUT}/shadnet.pb.cc"
-    bbnet_glue.cpp)
+# bbhost's NpSignaling as it is (vendor/bbhost/README.md): the connection handshake The Hunter's
+# Dream needs since bbhost v0.2.31, built against the adapter headers in vendor/bbhost_shim.
+set(BBNET_BBHOST_SOURCES vendor/bbhost/np_signaling.cpp)
+set_source_files_properties(${BBNET_BBHOST_SOURCES} PROPERTIES
+    COMPILE_OPTIONS "-iquote;${CMAKE_CURRENT_SOURCE_DIR}/vendor/bbhost_shim;-Wno-unused-parameter")
+add_library(bbnet SHARED ${BBNET_SOURCES} ${BBNET_THD_SOURCES} ${BBNET_BBHOST_SOURCES}
+    "${SHADNET_PROTO_OUT}/shadnet.pb.cc" bbnet_glue.cpp)
 # The module's own headers first, then the port's shim and shadPS4 (common/, logging).
 target_include_directories(bbnet PRIVATE include shadps4 shadps4/shadnet "${SHADNET_PROTO_OUT}"
     ${CMAKE_CURRENT_SOURCE_DIR} ../shim ../shadps4 ../third_party/imgui ../third_party/httplib)
