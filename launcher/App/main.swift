@@ -45,9 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
         let wantsWindow = CommandLine.arguments.contains("--updated") || NSEvent.modifierFlags.contains(.option)
+        // --play: the other app of the pair (Play Beta / Play Regular Version) starts the game here.
+        let play = CommandLine.arguments.contains("--play") && model.canPlay
         // Asked before the game too: players who turned the window off would never see it.
         model.askAboutUpdatesIfNeeded()
-        if !wantsWindow && model.canSkipWindow {
+        if play || (!wantsWindow && model.canSkipWindow) {
             direct = true
             // The daily check runs in the background while the game plays (started here, not
             // later: its save() must not rewrite bbport.ini while the game's menu may change it).

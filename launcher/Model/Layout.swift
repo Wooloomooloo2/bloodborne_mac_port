@@ -57,6 +57,12 @@ enum Layout: Equatable {
         home(env).appendingPathComponent("Library/Application Support/Bloodborne")
     }
 
+    /// The beta app's own launch.conf (its update and save-folder choices), next to the regular
+    /// app's; the launcher passes it as BB_LAUNCH_CONF.
+    static func betaLaunchConf(_ env: [String: String]) -> URL {
+        defaultData(env).appendingPathComponent("launch-beta.conf")
+    }
+
     /// launch.conf: in the data folder for the release app, next to Bloodborne.command in a
     /// checkout (shared with it). BB_LAUNCH_CONF overrides (tests).
     func launchConfURL(env: [String: String]) -> URL {

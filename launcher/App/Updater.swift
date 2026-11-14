@@ -15,6 +15,8 @@ final class Updater: ObservableObject {
         case available(ReleaseUpdate)
         case downloading(ReleaseUpdate, Double)
         case installing(ReleaseUpdate)
+        /// Done without a relaunch: the beta installed next to this app.
+        case installed(String)
         case failed(String)
     }
 
@@ -25,10 +27,13 @@ final class Updater: ObservableObject {
     let current: ReleaseVersion?
     /// The version as Info.plist has it ("0.5.2", "0.5.2-5-g0b50589", "dev").
     let currentText: String
+    /// This is Bloodborne Beta.app: it is offered newer betas only.
+    let isBetaApp: Bool
 
     init(info: [String: Any]) {
         currentText = info["CFBundleVersion"] as? String ?? info["CFBundleShortVersionString"] as? String ?? "dev"
         current = ReleaseVersion(currentText)
+        isBetaApp = Updates.isBetaApp(bundleIdentifier: info["CFBundleIdentifier"] as? String)
     }
 
     var available: ReleaseUpdate? {
@@ -47,7 +52,9 @@ final class Updater: ObservableObject {
 
     /// `manual`: the player asked (menu): skipped versions count, and the window shows the result
     /// whatever it is. Automatic checks stay silent unless there is something to install.
-    func check(includeTestBuilds: Bool, includeBetas: Bool, skipping: String?, manual: Bool) async {
+    /// `offerBeta`: the regular app also offers the online play beta (to install next to it) when
+    /// it has no update itself; `installedBeta`: the beta app's version there, if any.
+    func check(includeTestBuilds: Bool, offerBeta: Bool, installedBeta: ReleaseVersion?, skipping: String?, manual: Bool) async {
         guard !busy else { return }
         status = .checking
         if manual { showing = true }
@@ -59,9 +66,12 @@ final class Updater: ObservableObject {
             if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                 throw UpdateError("GitHub answered \(http.statusCode)\(http.statusCode == 403 ? " (rate limit: try again later)" : "").")
             }
-            let found = try Updates.newest(json: data, current: current, includeTestBuilds: includeTestBuilds,
-                                           includeBetas: includeBetas,
-                                           skipping: manual ? nil : skipping)
+            var found = try Updates.newest(json: data, current: current, includeTestBuilds: includeTestBuilds,
+                                           betaApp: isBetaApp, skipping: manual ? nil : skipping)
+            if found == nil, !isBetaApp, offerBeta, let beta = try Updates.newestBeta(json: data, installed: installedBeta),
+               manual || beta.version.text != skipping {
+                found = beta
+            }
             if let found {
                 status = .available(found)
                 showing = true
@@ -73,14 +83,25 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Downloads and installs `update`, then relaunches the new app. Returns only on failure.
+    /// Downloads and installs `update`, then relaunches the new app (returns only on failure). The
+    /// beta, from the regular app, goes next to it as Bloodborne Beta.app; this app keeps running.
     func install(_ update: ReleaseUpdate, layout: Layout, bundle: URL) async {
         if let problem = Updates.installProblem(layout: layout, bundle: bundle) {
             status = .failed(problem)
             return
         }
+        if update.isBeta && !isBetaApp {
+            let beta = bundle.deletingLastPathComponent().appendingPathComponent(Updates.betaAppName)
+            do {
+                try await place(update, at: beta)
+                status = .installed("Bloodborne Beta \(update.version.text) is installed next to this app, in \(beta.deletingLastPathComponent().path). Choose Play Beta to start it; Play still starts this version.")
+            } catch {
+                status = .failed("The beta was not installed: \(error.localizedDescription)")
+            }
+            return
+        }
         do {
-            try await replace(bundle, with: update)
+            try await place(update, at: bundle)
         } catch {
             status = .failed("The update was not installed: \(error.localizedDescription)")
             return
@@ -110,8 +131,8 @@ final class Updater: ObservableObject {
         exit(0)
     }
 
-    /// Downloads `update`, checks it and puts it in place of the app at `bundle`.
-    func replace(_ bundle: URL, with update: ReleaseUpdate) async throws {
+    /// Downloads `update`, checks it and puts it at `bundle` (in place of the app there, if any).
+    func place(_ update: ReleaseUpdate, at bundle: URL) async throws {
         let fm = FileManager.default
         // Unpacked beside the app: replaceItemAt swaps within one volume.
         let staging = bundle.deletingLastPathComponent().appendingPathComponent(".Bloodborne-update-\(getpid())")
@@ -125,19 +146,25 @@ final class Updater: ObservableObject {
         try await Task.detached { try Self.verify(zip, update) }.value
         try? fm.removeItem(at: staging)
         try fm.createDirectory(at: staging, withIntermediateDirectories: true)
-        let newApp = staging.appendingPathComponent("Bloodborne.app")
+        let newApp = staging.appendingPathComponent(Updates.appName(beta: update.isBeta))
         try await Task.detached {
             try Self.tool(["/usr/bin/ditto", "-x", "-k", zip.path, staging.path], "Unpacking the update failed")
             guard let info = NSDictionary(contentsOf: newApp.appendingPathComponent("Contents/Info.plist")) as? [String: Any] else {
-                throw UpdateError("The download contains no Bloodborne.app.")
+                throw UpdateError("The download contains no \(Updates.appName(beta: update.isBeta)).")
             }
-            if let problem = Updates.unpackedProblem(info: info, expected: update.version) { throw UpdateError(problem) }
+            if let problem = Updates.unpackedProblem(info: info, expected: update.version, beta: update.isBeta) {
+                throw UpdateError(problem)
+            }
             try Self.tool(["/usr/bin/codesign", "--verify", "--deep", "--strict", newApp.path],
                           "The downloaded app's signature is broken")
             // (URLSession downloads are not quarantined; clear it anyway so the app opens.)
             GameRunner.run(["/usr/bin/xattr", "-dr", "com.apple.quarantine", newApp.path])
         }.value
-        _ = try fm.replaceItemAt(bundle, withItemAt: newApp)
+        if fm.fileExists(atPath: bundle.path) {
+            _ = try fm.replaceItemAt(bundle, withItemAt: newApp)
+        } else {
+            try fm.moveItem(at: newApp, to: bundle)
+        }
     }
 
     nonisolated private static func verify(_ zip: URL, _ update: ReleaseUpdate) throws {
@@ -167,6 +194,7 @@ final class Updater: ObservableObject {
         showing = false
         if case .failed = status { status = .idle }
         if case .upToDate = status { status = .idle }
+        if case .installed = status { status = .idle }
     }
 }
 

@@ -31,10 +31,15 @@ struct UpdateView: View {
             Toggle("Include test builds", isOn: Binding(
                 get: { model.config.testBuilds }, set: { model.setUpdatePreference(testBuilds: $0) }))
                 .help("Also offer pre-releases and test builds: early fixes that may not be finished.")
-            Toggle("Online play beta (0.7)", isOn: Binding(
-                get: { model.onlineBeta }, set: { model.setOnlineBeta($0) }))
-                .disabled(updater.busy)
-                .help("Offer the online play beta: the game's own co-op and messages through a community server. Unfinished; turn it off to go back to the regular version.")
+            if model.isBetaApp {
+                Text("This is the online play beta. It updates to newer betas only; the regular Bloodborne app next to it updates itself. To stop testing, turn the beta off in the regular app's update window.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Toggle("Online play beta (0.7)", isOn: Binding(
+                    get: { model.onlineBeta }, set: { model.setOnlineBeta($0) }))
+                    .disabled(updater.busy)
+                    .help("Offer the online play beta, installed as a second app (Bloodborne Beta) next to this one: the game's own co-op and messages through a community server. Unfinished.")
+            }
             buttons
         }
         .padding(20)
@@ -55,10 +60,13 @@ struct UpdateView: View {
         case let .failed(message):
             Text("Update").font(.headline)
             Text(message).foregroundStyle(.red).textSelection(.enabled)
+        case let .installed(message):
+            Text("Bloodborne Beta is installed").font(.headline)
+            Text(message).foregroundStyle(.secondary).textSelection(.enabled)
         case let .available(update), let .downloading(update, _), let .installing(update):
-            Text(update.isReturn ? "Back to the regular version" : update.isBeta ? "The online play beta is available"
-                 : "A new version of Bloodborne is available").font(.headline)
-            Text(update.isReturn ? "Version \(update.version.text) replaces the beta you have (\(updater.currentText))."
+            let besides = update.isBeta && !updater.isBetaApp
+            Text(besides ? "The online play beta is available" : "A new version of Bloodborne is available").font(.headline)
+            Text(besides ? "Version \(update.version.text) installs as Bloodborne Beta next to this app; this version (\(updater.currentText)) stays."
                  : "Version \(update.version.text) is available; you have \(updater.currentText).")
                 .foregroundStyle(.secondary)
             ScrollView {
@@ -78,7 +86,9 @@ struct UpdateView: View {
             } else if model.running {
                 Text("Quit the game to install the update.").font(.caption).foregroundStyle(.secondary)
             } else {
-                Text("The app is replaced and opens again; your saves and settings stay where they are.")
+                Text(update.isBeta && !updater.isBetaApp
+                     ? "Bloodborne Beta is put next to this app; nothing here changes. Your saves and settings stay where they are."
+                     : "The app is replaced and opens again; your saves and settings stay where they are.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -92,7 +102,7 @@ struct UpdateView: View {
                 Spacer()
                 Button("Later") { updater.dismiss() }.keyboardShortcut(.cancelAction).disabled(updater.busy)
                 if model.updateInstallProblem == nil {
-                    Button(update.isReturn ? "Install \(update.version.text)" : update.isBeta ? "Install Beta" : "Install Update",
+                    Button(update.isBeta && !updater.isBetaApp ? "Install Beta" : "Install Update",
                            action: model.installUpdate)
                         .keyboardShortcut(.defaultAction)
                         .disabled(updater.busy || model.running)

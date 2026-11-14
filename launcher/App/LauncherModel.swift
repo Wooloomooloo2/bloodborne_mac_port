@@ -10,7 +10,7 @@ final class LauncherModel: ObservableObject {
     let layout: Layout
     let updater = Updater(info: Bundle.main.infoDictionary ?? [:])
     let benchmark = BenchmarkRunner()
-    private let env = ProcessInfo.processInfo.environment
+    private let env = LauncherModel.environment()
     private var confFile = IniFile()
     private var settingsFile = IniFile()
     private var updaterChanges: AnyCancellable?
@@ -46,9 +46,23 @@ final class LauncherModel: ObservableObject {
     var onStarted: (() -> Void)?
     var onExit: ((Int32) -> Void)?
 
+    /// The process environment; the beta app reads and writes its own launch.conf (a copy of the
+    /// regular app's at its first start).
+    private static func environment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        guard Updates.isBetaApp(bundleIdentifier: Bundle.main.bundleIdentifier), (env["BB_LAUNCH_CONF"] ?? "").isEmpty,
+              case .packaged? = Layout.detect(bundleURL: Bundle.main.bundleURL, info: Bundle.main.infoDictionary ?? [:])
+        else { return env }
+        let beta = Layout.betaLaunchConf(env)
+        let regular = beta.deletingLastPathComponent().appendingPathComponent("launch.conf")
+        if !FileManager.default.fileExists(atPath: beta.path) { try? FileManager.default.copyItem(at: regular, to: beta) }
+        env["BB_LAUNCH_CONF"] = beta.path
+        return env
+    }
+
     init(layout: Layout) {
         self.layout = layout
-        dataDir = layout.dataDir(env: ProcessInfo.processInfo.environment, config: LaunchConfig())
+        dataDir = layout.dataDir(env: env, config: LaunchConfig())
         // The window's update sheet follows the updater.
         updaterChanges = updater.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         benchmarkChanges = benchmark.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
@@ -104,6 +118,7 @@ final class LauncherModel: ObservableObject {
         confFile = IniFile(contentsOf: confURL)
         config = LaunchConfig(ini: confFile)
         if config.gameDir == nil { config.gameDir = layout.defaultGameDir() }
+        refreshOtherApp()
         dataDir = layout.dataDir(env: env, config: config)
         let exists = FileManager.default.fileExists(atPath: settingsURL.path)
         settingsFile = exists ? IniFile(contentsOf: settingsURL) : IniFile(text: GameSettings.newFileHeader)
@@ -506,8 +521,8 @@ final class LauncherModel: ObservableObject {
         guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()
         save()
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
-                                   skipping: config.skippedVersion, manual: false) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, offerBeta: onlineBeta,
+                                   installedBeta: installedBetaVersion, skipping: config.skippedVersion, manual: false) }
     }
 
     /// Automatic checks are off until the player agrees: asked once, at the first start with the
@@ -526,14 +541,17 @@ final class LauncherModel: ObservableObject {
 
     /// The app menu's Check for Updates….
     func checkForUpdatesNow() {
-        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: onlineBeta,
-                                   skipping: nil, manual: true) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, offerBeta: onlineBeta,
+                                   installedBeta: installedBetaVersion, skipping: nil, manual: true) }
     }
 
     func installUpdate() {
         guard let update = updater.available, !running else { return }
         save()
-        Task { await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL) }
+        Task {
+            await updater.install(update, layout: layout, bundle: Bundle.main.bundleURL)
+            refreshOtherApp()
+        }
     }
 
     func skipUpdate() {
@@ -549,32 +567,98 @@ final class LauncherModel: ObservableObject {
         save()
     }
 
-    /// In the online play beta: as chosen, else whether this app is a beta.
-    var onlineBeta: Bool { config.onlineBeta ?? updater.current?.isBeta ?? false }
+    // MARK: The online play beta (Bloodborne Beta.app next to the regular app)
 
-    /// The online play beta: joining asks first, then looks for the beta at once; leaving looks
-    /// for the way back to the regular version.
+    var isBetaApp: Bool { updater.isBetaApp }
+    /// The regular app offers the beta (to install next to it).
+    var onlineBeta: Bool { config.onlineBeta ?? false }
+    /// The other app of the pair next to this one: the beta from the regular app, and back.
+    @Published private(set) var otherApp: URL?
+
+    func refreshOtherApp() {
+        let here = Bundle.main.bundleURL
+        let other = here.deletingLastPathComponent().appendingPathComponent(Updates.appName(beta: !isBetaApp))
+        let identifier = isBetaApp ? Updates.bundleIdentifier : Updates.betaBundleIdentifier
+        let info = NSDictionary(contentsOf: other.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
+        otherApp = info?["CFBundleIdentifier"] as? String == identifier && other.path != here.path ? other : nil
+    }
+
+    /// The beta next to the regular app: its version, for the update check.
+    var installedBetaVersion: ReleaseVersion? {
+        guard !isBetaApp, let otherApp else { return nil }
+        let info = NSDictionary(contentsOf: otherApp.appendingPathComponent("Contents/Info.plist")) as? [String: Any]
+        return (info?["CFBundleVersion"] as? String).flatMap(ReleaseVersion.init)
+    }
+
+    /// Play Beta (or Play Regular Version in the beta): the other app starts the game and this
+    /// launcher quits.
+    func playOtherApp() {
+        guard let otherApp, !running else { return }
+        save()
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.arguments = ["--play"]
+        configuration.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: otherApp, configuration: configuration) { _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    self.exitMessage = "\(otherApp.deletingPathExtension().lastPathComponent) did not open: \(error.localizedDescription)"
+                } else {
+                    NSApp.terminate(nil)
+                }
+            }
+        }
+    }
+
+    /// Joining asks first, then looks for the beta at once (installed next to this app); leaving
+    /// offers to move the beta app to the Trash.
     func setOnlineBeta(_ on: Bool) {
-        guard on != onlineBeta, !updater.busy else { return }
+        guard on != onlineBeta, !updater.busy, !isBetaApp else { return }
+        let alert = NSAlert()
         if on {
-            let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Try the online play beta?"
             alert.informativeText = """
-                The beta (version 0.7) adds the game's own online play: messages, bloodstains, ghosts and co-op with the bells, through a community server. It is unfinished: invasions don't work yet, and you may meet bugs the regular version doesn't have.
+                The beta (version 0.7) adds the game's own online play: messages, bloodstains, ghosts and co-op with the bells, through a community server. It is unfinished: invasions don't work yet, and you may meet bugs this version doesn't have.
 
-                The beta replaces this app, like an update. Your saves and settings stay as they are. While online play is on, mods and cheats are off.
-
-                To go back, turn the beta off here: the regular version is offered again.
+                It installs as a second app, Bloodborne Beta, next to this one: this version stays, and the launcher's Play Beta starts the beta. Before every beta launch your saves are backed up; in the beta you can also give it its own copy of the saves. While online play is on, mods and cheats are off.
                 """
             alert.addButton(withTitle: "Join the Beta")
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+        } else if let otherApp {
+            alert.messageText = "Move Bloodborne Beta to the Trash?"
+            alert.informativeText = "It is no longer offered either way. Your saves and settings stay; backups made before beta launches are in the Backups window."
+            alert.addButton(withTitle: "Move to Trash")
+            alert.addButton(withTitle: "Keep It")
+            if alert.runModal() == .alertFirstButtonReturn {
+                if (try? FileManager.default.trashItem(at: otherApp, resultingItemURL: nil)) == nil {
+                    exitMessage = "Bloodborne Beta could not be moved to the Trash (is it open?)."
+                }
+                refreshOtherApp()
+            }
         }
         config.onlineBeta = on
         config.skippedVersion = nil
         save()
-        checkForUpdatesNow()
+        if on { checkForUpdatesNow() }
+    }
+
+    // MARK: The beta's saves: shared with the regular app (default) or its own copy
+
+    var betaSaveDir: URL { dataDir.appendingPathComponent("savedata-beta") }
+    var betaOwnSaves: Bool { isBetaApp && config.saveDir?.standardizedFileURL.path == betaSaveDir.standardizedFileURL.path }
+
+    func setBetaOwnSaves(_ own: Bool) {
+        guard isBetaApp, own != betaOwnSaves, !running else { return }
+        if own {
+            try? FileManager.default.createDirectory(at: betaSaveDir, withIntermediateDirectories: true)
+            setSaveFolder(betaSaveDir) // (offers to copy the shared saves into it)
+        } else {
+            // Back to the regular app's save folder (launch.conf's BB_SAVE_DIR, else the default).
+            let regular = IniFile(contentsOf: confURL.deletingLastPathComponent().appendingPathComponent("launch.conf"))
+            setSaveFolder(LaunchConfig(ini: regular).saveDir ?? SaveFolder.defaultURL(dataDir: dataDir))
+        }
+        save()
     }
 
     var updateInstallProblem: String? { Updates.installProblem(layout: layout, bundle: Bundle.main.bundleURL) }

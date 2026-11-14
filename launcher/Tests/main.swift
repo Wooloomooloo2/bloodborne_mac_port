@@ -423,27 +423,33 @@ do {
     check(newest(nil) == "mac-v0.5.2", "dev build: newest release")
     check((try? Updates.releases(json: Data("{\"message\":\"rate limited\"}".utf8), includeTestBuilds: false)) == nil, "API error is an error")
 
-    // Online play betas: their own zip name, offered only with the beta channel; leaving the beta
-    // offers the newest regular version, even a lower number.
+    // Online play betas: their own zip name and app (Bloodborne Beta.app, next to the regular one).
+    // The regular app is offered regular versions and, with the switch, the beta to install beside
+    // it; the beta app newer betas only.
     check(v("0.7.0-beta1").isBeta && v("0.7.0-beta1-3-g0b50589").isBeta && !v("0.7.0-test1").isBeta && !v("0.7.0").isBeta, "beta versions")
     let betaJSON = Data(("[" + [release("mac-v0.7.0-beta2", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip"),
                                 release("mac-v0.5.17"), release("mac-v0.5.16-test1", prerelease: true),
                                 release("mac-v0.7.0-beta1", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta1.zip"),
                                 release("mac-v0.5.16")]
         .joined(separator: ",") + "]").utf8)
-    func offered(_ current: String, tests: Bool = false, betas: Bool = false) -> (tag: String, isBeta: Bool, isReturn: Bool)? {
-        guard let r = (try? Updates.newest(json: betaJSON, current: v(current), includeTestBuilds: tests, includeBetas: betas)) ?? nil
-        else { return nil }
-        return (r.tag, r.isBeta, r.isReturn)
+    func offered(_ current: String, tests: Bool = false, betaApp: Bool = false) -> String? {
+        ((try? Updates.newest(json: betaJSON, current: v(current), includeTestBuilds: tests, betaApp: betaApp)) ?? nil)?.tag
     }
-    check(offered("0.5.16")?.tag == "mac-v0.5.17" && offered("0.5.16", tests: true)?.tag == "mac-v0.5.17", "betas not offered without the channel, also not as test builds")
-    check(offered("0.5.16", betas: true).map { $0.tag == "mac-v0.7.0-beta2" && $0.isBeta && !$0.isReturn } == true, "joining: the newest beta")
-    check((try? Updates.releases(json: betaJSON, includeTestBuilds: false, includeBetas: true))?.first?.zip.lastPathComponent
-          == "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip", "the beta's own zip")
-    check(offered("0.7.0-beta1", betas: true)?.tag == "mac-v0.7.0-beta2" && offered("0.7.0-beta2", betas: true) == nil, "next beta; up to date")
-    check(offered("0.7.0-beta2").map { $0.tag == "mac-v0.5.17" && $0.isReturn && !$0.isBeta } == true, "leaving: back to the newest regular version")
-    check(offered("0.7.0-beta2", tests: true)?.tag == "mac-v0.5.17", "leaving with test builds: still the regular line")
-    check(offered("0.5.17", betas: false)?.tag == nil && offered("0.7.0")?.tag == nil, "no return from a regular version")
+    func beta(installed: String?) -> String? {
+        ((try? Updates.newestBeta(json: betaJSON, installed: installed.map(v))) ?? nil)?.tag
+    }
+    check(offered("0.5.16") == "mac-v0.5.17" && offered("0.5.16", tests: true) == "mac-v0.5.17" && offered("0.5.17") == nil,
+          "the regular app: never a beta as its own update")
+    check(beta(installed: nil) == "mac-v0.7.0-beta2" && beta(installed: "0.7.0-beta1") == "mac-v0.7.0-beta2"
+          && beta(installed: "0.7.0-beta2") == nil, "the beta to install next to it, unless as new")
+    check((try? Updates.newestBeta(json: betaJSON, installed: nil))??.zip.lastPathComponent == "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip", "the beta's own zip")
+    check(offered("0.7.0-beta1", betaApp: true) == "mac-v0.7.0-beta2" && offered("0.7.0-beta2", betaApp: true) == nil, "the beta app: next beta; up to date")
+    check(offered("0.7.0-beta2", tests: true, betaApp: true) == nil, "the beta app: never a regular version")
+    check(Updates.isBetaApp(bundleIdentifier: Updates.betaBundleIdentifier) && !Updates.isBetaApp(bundleIdentifier: Updates.bundleIdentifier)
+          && Updates.appName(beta: true) == "Bloodborne Beta.app", "beta identity")
+    let betaInfo: [String: Any] = ["CFBundleIdentifier": Updates.betaBundleIdentifier, "CFBundleVersion": "0.7.0-beta2"]
+    check(Updates.unpackedProblem(info: betaInfo, expected: v("0.7.0-beta2"), beta: true) == nil
+          && Updates.unpackedProblem(info: betaInfo, expected: v("0.7.0-beta2")) != nil, "the beta download is the beta app")
     // Updaters before 0.5.16 look for Bloodborne-macOS-*.zip only, so they never see a beta.
     check(!"Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip".hasPrefix("Bloodborne-macOS-"), "old updaters skip betas")
 

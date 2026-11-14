@@ -68,8 +68,15 @@ struct LauncherView: View {
                         .controlSize(.large)
                         .disabled(!model.canPlay)
                         .help(model.benchmarkProblem ?? "Measures how the game runs on this Mac: about 6 minutes, with its own save and settings")
+                    if model.otherApp != nil {
+                        Button(model.isBetaApp ? "Play Regular Version" : "Play Beta", action: model.playOtherApp)
+                            .controlSize(.large)
+                            .disabled(model.running)
+                            .help(model.isBetaApp ? "Start the regular Bloodborne app's version instead (this window closes)."
+                                  : "Start the online play beta (Bloodborne Beta, next to this app) instead; this window closes.")
+                    }
                     Button(action: model.play) {
-                        Text(model.running ? "Running…" : "Play").frame(minWidth: 80)
+                        Text(model.running ? "Running…" : model.isBetaApp ? "Play Beta" : "Play").frame(minWidth: 80)
                     }
                     .keyboardShortcut(.defaultAction)
                     .controlSize(.large)
@@ -189,6 +196,15 @@ struct LauncherView: View {
                               choose: model.chooseGameFolder, reset: model.resetGameFolder)
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
+                    if model.isBetaApp {
+                        Toggle("Beta uses its own copy of the saves", isOn: Binding(
+                            get: { model.betaOwnSaves }, set: { model.setBetaOwnSaves($0) }))
+                            .disabled(model.running)
+                        Text(model.betaOwnSaves
+                             ? "The beta plays its own copy: progress here (co-op too) doesn't reach the regular version, and the beta can't harm its saves."
+                             : "Shared with the regular version: progress carries over both ways. Your saves are backed up before every beta launch.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     HStack {
                         Text("Save backups")
                         Spacer()
