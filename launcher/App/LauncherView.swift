@@ -196,6 +196,9 @@ struct LauncherView: View {
             }
             .formStyle(.grouped)
             Form {
+                if !model.isBetaApp {
+                    onlineBetaInvite
+                }
                 Section("Effects") {
                     ForEach(GameSettings.visualEffects) { effect in
                         Toggle(effect.label, isOn: effectBinding(effect.key))
@@ -204,6 +207,35 @@ struct LauncherView: View {
                 }
             }
             .formStyle(.grouped)
+        }
+    }
+
+    /// The regular app's invitation to the online play beta (Bloodborne Beta.app next to it).
+    @ViewBuilder private var onlineBetaInvite: some View {
+        Section("Online play (beta)") {
+            if model.otherApp != nil {
+                Label("Bloodborne Beta is installed next to this app", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Play Beta (below) starts the online beta; Play starts this version, as before.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if model.onlineBeta {
+                    Button("Leave the Beta…") { model.setOnlineBeta(false) }
+                }
+            } else if model.onlineBeta {
+                Text("You joined the beta, but it isn't installed yet.")
+                Button("Download the Beta…", action: model.checkForUpdatesNow)
+                    .buttonStyle(.borderedProminent)
+                Button("Leave the Beta") { model.setOnlineBeta(false) }
+                    .buttonStyle(.link)
+            } else {
+                Label("Online play is here, as a beta", systemImage: "globe")
+                    .font(.headline)
+                Text("Co-op with the bells, messages, bloodstains and ghosts through a community server. It installs as a second app, Bloodborne Beta: **this version stays as it is and stays playable**, and you choose which one to start. Your saves are backed up before every beta launch.")
+                    .font(.callout)
+                Button("Join the Beta…") { model.setOnlineBeta(true) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.running)
+            }
         }
     }
 
