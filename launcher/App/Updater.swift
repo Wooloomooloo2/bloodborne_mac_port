@@ -47,7 +47,7 @@ final class Updater: ObservableObject {
 
     /// `manual`: the player asked (menu): skipped versions count, and the window shows the result
     /// whatever it is. Automatic checks stay silent unless there is something to install.
-    func check(includeTestBuilds: Bool, skipping: String?, manual: Bool) async {
+    func check(includeTestBuilds: Bool, includeBetas: Bool, skipping: String?, manual: Bool) async {
         guard !busy else { return }
         status = .checking
         if manual { showing = true }
@@ -60,6 +60,7 @@ final class Updater: ObservableObject {
                 throw UpdateError("GitHub answered \(http.statusCode)\(http.statusCode == 403 ? " (rate limit: try again later)" : "").")
             }
             let found = try Updates.newest(json: data, current: current, includeTestBuilds: includeTestBuilds,
+                                           includeBetas: includeBetas,
                                            skipping: manual ? nil : skipping)
             if let found {
                 status = .available(found)

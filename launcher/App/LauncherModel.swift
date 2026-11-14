@@ -446,7 +446,8 @@ final class LauncherModel: ObservableObject {
         guard config.checkUpdates == true, !running, Updates.isDue(last: config.lastUpdateCheck, now: Date()) else { return }
         config.lastUpdateCheck = Date()
         save()
-        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: config.skippedVersion, manual: false) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: config.onlineBeta,
+                                   skipping: config.skippedVersion, manual: false) }
     }
 
     /// Automatic checks are off until the player agrees: asked once, at the first start with the
@@ -465,7 +466,8 @@ final class LauncherModel: ObservableObject {
 
     /// The app menu's Check for Updates….
     func checkForUpdatesNow() {
-        Task { await updater.check(includeTestBuilds: config.testBuilds, skipping: nil, manual: true) }
+        Task { await updater.check(includeTestBuilds: config.testBuilds, includeBetas: config.onlineBeta,
+                                   skipping: nil, manual: true) }
     }
 
     func installUpdate() {
@@ -485,6 +487,31 @@ final class LauncherModel: ObservableObject {
         if let automatic { config.checkUpdates = automatic }
         if let testBuilds { config.testBuilds = testBuilds }
         save()
+    }
+
+    /// The online play beta: joining asks first, then looks for the beta at once; leaving looks
+    /// for the way back to the regular version.
+    func setOnlineBeta(_ on: Bool) {
+        guard on != config.onlineBeta, !updater.busy else { return }
+        if on {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Try the online play beta?"
+            alert.informativeText = """
+                The beta (version 0.7) adds the game's own online play: messages, bloodstains, ghosts and co-op with the bells, through a community server. It is unfinished: invasions don't work yet, and you may meet bugs the regular version doesn't have.
+
+                The beta replaces this app, like an update. Your saves and settings stay as they are. While online play is on, mods and cheats are off.
+
+                To go back, turn the beta off here: the regular version is offered again.
+                """
+            alert.addButton(withTitle: "Join the Beta")
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        config.onlineBeta = on
+        config.skippedVersion = nil
+        save()
+        checkForUpdatesNow()
     }
 
     var updateInstallProblem: String? { Updates.installProblem(layout: layout, bundle: Bundle.main.bundleURL) }

@@ -31,6 +31,10 @@ struct UpdateView: View {
             Toggle("Include test builds", isOn: Binding(
                 get: { model.config.testBuilds }, set: { model.setUpdatePreference(testBuilds: $0) }))
                 .help("Also offer pre-releases and test builds: early fixes that may not be finished.")
+            Toggle("Online play beta (0.7)", isOn: Binding(
+                get: { model.config.onlineBeta }, set: { model.setOnlineBeta($0) }))
+                .disabled(updater.busy)
+                .help("Offer the online play beta: the game's own co-op and messages through a community server. Unfinished; turn it off to go back to the regular version.")
             buttons
         }
         .padding(20)
@@ -52,8 +56,10 @@ struct UpdateView: View {
             Text("Update").font(.headline)
             Text(message).foregroundStyle(.red).textSelection(.enabled)
         case let .available(update), let .downloading(update, _), let .installing(update):
-            Text("A new version of Bloodborne is available").font(.headline)
-            Text("Version \(update.version.text) is available; you have \(updater.currentText).")
+            Text(update.isReturn ? "Back to the regular version" : update.isBeta ? "The online play beta is available"
+                 : "A new version of Bloodborne is available").font(.headline)
+            Text(update.isReturn ? "Version \(update.version.text) replaces the beta you have (\(updater.currentText))."
+                 : "Version \(update.version.text) is available; you have \(updater.currentText).")
                 .foregroundStyle(.secondary)
             ScrollView {
                 Text(notes(update))
@@ -86,7 +92,8 @@ struct UpdateView: View {
                 Spacer()
                 Button("Later") { updater.dismiss() }.keyboardShortcut(.cancelAction).disabled(updater.busy)
                 if model.updateInstallProblem == nil {
-                    Button("Install Update", action: model.installUpdate)
+                    Button(update.isReturn ? "Install \(update.version.text)" : update.isBeta ? "Install Beta" : "Install Update",
+                           action: model.installUpdate)
                         .keyboardShortcut(.defaultAction)
                         .disabled(updater.busy || model.running)
                 }
