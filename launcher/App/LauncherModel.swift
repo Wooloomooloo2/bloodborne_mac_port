@@ -321,25 +321,85 @@ final class LauncherModel: ObservableObject {
         }
     }
 
-    /// Mods and cheats can change what ends up in the save: the first launch with a set not seen
-    /// before copies the save folder to <data>/save-backups/<date>/savedata (the newest five
-    /// stay). False: the copy failed and the player cancelled.
+    /// Automatic backups before a launch (<data>/save-backups/<date>/savedata, the newest
+    /// SaveBackup.keep stay): every beta launch, the first launch of a new version, the first with
+    /// a new set of mods or cheats. False: the copy failed and the player cancelled.
     private func backUpSavesIfNeeded() -> Bool {
         refreshEnabledMods()
         let backups = modFiles.backups
         let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
-        guard SaveBackup.needed(signature, last: SaveBackup.lastSignature(backups: backups)) else { return true }
+        guard let reason = SaveBackup.launchReason(mods: signature, lastMods: SaveBackup.lastSignature(backups: backups),
+                                                   version: appVersion, lastVersion: SaveBackup.lastVersion(backups: backups),
+                                                   isBeta: updater.current?.isBeta == true) else { return true }
         do {
-            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, signature: signature)
+            try SaveBackup.backUp(saveFolder: saveDir, backups: backups, reason: reason, version: appVersion)
+            try SaveBackup.record(backups: backups, signature: signature, version: appVersion)
             return true
         } catch {
             let alert = NSAlert()
             alert.messageText = "Your save could not be backed up"
-            alert.informativeText = "The launcher backs up your save before the first launch with a new set of mods or cheats, and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
+            alert.informativeText = "The launcher backs up your save before this launch (\(reason.label.lowercased())), and copying \(saveDir.path) to \(backups.path) failed: \(error.localizedDescription)"
             alert.addButton(withTitle: "Play Anyway")
             alert.addButton(withTitle: "Cancel")
             return alert.runModal() == .alertFirstButtonReturn
         }
+    }
+
+    // MARK: Save backups (the Backups window)
+
+    @Published var saveBackups: [SaveBackupEntry] = []
+    @Published var showingBackups = false
+    @Published var backupMessage: String?
+
+    func refreshBackups() { saveBackups = SaveBackup.list(backups: modFiles.backups) }
+
+    func backUpNow() {
+        do {
+            if try SaveBackup.backUp(saveFolder: saveDir, backups: modFiles.backups, reason: .manual, version: appVersion) == nil {
+                backupMessage = "There are no saves to back up yet."
+            } else {
+                backupMessage = nil
+            }
+        } catch {
+            backupMessage = "The backup failed: \(error.localizedDescription)"
+        }
+        refreshBackups()
+    }
+
+    func restoreBackup(_ entry: SaveBackupEntry) {
+        guard !running, !GameRunner.isGameRunning else {
+            backupMessage = "Quit the game before restoring a backup."
+            return
+        }
+        let alert = NSAlert()
+        alert.messageText = "Restore the saves from \(entry.name)?"
+        alert.informativeText = "Your current saves are backed up first (\"\(SaveBackupReason.restore.label)\" in the list), then replaced by this backup's."
+        alert.addButton(withTitle: "Restore")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try SaveBackup.restore(entry, saveFolder: saveDir, backups: modFiles.backups, version: appVersion)
+            backupMessage = "Restored the saves from \(entry.name)."
+        } catch {
+            backupMessage = "The restore failed; your saves are as they were: \(error.localizedDescription)"
+        }
+        refreshBackups()
+    }
+
+    func deleteBackup(_ entry: SaveBackupEntry) {
+        let alert = NSAlert()
+        alert.messageText = "Delete the backup from \(entry.name)?"
+        alert.informativeText = "It is moved to the Trash."
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            try FileManager.default.trashItem(at: entry.folder, resultingItemURL: nil)
+            backupMessage = nil
+        } catch {
+            backupMessage = "The backup was not deleted: \(error.localizedDescription)"
+        }
+        refreshBackups()
     }
 
     /// The Stop button is for a game started with Play (the benchmark runs its own launches).

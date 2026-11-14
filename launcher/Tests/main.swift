@@ -908,16 +908,23 @@ do {
           && ModImport.baseName(of: URL(fileURLWithPath: "/d/.zip")) == "Mod", "import base name")
     check(ModImport.uniqueName("X", existing: ["Y"]) == "X" && ModImport.uniqueName("X", existing: ["x", "X 2"]) == "X 3", "import collisions")
 
-    // Backups: rotation keeps the newest five dated folders, the signature ignores order.
+    // Backups: rotation keeps the newest automatic ones and all of the player's; the signature ignores order.
     let names = ["2026-10-20 10.00.00", "2026-10-21 10.00.00", "2026-10-25 09.00.00", "2026-10-22 10.00.00", "last.json",
                  "2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "notes"]
-    check(SaveBackup.toDelete(names) == ["2026-10-21 10.00.00", "2026-10-20 10.00.00"], "rotation: \(SaveBackup.toDelete(names))")
-    check(SaveBackup.toDelete(Array(names.prefix(3))).isEmpty, "fewer than five")
+    check(SaveBackup.toDelete(names, keep: 5) == ["2026-10-21 10.00.00", "2026-10-20 10.00.00"], "rotation: \(SaveBackup.toDelete(names, keep: 5))")
+    check(SaveBackup.toDelete(Array(names.prefix(3))).isEmpty, "fewer than the limit")
+    check(SaveBackup.toDelete(names, reasons: ["2026-10-20 10.00.00": .manual], keep: 5) == ["2026-10-21 10.00.00"], "the player's own stay")
     let signature = ModSignature(mods: ["B", "A"], cheats: ["z", "y"])
     check(signature == ModSignature(mods: ["A", "B"], cheats: ["y", "z"]) && signature.mods == ["A", "B"], "signature sorted")
     check(!SaveBackup.needed(ModSignature(mods: [], cheats: []), last: nil), "nothing on: no backup")
     check(SaveBackup.needed(signature, last: nil) && !SaveBackup.needed(signature, last: signature)
           && SaveBackup.needed(signature, last: ModSignature(mods: ["A"], cheats: ["y", "z"])), "backup per new set")
+    let none = ModSignature(mods: [], cheats: [])
+    func reason(_ mods: ModSignature = ModSignature(mods: [], cheats: []), _ version: String = "0.5.16", last: String? = "0.5.16", beta: Bool = false) -> SaveBackupReason? {
+        SaveBackup.launchReason(mods: mods, lastMods: none, version: version, lastVersion: last, isBeta: beta)
+    }
+    check(reason() == nil && reason(last: "0.5.15") == .version && reason(last: nil) == .version, "new version")
+    check(reason(signature) == .mods && reason(beta: true) == .beta && reason(none, "0.7.0-beta1", last: "0.5.16", beta: true) == .beta, "mods; every beta launch")
     var date = DateComponents()
     (date.year, date.month, date.day, date.hour, date.minute, date.second) = (2026, 10, 25, 9, 5, 7)
     let when = Calendar.current.date(from: date)!
@@ -929,19 +936,40 @@ do {
     for name in names where SaveBackup.isBackupName(name) {
         try? fm.createDirectory(at: files.backups.appendingPathComponent(name), withIntermediateDirectories: true)
     }
-    let made = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    let made = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, reason: .manual, version: "0.5.16", now: when)
     check(made?.lastPathComponent == "2026-10-25 09.05.07"
           && fm.fileExists(atPath: files.backups.appendingPathComponent("2026-10-25 09.05.07/savedata/0/slot/userdata0000").path), "backup copied")
-    check(SaveBackup.lastSignature(backups: files.backups) == signature, "signature recorded")
-    let kept = ((try? fm.contentsOfDirectory(atPath: files.backups.path)) ?? []).filter(SaveBackup.isBackupName).sorted()
-    check(kept == ["2026-10-23 10.00.00", "2026-10-24 10.00.00", "2026-10-24 10.00.00 2", "2026-10-25 09.00.00", "2026-10-25 09.05.07"],
-          "newest five kept: \(kept)")
-    let again = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, signature: signature, now: when)
+    let listed = SaveBackup.list(backups: files.backups)
+    check(listed.count == 8 && listed.first?.name == "2026-10-25 09.05.07" && listed.first?.reason == .manual
+          && listed.first?.info?.version == "0.5.16" && listed.first?.date == when, "listed newest first with info")
+    check(listed.last?.reason == .mods && listed.last?.info == nil, "older backups: made for mods")
+    try? SaveBackup.record(backups: files.backups, signature: signature, version: "0.5.16")
+    check(SaveBackup.lastSignature(backups: files.backups) == signature && SaveBackup.lastVersion(backups: files.backups) == "0.5.16", "launch recorded")
+    let again = try? SaveBackup.backUp(saveFolder: save, backups: files.backups, reason: .beta, version: "0.7.0-beta1", now: when)
     check(again?.lastPathComponent == "2026-10-25 09.05.07 2", "same second: a second folder")
     let empty = data.appendingPathComponent("no-saves")
     var copiedNothing = false
-    do { copiedNothing = try SaveBackup.backUp(saveFolder: empty, backups: files.backups, signature: ModSignature(mods: ["C"], cheats: []), now: when) == nil } catch {}
-    check(copiedNothing && SaveBackup.lastSignature(backups: files.backups)?.mods == ["C"], "no saves yet: nothing copied, set recorded")
+    do { copiedNothing = try SaveBackup.backUp(saveFolder: empty, backups: files.backups, reason: .mods, version: "0.5.16", now: when) == nil } catch {}
+    check(copiedNothing, "no saves yet: nothing copied")
+
+    // Restore: the current saves are backed up first, then replaced.
+    let older = files.backups.appendingPathComponent("2026-10-24 10.00.00")
+    try? fm.createDirectory(at: older.appendingPathComponent("savedata/0/slot"), withIntermediateDirectories: true)
+    try? Data("old".utf8).write(to: older.appendingPathComponent("savedata/0/slot/userdata0000"))
+    if let entry = SaveBackup.list(backups: files.backups).first(where: { $0.name == "2026-10-24 10.00.00" }) {
+        do {
+            try SaveBackup.restore(entry, saveFolder: save, backups: files.backups, version: "0.5.16", now: when.addingTimeInterval(60))
+            check((try? String(contentsOf: save.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "old", "restored")
+            let replaced = SaveBackup.list(backups: files.backups).first
+            check(replaced?.reason == .restore && (try? String(contentsOf: replaced!.saves.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "save",
+                  "the replaced saves are a backup")
+        } catch { check(false, "restore failed: \(error)") }
+    } else { check(false, "backup to restore not listed") }
+    var refused = false
+    if let bare = SaveBackup.list(backups: files.backups).first(where: { $0.name == "2026-10-20 10.00.00" }) {
+        do { try SaveBackup.restore(bare, saveFolder: save, backups: files.backups, version: "0.5.16") } catch { refused = true }
+    }
+    check(refused && (try? String(contentsOf: save.appendingPathComponent("0/slot/userdata0000"), encoding: .utf8)) == "old", "an empty backup is refused, saves untouched")
     try? fm.removeItem(at: data)
 }
 

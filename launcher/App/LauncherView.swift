@@ -91,6 +91,9 @@ struct LauncherView: View {
             }
         }
         .background {
+            Color.clear.sheet(isPresented: $model.showingBackups) { BackupsView(model: model) }
+        }
+        .background {
             Color.clear.sheet(isPresented: Binding(get: { model.benchmark.showingResult }, set: { model.benchmark.showingResult = $0 })) {
                 if let result = model.benchmark.result {
                     BenchmarkResultView(result: result, runner: model.benchmark)
@@ -186,6 +189,15 @@ struct LauncherView: View {
                               choose: model.chooseGameFolder, reset: model.resetGameFolder)
                     FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
                               choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
+                    HStack {
+                        Text("Save backups")
+                        Spacer()
+                        Button("Back Up Now", action: model.backUpNow).disabled(model.running)
+                        Button("Backups…") { model.refreshBackups(); model.showingBackups = true }
+                    }
+                    if let message = model.backupMessage, !model.showingBackups {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .formStyle(.grouped)
