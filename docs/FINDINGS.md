@@ -2555,3 +2555,60 @@ frame pool peak 8 of 256 KiB (3%), last new peak at frame 212k; 60 FPS and 6-11 
 frame from start to end (no #55-style drift). The owner checked glare and lens flares (no visible
 change) and played 36 min on their own save at 1440p (frame pool peak 7 KiB, normal exit).
 Shipped in 0.5.14.
+## 2026-11-01: absent movie-audio output device at startup (#123)
+
+The 0.5.12 report on M5 Pro (24 GB, MetalFX Native AA, fixed 60 FPS) faults at
+`0x282279d`, address `0x100c4`, with RDI/RBX zero, immediately after creating
+`Mv_AudioPlayThread`. The checked private 1.09 image identifies that instruction
+as `cmpb $0,0x100c4(%rbx)`: the movie-audio output device's open flag. It is not a
+shader-table load or the earlier movie graphics-context fault at `0x26c01c3`.
+The report contains no evidence that MetalFX or the menu-key warnings caused it.
+
+The manager stores the device at `+0xbe0`. Its initializer allocates a `0x100c8`
+byte object, leaves this field null on allocation failure and returns false.
+That is one possible route to an absent device, not proof of an allocation
+failure in this session: neither the full log nor a diagnostics ZIP is attached
+to the issue as inspected. Skipped initialization or a lifetime problem remain
+possible. No allocator or AvPlayer decoder change is justified by this excerpt.
+
+The start dispatcher at `0x2801c30` locks `manager+0x308` and `manager+0xbe8`,
+loads the device without checking it and calls `0x2822790` through `0x2821870`.
+The posted return address `0x2801c9e` matches that call. The start function already
+returns AL=0 on AudioOutOpen failure or an already-open device. The higher caller
+at `0x2900360` checks AL before setting its started flag and releases its own
+lock; `0x28ffe52` checks AL again before advancing the movie state.
+
+`runtime_movie_audio_guard.c` checks both start/stop signatures before installing
+entry stubs. A null start returns AL=0 before the dereference; the original
+callers run their normal error and unlock tails. The matching stop at
+`0x2822750` also dereferences the device's open flag, so null stop returns AL=1,
+matching its original already-closed branch. Non-null calls execute the moved
+original prologues and rejoin immediately afterward, keeping integer/float
+arguments and flags at the original conditional branches. No non-null fault is
+caught. `BB_MOVIE_AUDIO_GUARD=0` disables both hooks; the first eight missing-device
+starts/stops are logged separately.
+
+Validation uses the player's private prepared ELF; no game bytes are added to
+the repository. Under x86-64/Rosetta, at both O2 and O3/LTO with assertions active:
+
+- The unmodified start and original movie-control caller reproduce exactly
+  `0x282279d`, address `0x100c4`, RDI/RBX=0. Original null stop faults at
+  `0x2822759` with the same bad address.
+- Fourteen non-null start/stop cases preserve the low-byte result, every device
+  byte and all AudioOut calls/arguments, including volume, channel/rate formats,
+  already-open/closed devices, open failure, volume error and close error.
+- Original manager and movie-control callers release both/three nested locks,
+  leave failed starts unstarted, handle an initially started control's stop
+  path, and accept a later valid device after 32 rejected attempts.
+- A non-null invalid device still faults. All 65 individual signature-byte
+  mutations, disabled/undersized/null inputs leave both entries untouched.
+- The complete optimized CPU runtime/probe links with warnings as errors against
+  the existing dev GPU/ATRAC libraries; runtime and semaphore fixtures pass.
+  The guard's ARM64 no-op fallback compiles. GPU code was not rebuilt.
+
+This is crash containment, not a confirmed cause or a playback repair. No live
+movie/gameplay reproduction, restored audio, timing/performance comparison,
+full GPU/launcher suite or long-session stability is claimed. If initialization
+never supplies a device, playback may remain pending even though the null load
+is avoided. The full log/diagnostics, exact movie/transition and reproduction
+with this build are still needed; that follow-up is tracked in MACOS_BACKLOG.
