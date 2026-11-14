@@ -363,7 +363,6 @@ final class LauncherModel: ObservableObject {
     // MARK: Save backups (the Backups window)
 
     @Published var saveBackups: [SaveBackupEntry] = []
-    @Published var showingBackups = false
     @Published var backupMessage: String?
 
     func refreshBackups() { saveBackups = SaveBackup.list(backups: backupDir) }

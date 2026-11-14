@@ -8,7 +8,7 @@ struct LauncherView: View {
 
     @ObservedObject var model: LauncherModel
 
-    private enum Page: Hashable { case general, advanced, controls }
+    private enum Page: Hashable { case general, saves, advanced, controls }
     @State private var page = Page.general
 
     var body: some View {
@@ -20,6 +20,7 @@ struct LauncherView: View {
             // forever with the window frozen (#47, sampled by the reporter).
             Picker("", selection: $page) {
                 Text("General").tag(Page.general)
+                Text("Saves & Folders").tag(Page.saves)
                 Text("Advanced").tag(Page.advanced)
                 Text("Controls").tag(Page.controls)
             }
@@ -30,6 +31,7 @@ struct LauncherView: View {
             Group {
                 switch page {
                 case .general: general
+                case .saves: SavesView(model: model)
                 case .advanced: advanced
                 case .controls: ControlsView(model: model)
                 }
@@ -44,6 +46,12 @@ struct LauncherView: View {
                     .disabled(model.running)
                 UpdateBadge(updater: model.updater)
                 Spacer()
+                // (Folders live on their own page: say why Play is off from any page.)
+                if page != .saves, !model.running, !model.checkingGame, model.gameProblem != nil || model.config.gameDir == nil {
+                    Button("Choose the game folder…") { page = .saves }
+                        .buttonStyle(.link)
+                        .foregroundStyle(.red)
+                }
                 if let progress = model.benchmark.progress {
                     Text(progress).foregroundStyle(.secondary).lineLimit(1)
                 } else if let message = model.exitMessage {
@@ -96,9 +104,6 @@ struct LauncherView: View {
             Color.clear.sheet(isPresented: Binding(get: { model.updater.showing }, set: { if !$0 { model.updater.dismiss() } })) {
                 UpdateView(model: model, updater: model.updater)
             }
-        }
-        .background {
-            Color.clear.sheet(isPresented: $model.showingBackups) { BackupsView(model: model) }
         }
         .background {
             Color.clear.sheet(isPresented: Binding(get: { model.benchmark.showingResult }, set: { model.benchmark.showingResult = $0 })) {
@@ -189,35 +194,6 @@ struct LauncherView: View {
                         Toggle(effect.label, isOn: effectBinding(effect.key))
                     }
                     Toggle("Show FPS", isOn: $model.settings.showFPS)
-                }
-                Section("Locations") {
-                    FolderRow(title: "Game folder", path: model.config.gameDir?.path ?? "Not chosen",
-                              problem: model.checkingGame ? nil : model.gameProblem,
-                              choose: model.chooseGameFolder, reset: model.resetGameFolder)
-                    FolderRow(title: "Save folder", path: model.saveDir.path, problem: model.saveProblem,
-                              choose: model.chooseSaveFolder, reset: model.resetSaveFolder)
-                    if model.isBetaApp {
-                        Toggle("Beta uses its own copy of the saves", isOn: Binding(
-                            get: { model.betaOwnSaves }, set: { model.setBetaOwnSaves($0) }))
-                            .disabled(model.running)
-                        Text(model.betaOwnSaves
-                             ? "The beta plays its own copy: progress here (co-op too) doesn't reach the regular version, and the beta can't harm its saves."
-                             : "Shared with the regular version: progress carries over both ways. Your saves are backed up before every beta launch.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    FolderRow(title: "Backup folder", path: model.backupDir.path, problem: model.backupProblem,
-                              choose: model.chooseBackupFolder, reset: model.resetBackupFolder)
-                    HStack {
-                        Text("Save backups")
-                        Spacer()
-                        if model.backingUp { ProgressView().controlSize(.small) }
-                        Button(model.backingUp ? "Backing Up…" : "Back Up Now", action: model.backUpNow)
-                            .disabled(model.running || model.backingUp)
-                        Button("Backups…") { model.refreshBackups(); model.showingBackups = true }
-                    }
-                    if let message = model.backupMessage, !model.showingBackups {
-                        Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                    }
                 }
             }
             .formStyle(.grouped)
@@ -313,7 +289,7 @@ struct LauncherView: View {
     }
 }
 
-private struct FolderRow: View {
+struct FolderRow: View {
     let title: String
     let path: String
     let problem: String?
