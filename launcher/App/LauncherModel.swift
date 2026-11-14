@@ -598,6 +598,8 @@ final class LauncherModel: ObservableObject {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.arguments = ["--play"]
         configuration.createsNewApplicationInstance = true
+        // The same data folder (a test run's, or the default): only these are passed on.
+        configuration.environment = env.filter { ["HOME", "BB_DATA_DIR"].contains($0.key) }
         NSWorkspace.shared.openApplication(at: otherApp, configuration: configuration) { _, error in
             DispatchQueue.main.async {
                 if let error {
