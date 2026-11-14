@@ -85,6 +85,8 @@ struct Drawable {
 /// [layer nextDrawable]; empty Drawable (drawable null) on timeout/nil. Caller holds an
 /// autorelease pool.
 Drawable NextDrawable(void* layer);
+/// Monotonic host seconds, in the same clock domain as MTLDrawable::presentedTime.
+double PresentationTime();
 
 /// Debug snapshot of what is shown (BB_SNAPSHOT_TRIGGER; screenshots while the screen is locked
 /// or asleep, when the window server captures nothing): encodes a copy of `texture` (BGRA8,
@@ -124,8 +126,13 @@ public:
     /// completed (also on error).
     /// `min_duration` > 0 (seconds): presentDrawable:afterMinimumDuration: (the previous drawable
     /// stays on screen at least that long), for even frame pacing on variable-refresh displays.
+    /// `on_presented`: actual drawable presentation time, not GPU completion. May arrive after
+    /// WaitIdle or queue destruction; capture independent owned state, never the queue/caller.
+    /// `present_time` > 0: absolute host deadline; overrides min_duration. A missed deadline
+    /// presents as soon as the drawable is ready, without extending the following frame's hold.
     void Commit(void* command_buffer, void* drawable, std::function<void()> on_complete,
-                double min_duration = 0);
+                double min_duration = 0, std::function<void(double)> on_presented = {},
+                double present_time = 0);
     /// Blocks until nothing is in flight.
     void WaitIdle();
     /// Blocks until nothing is in flight or `milliseconds` passed; true when idle.

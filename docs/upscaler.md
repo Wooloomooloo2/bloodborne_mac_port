@@ -1,5 +1,301 @@
 # Temporal upscaling and frame generation — frame analysis and plan
 
+## Experimental MetalFX frame generation on macOS (2026-10-24)
+
+Before starting the game, enable **Upscaler → Frame generation (experimental)**
+in the launcher. It explains hardware and refresh-rate limits
+on the selected display (including a `BB_DISPLAY` override). A disconnected selection
+falls back to the primary display. The game checks its own display again.
+You can also open the in-game menu with **L3+R3** (or **Cmd+,**) and select
+**Display → Frame generation → MetalFX 2x (experimental)** to enable an intermediate
+image between each pair of real frames. The choice is saved as `framegen=0|1` in
+`bbport.ini` and is **off by default**. After an in-game change, use **Apply and
+Restart Game**; toggling back to the running choice clears the restart notice. The
+current session keeps its existing presentation resources until restart.
+
+The launcher rejects cap/display changes that cannot present the paired rate, with a warning.
+Starting with an incompatible saved configuration also shows a warning instead of silently
+launching without generation. Turn generation off or fix the conflicting setting to continue;
+saved preferences are not erased when a display disconnects. An unavailable saved generation
+choice can always be switched off. Legacy FSR 1 and overrides that disable temporal input
+capture are checked before launch.
+
+It requires macOS 26+, a build with the macOS 26 SDK or newer, a device
+accepted by `MTLFXFrameInterpolatorDescriptor.supportsDevice`, a real FPS cap,
+and a display able to show at least **2 × that cap** (0.2% tolerance includes
+119.88 Hz for 60 FPS). The launcher checks the selected display and the renderer
+checks the game window's actual display again. Unknown or insufficient refresh
+rates disable the switch with a reason; moving the window to a suitable display
+resumes generation without erasing the saved preference.
+
+Frame generation also captures inputs with **upscaling off**, including native
+16:10 and ultrawide patches. The native path copies the scene's exact pixels and
+captures depth/motion before the HUD. It keeps the selected resolution, aspect,
+upscaler and preset preferences; no temporal upscaler or extra jitter is enabled.
+
+Pairs use absolute host deadlines: the intermediate is eligible when its GPU work
+is ready, and the real image is due half a configured real-frame period later.
+A late acquisition presents as soon as possible instead of extending a relative
+minimum hold. Each source frame anchors its own deadlines, so stalls do not
+accumulate a permanent phase shift. Fixed 144/160 Hz therefore no longer need a
+manual switch to 120 Hz: images quantise to refresh boundaries without forcing
+both images to occupy two refreshes each. Active variable refresh uses a paired
+rate inside its reported range; external Adaptive-Sync requires full screen.
+Windowed external displays can use the fixed-refresh deadline path.
+
+The renderer measures real-only gameplay GPU time before admitting interpolation.
+Generation pauses automatically under sustained GPU pressure, preserving the real
+frame rate, and resumes only when the measured interpolation cost fits with spare
+time. It does not periodically insert test pairs into a saturated scene. The menu
+explains a headroom pause; the switch and saved preferences stay enabled. Loading
+screens, output/preset changes and long pauses invalidate the initial estimate.
+The optional work has its own command buffer, submitted after the real scene
+without a GPU drain, so its completed GPU duration can guide resumption.
+The resume cost uses a median of distinct completed interpolation submissions after warmup.
+A single first-use or stalled submission cannot become a permanent cost estimate while paused.
+The FPS overlay identifies waiting for a scene, measurement, GPU pressure and display/configuration
+conflicts even when only the real-frame counter is shown. GPU pressure remains a runtime pause,
+not an incompatible saved configuration: performance depends on the scene.
+Startup admission leaves 10% of the capped frame period free, then learns the optional cost
+and reserves 5% beyond it. At 30 FPS the initial real-only limit is 30 ms; at 60 FPS it is
+15 ms. Sustained overload still pauses generation. The first pressure rejection is logged
+with GPU time, the interpolation estimate and the cap, even if generation never started.
+If native 1080p is already near 30 FPS, try MetalFX Performance with a 30-FPS cap and restart;
+changing the cap alone cannot create room for interpolation on a saturated GPU.
+
+`BB_METAL_FRAMEGEN=0|1` still overrides the setting at launch and
+disables both controls for that session; remove it to use the saved preference. It never
+overwrites the file's `framegen` preference: unrelated menu saves preserve the
+pre-override value (including the default off when no key existed). For example,
+with your existing game/data configuration:
+
+```sh
+BB_METAL_FRAMEGEN=1 BB_UPSCALER=metalfx bash run.sh
+```
+
+Keep the existing game FPS cap at the desired **real** frame rate. The presenter
+attempts two images per real frame; simulation, physics, input polling and guest
+completion signals keep their existing rates. A 120 Hz display can show a 60 FPS
+real-frame stream plus intermediates. Generating images adds GPU work and latency;
+it does not make the game simulate faster or guarantee a higher delivered rate.
+The FPS counter and settings footer show **Real** and **Displayed** rates separately
+only while frame generation is enabled for the running session on a supported path.
+With frame generation off or unavailable, they retain the original single FPS and
+frame-time readout: the exponential present-interval average (95% previous / 5%
+new interval), including reused and blank frames. Pending changes to the
+frame-generation switch take effect after restart.
+Real FPS counts new game frames supplied to the presenter, excluding reused and
+blank frames. Displayed FPS counts distinct, positive Metal drawable presentation
+timestamps for real and generated images, rather than assuming a 2x multiplier or
+counting GPU completions. Missing generated frames, refresh limits and real-only
+fallback therefore affect the displayed reading. Both rates use bounded one-second
+cadence windows and expire after a pause; the milliseconds are frame intervals,
+not GPU execution times. The generated/real pair replays the same counter snapshot.
+Presentation callbacks are requested only while frame generation is active and
+the FPS counter or settings menu is visible. While frame generation is active,
+the counter reserves a fixed wider layout and right-aligns the FPS and millisecond
+columns so changing digit counts cannot resize the box or shift the columns.
+With generation off or unavailable, the single-rate counter uses its original
+content-sized width.
+
+The renderer snapshots depth, current-to-previous motion, and pre-HUD color at the
+tonemapped scene/UI boundary. For frame generation, each depth/motion pair comes
+from the nearest surface in a 3×3 render-pixel neighbourhood. This expands thin
+foreground geometry's interpolation footprint without blending its vectors with
+the background. Equal-depth ties retain the centre sample. Invalid depth samples
+are ignored and non-finite vectors become zero. The temporal upscaler continues
+to receive the original field; motion remains in render pixels (MetalFX performs
+the output-resolution conversion). A second pass identifies changes made by the HUD.
+
+MetalFX Temporal also shares its scaler with the interpolator, allowing MetalFX
+to reuse preprocessing. The frame retains the scaler through deferred encoding
+and GPU completion. Changing the scaler or switching to/from an independent
+provider resets interpolation history; unsupported combined configurations fall
+back to independent preprocessing. Resolved color continues to use zero jitter
+offset in the interpolator. An offscreen two-axis jitter test covers this boundary.
+
+Interpolation reads through the actual video-out view after the game's gamma LUT,
+so its channel swizzle and sRGB decode match the real frame. Source coordinates
+clamp to the actual video-out texture's width and height, including native 16:10
+and ultrawide paths with smaller video-out images. A dilated HUD mask
+restores current real-frame colors after interpolation. At native 1080p this
+opt-in mode uses the existing output-size UI path and reconstructs the tonemapped
+scene, rather than the default HDR reconstruction before game post-processing.
+
+Snapshots belong to individual frames and travel with the display buffer to the
+presenter. Three reusable snapshot sets bound allocation (25% fewer sets than the
+original four-set pool); busy slots skip generation without waiting. Deferred
+closures, GPU completion handlers, interpolation history,
+and submitted presents pin the relevant sets until all reads complete.
+The last submitted image's completion releases the frame-pool slot and its
+snapshot; skipped images retain no presentation ownership. Display-buffer entries hold weak
+references to a distinct lease for each use of a snapshot allocation, so buffers
+that were drawn but never flipped cannot reserve a set or acquire it after reuse.
+Queued recording, history, and GPU completion handlers keep strong leases until
+their reads finish.
+The two presents wait on the same render tick. The generated image is submitted
+and its drawable references are released inside a separate autorelease pool before
+acquiring the real image's drawable. Acquiring both first can exhaust the
+three-drawable layer during direct scanout and add whole refresh intervals between
+pairs; composited presentation can hide that stall through earlier drawable reuse.
+Both completion handlers retain the frame-pool slot. If the second acquisition
+fails, the submitted generated image still pins its source through GPU completion;
+the missing real image is skipped safely. The same overlay
+draw data is rendered over both images without advancing UI/input/FPS timing twice.
+The minimum display interval comes only from the configured real FPS cap (half its
+period, with scheduling slack). Measured frame cadence includes drawable waits;
+using it to extend the next display hold creates a feedback loop that can collapse
+real FPS. The duration helper returns zero for uncapped output; the display policy
+disables paired generation for uncapped launches.
+It also rejects incompatible fixed refresh modes before snapshot capture. For example,
+an approximately 8.1 ms minimum hold exceeds one refresh at 144/160 Hz, rounding each
+image up to two refreshes and making each real/generated pair take four. The stricter
+display policy prevents this pacing-induced loss of real FPS; interpolation still adds
+GPU work and cannot guarantee an unchanged real rate in a GPU-limited scene.
+
+Warmup, camera cuts, projection/resolution changes, missing scene frames, invalid
+timing, cap changes, and gaps in real-frame sequence reset history. Source periods
+outside 0.5–1.5 times the configured cap period also withhold generated presentation;
+the current real frame seeds history so the next normal adjacent pair can resume.
+Menus/loading screens with
+no matching scene use real frames. Unsupported devices/SDKs retain normal
+presentation. The legacy FSR 1 presenter pass and 10-bit video-out conversion use
+real frames alone. The MetalFX effect is encoded on the existing render queue;
+there is no extra interpolation queue or CPU wait per generated frame.
+
+This remains experimental: interpolation uses the pre-HUD scene through the retail
+gamma pass, and the mask restores the current HUD footprint. Moving/fading HUD elements, transparency and
+disocclusions can still leave artifacts. Extended gameplay, input latency, GPU cost,
+and long-session behavior still require QA.
+
+The counter, wider layout and presentation path have also been checked in the
+DLC-enabled city-gate scene. The timed comparison below includes actual real and
+displayed cadence; generation still adds GPU work and can lower real FPS.
+
+Offscreen checks (no game/window):
+
+```sh
+cmake --build out/gpu-arm64 --target framegen-test
+out/gpu-arm64/framegen-test
+MTL_DEBUG_LAYER=1 out/gpu-arm64/framegen-test
+cmake --build out/gpu-arm64 --target overlay-test
+out/gpu-arm64/overlay-test
+MTL_DEBUG_LAYER=1 out/gpu-arm64/overlay-test
+cmake --build out/gpu-arm64 --target frame-rates-test
+out/gpu-arm64/frame-rates-test
+```
+
+The overlay fixture covers L3+R3 opening/closing, D-pad/Cross activation of the new
+row, saved preferences, reverting a pending restart, and unavailable/overridden
+controls, refresh-limited/uncapped launches, and re-enabling after a display change.
+The refresh policy fixtures reject fixed 144/160 Hz at a 60 FPS cap, accept
+120/240/360 Hz and fractional equivalents, check active variable-refresh ranges,
+and verify that accepted fixed modes do not round display holds into extra refreshes.
+The launcher model uses matching cases and checks the native-aspect/no-upscaler reasons.
+An SDL/Cocoa window probe on the built-in ProMotion display reported 24–120 Hz;
+external 144/160 Hz hardware remains untested locally.
+The settings round-trip fixture checks temporary launch overrides in both
+directions, the absent-key default, unrelated saves, and preservation
+of the launcher's other keys. These are offscreen input events, not a physical
+controller gameplay test.
+
+The frame-rate fixture checks independent real/displayed rates, 2x delivery,
+real-only fallback, refresh limits, invalid/duplicate/out-of-order callbacks,
+pause/resume, the original off-path interval average, and concurrent updates.
+The overlay fixture verifies the single-rate
+counter and settings footer with frame generation off or unavailable, restart-dependent
+display changes, independent displayed FPS with frame generation on, identical replay over a
+generated/real pair, stable paired-counter bounds across changing digit counts and
+unavailable readings, and the compact single-counter width when generation is inactive.
+
+The framegen fixture checks sRGB/BGRA interpretation, HUD restoration, snapshot retention
+through GPU completion, three-set bounded-pool fallback, unpresented-buffer lease
+expiry and safe slot reuse, smaller video-out width/height
+clamping, refresh/cap gating, warmup/cut/gap resets and moving
+geometry. In the synthetic motion case, a rectangle at real-frame center 51.5
+pixels interpolated to the expected midpoint 49.5. These are fixture results,
+not gameplay or FPS measurements. The existing present and overlay fixtures also
+cover sequential drawable acquisition, retirement with and without a real image,
+and identical overlay pixels.
+
+### Direct/composited presentation diagnosis (2026-10-26)
+
+A stationary city-gate diagnostic on an M4 Max used MetalFX Quality,
+2560x1440 scene rendering to 3840x2160 output, a 60 FPS real cap, and private
+save/cache copies. The internal display's drawable was 3456x2168; this was a 4K
+render/output test, not a 3840x2160 physical display measurement. Metal HUD's
+direct/composited labels were checked interactively. A small passive overlapping
+window selected composited presentation without resizing the game.
+
+Actual real-frame and drawable-presentation timestamps over 20-second windows:
+
+| Presentation | Acquisition order | Real FPS | Displayed FPS | Display interval P95 |
+| --- | --- | ---: | ---: | ---: |
+| Direct | Acquire both, then submit | 30.53 | 61.08 | 25.00 ms |
+| Composited | Acquire both, then submit | 45.25 | 90.53 | 16.67 ms |
+| Direct | Submit generated, then acquire real | 47.70 | 95.31 | 16.67 ms |
+
+No missing-snapshot or unprimed fallbacks were recorded. The original direct path mostly
+alternated 8.33/25.00 ms display intervals; sequential submission removed that
+plateau. Generation and GPU image work were unchanged. These short diagnostic
+samples isolate the presentation issue; they do not establish a universal speedup
+or guarantee 120 displayed FPS. The scene remained GPU-limited with the corrected
+ordering, and thermal/power conditions were not controlled for a formal benchmark.
+
+### Gameplay benchmark and pacing regression (2026-10-24)
+
+An M4 Max with 48 GiB memory and macOS 27.0 (26A428), on battery power, ran the
+same stationary city-gate scene at 1920x1080 MetalFX Native AA. Each launch used
+private copies of the same DLC-dependent save and warmed GPU cache, with neutral
+scripted input. All three add-ons, including `SPEXPANSIONDLC03`, were recognized.
+This is a base-game scene with DLC loaded, not a DLC-area benchmark. The common
+benchmark runtime included the existing DLC-folder discovery provider from
+`bloodborne_mac`; that helper is separate from this renderer PR.
+
+The original presentation policy fed measured frame cadence back into minimum
+display holds. Two 60-second framegen-on samples at a 120 FPS cap averaged
+17.51–21.01 real / 34.83–41.91 displayed FPS. Changing only the hold policy to use
+the configured cap recovered 58.11 real / 116.22 displayed FPS, with the same
+capture, interpolation and HUD work. Regression tests now ensure that observed
+slow frames cannot lengthen future display holds. The display-link loop in the
+original port releases its producer independently of those presentation updates.
+
+The corrected 60 FPS-cap comparison used the **same binary**, changing only
+`framegen=0|1`. Both modes had at least 30 seconds of gameplay warmup followed by
+a 60-second sample, with snapshots outside the timing window. Thermal state was
+fair throughout both samples. GPU builds used arm64 RelWithDebInfo, LTO off;
+Metal validation was off for timing and the FPS overlay was on.
+
+| Mode | Stream | FPS | Mean ms | P95 ms | P99 ms |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Off | Real | 60.00 | 16.67 | 16.69 | 16.70 |
+| Off | Displayed | 60.00 | 16.67 | 16.67 | 16.67 |
+| On, corrected | Real | 59.06 | 16.93 | 16.99 | 25.02 |
+| On, corrected | Displayed | 118.12 | 8.47 | 8.33 | 16.67 |
+
+Real throughput was 1.6% lower; displayed throughput was 96.9% higher in this
+pair. Real intervals count new game frames at the presenter; displayed intervals
+use distinct positive drawable presentation timestamps. These are cadence
+intervals, not GPU durations or input latency. Included windows had no logged
+occlusion, render errors or render stalls; an interrupted control was excluded.
+All original source-save hashes remained unchanged.
+
+These measurements predate the refresh-rate guard: a 120 FPS real cap now
+requires at least 240 Hz and is disabled on this 120 Hz panel. The review fixes
+have offscreen regression coverage; the gameplay benchmark was not rerun.
+
+At a 120 FPS real cap, valid off controls varied from 63.28 to 77.04 FPS. Battery
+and thermal conditions do not establish constant clocks. Showing two images per
+real frame on this 120 Hz panel also bounds the paired path near 60 real FPS, so
+that uncapped comparison does not isolate interpolation's GPU cost. The observed
+60-cap result is specific to this scene and target; traversal, latency, AC-power
+performance and long-session behavior remain untested.
+
+API reference: [Apple's frame interpolator documentation](https://developer.apple.com/documentation/metalfx/mtlfxframeinterpolatorbase).
+Snapshot/presentation ideas were adapted from the direct-Metal `bloodborne_mac`
+port's `gpu/metal/frame_generation.mm` at `b395cf4`; the implementation here uses
+this project's scheduler, camera/object motion, and independent present queue.
+
 ## MetalFX startup targets above 1080p (#116, 2026-10-31)
 
 The **Avoid white scenes (MetalFX)** setting in the launcher's Advanced controls and the
@@ -340,3 +636,22 @@ path; it has not been tried on macOS, where FSR 4 is not expected to work.)
 **Correction to the A/B above ("the frame is CPU-bound").** Those measurements ran while 12
 hung shadPS4 processes each occupied a core. On an idle system: "host copies" 1.6%, GPU wait
 ~41% — the frame is GPU-bound, so async compute for FSR makes sense again.
+
+## 2026-10-26: HUD-free frame-generation color
+
+The frame interpolator now receives scene color captured before HUD composition.
+On the verified retail display pass, a matching pre-HUD view is processed using
+its actual gamma LUT and sampler into the display target's pixel format. The
+presenter's video-out view then applies the same sRGB decoding and component
+swizzle as for the real frame. Real composited color is kept separately and
+current HUD pixels are restored after interpolation. A missing or unrecognized
+scene/display match clears interpolation history and presents the real frame.
+The existing three-slot lease bound and refresh/cap gate remain in effect.
+
+The full arm64 GPU library builds. The offscreen framegen fixture passes normally
+and with `MTL_DEBUG_LAYER=1`: its interpolator input excludes the colored HUD,
+display gamma is preserved, current HUD restoration is exact, and a translating
+rectangle reaches 49.50 pixels against an expected 49.5-pixel midpoint. Existing
+history/cut/gap, cropped-display and bounded-pool checks pass. The new capture
+path has not been checked in gameplay or benchmarked; earlier framegen timing
+results describe the preceding composited-color implementation.

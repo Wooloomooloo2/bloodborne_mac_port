@@ -13,8 +13,8 @@ struct LauncherView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Two pages of two columns each so the whole window fits a 13" MacBook Air (1440 x 900
-            // points, Dock shown) without scrolling, even with every optional row showing.
+            // Two pages of two columns keep the window within a 13" MacBook Air (1440 x 900
+            // points, Dock shown). Forms scroll when optional rows or explanations need more room.
             // Not a TabView: on macOS 26.0.1 switching back to a tab re-inserts its cached view
             // graph and SwiftUI's accessibility nodes loop on a dependency cycle, printing it
             // forever with the window frozen (#47, sampled by the reporter).
@@ -84,6 +84,13 @@ struct LauncherView: View {
                 CrashReportView(report: report, model: model)
             }
         }
+        .alert("Frame generation configuration", isPresented: Binding(
+            get: { model.frameGenerationWarning != nil },
+            set: { if !$0 { model.frameGenerationWarning = nil } })) {
+            Button("OK", role: .cancel) { model.frameGenerationWarning = nil }
+        } message: {
+            Text(model.frameGenerationWarning ?? "")
+        }
         // (A second .sheet on the same view would never show: SwiftUI presents one per view.)
         .background {
             Color.clear.sheet(isPresented: Binding(get: { model.updater.showing }, set: { if !$0 { model.updater.dismiss() } })) {
@@ -97,6 +104,11 @@ struct LauncherView: View {
                 }
             }
         }
+    }
+
+    private func frameGenerationSetting<Value>(_ keyPath: WritableKeyPath<GameSettings, Value>) -> Binding<Value> {
+        Binding(get: { model.settings[keyPath: keyPath] },
+                set: { model.setFrameGenerationSetting(keyPath, to: $0) })
     }
 
     private var general: some View {
@@ -119,20 +131,20 @@ struct LauncherView: View {
                             ForEach(model.outputChoices, id: \.self) { Text($0.description).tag($0) }
                         }
                     }
-                    Picker("Window", selection: $model.settings.fullscreen) {
+                    Picker("Window", selection: frameGenerationSetting(\.fullscreen)) {
                         Text("Windowed").tag(false)
                         Text("Full screen").tag(true)
                     }
                     .pickerStyle(.segmented)
                     if model.showsDisplayChoice {
-                        Picker("Display", selection: $model.settings.display) {
+                        Picker("Display", selection: frameGenerationSetting(\.display)) {
                             Text("Main display").tag(String?.none)
                             ForEach(model.displayChoices) { Text($0.name).tag(Optional($0.uuid)) }
                         }
                         Text("The game opens on this display, in a window or full screen. If it isn't connected, the main display is used.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Picker("Frame rate cap", selection: $model.settings.frameCap) {
+                    Picker("Frame rate cap", selection: frameGenerationSetting(\.frameCap)) {
                         ForEach(FrameCap.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -155,10 +167,18 @@ struct LauncherView: View {
                         Text("Ultrawide runs at the selected native resolution, with upscaling off.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
-                    Picker("Upscaler", selection: $model.settings.upscaler) {
+                    Picker("Upscaler", selection: frameGenerationSetting(\.upscaler)) {
                         ForEach(model.upscalerChoices) { Text($0.label).tag($0) }
                     }
                     .disabled(model.settings.ultrawide)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Toggle("Frame generation (experimental)", isOn: frameGenerationSetting(\.frameGeneration))
+                            .disabled(model.frameGenerationIsForced || (model.frameGenerationUnavailableReason != nil && !model.settings.frameGeneration))
+                            .help("MetalFX 2×: adds one generated image between real frames, including with upscaling off. Applies when you start the game. Requires at least \(model.settings.frameCap.rawValue * 2) Hz. Pauses automatically when GPU time is needed for real frames.")
+                        if let reason = model.frameGenerationUnavailableReason {
+                            Text(reason).font(.caption).foregroundStyle(.orange)
+                        }
+                    }
                     Picker("Quality", selection: $model.settings.preset) {
                         ForEach(Resolution.presetNames.indices, id: \.self) { Text(Resolution.presetNames[$0]).tag($0) }
                     }

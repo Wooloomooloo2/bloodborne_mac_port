@@ -16,6 +16,7 @@
 
 #include <SDL3/SDL.h>
 #include "bbport_settings.h"
+#include "bbport_framegen.h"
 #include "bbport_overlay_metal.h"
 #include "imgui.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
@@ -98,9 +99,9 @@ bool dirty = false; // settings changed: saved shortly after the last change, an
 std::chrono::steady_clock::time_point last_change{};
 float base_scale = 1.0f;
 
-// Present rate for the FPS counter.
+// UI time advances once per pair. FPS comes from real-frame and drawable events.
 std::chrono::steady_clock::time_point last_present{};
-float frame_ms_avg = 0.0f;
+BbFrameRates::Sample frame_rates;
 // "Capture Frame": FrameCapture::Written() when it was pressed (~0: no request), and when.
 u64 capture_base = ~u64{0};
 std::chrono::steady_clock::time_point capture_time;
@@ -669,6 +670,7 @@ void DisplayTab(BbSettings::Values& s) {
         available[i] = BbSettings::UpscalerAvailable(choices[i]);
         if (!available[i]) {
             tips[i] = "Not supported by this GPU";
+
         }
     }
     const int upscaler = s.upscaler;
@@ -696,7 +698,7 @@ void DisplayTab(BbSettings::Values& s) {
     }
     HintBelow(about[current]);
     for (int i = 0; i < choice_count; ++i) {
-        if (!available[i]) {
+        if (!BbSettings::UpscalerAvailable(choices[i])) {
             char line[96];
             std::snprintf(line, sizeof(line), "Not available on this GPU: %s", labels[i]);
             Note(line);
@@ -716,6 +718,49 @@ void DisplayTab(BbSettings::Values& s) {
                       BbSettings::IsFsr4(requested) ? " on the Mac" : " on this GPU",
                       labels[current]);
         Note(text, kOrange);
+    }
+    EndCard();
+
+    BeginCard("Frame generation", int(BbSettings::FrameGenerationNeedsRestart()));
+    const bool framegen_available = s.framegen_supported && BbFrameGen::DisplaySupported();
+    ImGui::BeginDisabled((!framegen_available && !s.framegen) || s.framegen_forced);
+    Toggle("MetalFX 2x (experimental)", s.framegen);
+    ImGui::EndDisabled();
+    HintBelow("Adds an intermediate image between real frames, including at native resolution. "
+              "The FPS cap still controls real frames. Adds GPU work; takes effect after restart.");
+    if (!s.framegen_supported) {
+        Note("Unavailable in this session. Requires macOS 26 or newer, a supported GPU, "
+             "and the temporal renderer.");
+    } else if (!BbFrameGen::DisplaySupported()) {
+        if (!s.framegen_real_cap) {
+            Note("Set a real FPS cap to use frame generation. The display must support at "
+                 "least twice that rate.");
+        } else {
+            char text[256];
+            const auto timing = s.display_timing.load();
+            std::snprintf(text, sizeof(text),
+                          "Requires at least %.0f Hz for the %u FPS cap. "
+                          "External Adaptive-Sync needs full screen. "
+                          "This window reports %.2f Hz (0 means unknown).",
+                          2.0 * s.framegen_real_cap, s.framegen_real_cap, double(timing.refresh_hz));
+            Note(text);
+        }
+    } else if (s.framegen_forced) {
+        Note("Set by BB_METAL_FRAMEGEN at launch. Remove that override to change it here.");
+    } else if (BbFrameGen::Requested() && BbFrameGen::GpuBudgetLimited()) {
+        switch (BbFrameGen::GpuBudgetState()) {
+        case BbFrameGen::BudgetState::Scene:
+            Note("Waiting for a 3D scene. Logos, menus and loading screens use real frames only.");
+            break;
+        case BbFrameGen::BudgetState::Measuring:
+            Note("Measuring available GPU time before starting frame generation.");
+            break;
+        default:
+            Note("Frame generation is paused because the GPU is busy. Lower the output "
+                 "resolution or quality preset, or reduce graphics effects. It resumes "
+                 "automatically when there is enough spare GPU time.", kOrange);
+            break;
+        }
     }
     EndCard();
 
@@ -1123,7 +1168,8 @@ void Menu() {
                        s.model_lod != s.startup_model_lod ||
                        s.live_resolution != s.startup_live_resolution ||
                        s.metalfx_white_scene_fix != s.startup_metalfx_white_scene_fix ||
-                       BbSettings::ResolutionNeedsRestart();
+                       BbSettings::ResolutionNeedsRestart() ||
+                       BbSettings::FrameGenerationNeedsRestart();
         for (int e = 0; e < BbSettings::EffectCount; ++e) {
             restart |= s.effects[e] != s.startup_effects[e];
         }
@@ -1157,8 +1203,14 @@ void Menu() {
             ImGui::Unindent(r * 2.0f + 8.0f * base_scale);
         } else {
             ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
-            ImGui::Text("%.0f FPS  (%.1f ms)   Saved to bbport.ini",
-                        frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f, frame_ms_avg);
+            if (BbFrameGen::Active()) {
+                ImGui::Text("Real %.0f / Displayed %.0f FPS   Saved to bbport.ini",
+                            frame_rates.real_fps, frame_rates.displayed_fps);
+            } else {
+                ImGui::Text("%.0f FPS  (%.1f ms)   Saved to bbport.ini",
+                            frame_rates.real_fps,
+                            frame_rates.real_fps > 0 ? 1000.0 / frame_rates.real_fps : 0.0);
+            }
             ImGui::PopStyleColor();
         }
         const char* apply = "Apply and Restart Game";
@@ -1200,10 +1252,34 @@ void Menu() {
 
 void FpsCounter() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const auto& s = BbSettings::Get();
+    const bool framegen_active = BbFrameGen::Active();
+    const char* framegen_status = nullptr;
+    if (BbFrameGen::Requested() && !framegen_active) {
+        if (!s.framegen_supported) framegen_status = "Frame gen: unavailable";
+        else if (!BbFrameGen::DisplaySupported()) framegen_status = "Frame gen: display/cap conflict";
+        else if (BbFrameGen::GpuBudgetState() == BbFrameGen::BudgetState::Scene)
+            framegen_status = "Frame gen: waiting for scene";
+        else if (BbFrameGen::GpuBudgetState() == BbFrameGen::BudgetState::Measuring)
+            framegen_status = "Frame gen: measuring GPU time";
+        else framegen_status = "Frame gen: GPU busy";
+    }
     const float pad = 14.0f * base_scale;
+    const float gap = 8.0f * base_scale;
+    const float fps_width = ImGui::CalcTextSize("9999 FPS").x;
+    const float ms_width = ImGui::CalcTextSize("9999.9 ms").x;
+    const float row_width = fps_width + ms_width + gap +
+                            (framegen_active ? ImGui::CalcTextSize("Displayed").x + gap : 0.0f);
+    const float resolution_width =
+        ImGui::CalcTextSize("9999x9999 -> 9999x9999  MetalFX").x * .82f;
+    const float width = framegen_active
+        ? std::max(row_width, resolution_width) + 38.0f * base_scale : 0.0f;
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - pad,
                                    viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // Reserve stable columns for the paired counter. The single counter keeps its
+    // original content-sized layout; zero also clears a previous paired width.
+    ImGui::SetNextWindowSize(ImVec2(width, 0.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.62f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f * base_scale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(11.0f, 7.0f) * base_scale);
@@ -1213,10 +1289,36 @@ void FpsCounter() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
-    const auto& s = BbSettings::Get();
-    ImGui::Text("%.0f FPS", frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f);
-    ImGui::SameLine();
-    ImGui::TextColored(kSecondary, "%.1f ms", frame_ms_avg);
+    const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    const auto row = [&](const char* label, double fps) {
+        if (label) {
+            ImGui::TextUnformatted(label);
+        }
+        char text[48];
+        std::snprintf(text, sizeof(text), "%.0f FPS", fps);
+        const float fps_x = right - ms_width - gap - ImGui::CalcTextSize(text).x;
+        if (label) {
+            ImGui::SameLine(fps_x);
+        } else {
+            ImGui::SetCursorPosX(fps_x);
+        }
+        ImGui::TextUnformatted(text);
+        if (fps > 0) {
+            std::snprintf(text, sizeof(text), "%.1f ms", 1000.0 / fps);
+            ImGui::SameLine(right - ImGui::CalcTextSize(text).x);
+            ImGui::TextColored(kSecondary, "%s", text);
+        }
+    };
+    if (framegen_active) {
+        row("Real", frame_rates.real_fps);
+        row("Displayed", frame_rates.displayed_fps);
+    } else {
+        ImGui::Text("%.0f FPS", frame_rates.real_fps);
+        ImGui::SameLine();
+        ImGui::TextColored(kSecondary, "%.1f ms",
+                          frame_rates.real_fps > 0 ? 1000.0 / frame_rates.real_fps : 0.0);
+    }
+    if (framegen_status) ImGui::TextColored(kOrange, "%s", framegen_status);
     // Scene size from the upscaler or native G-buffer, and the output in effect: a
     // startup-patched session keeps its launch output until restart.
     const char* upscaler = s.upscaler == BbSettings::UpscalerFsr3      ? "FSR 3.1"
@@ -1696,19 +1798,18 @@ void ScriptedInput() {
 
 } // namespace
 
-void Render(void* command_buffer, void* target, u32 width, u32 height) {
+void Render(void* command_buffer, void* target, u32 width, u32 height,
+            const BbFrameRates::Sample& rates) {
     ScriptedInput();
-    // Present interval for the FPS readout (measured also while nothing is drawn).
+    // UI delta only. Replay must not add a timing/FPS sample for the second image.
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
     last_present = now;
-    if (ms > 0.0f && ms < 1000.0f) {
-        frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
-    }
     if (!initialized) {
         return;
     }
     std::scoped_lock lock{imgui_mutex};
+    frame_rates = rates;
     // Save 0.3 s after the last change (a slider drag writes once), not only when the menu
     // closes: closing the window or a crash with the menu open used to lose the changes. Under
     // the lock: the window thread's SetOpen(false) saves and clears `dirty` too.
@@ -1763,6 +1864,12 @@ void Render(void* command_buffer, void* target, u32 width, u32 height) {
         }
         ImGui::Render();
     });
+}
+
+void Replay(void* command_buffer, void* target) {
+    if (!initialized || !command_buffer || !target) return;
+    std::scoped_lock lock{imgui_mutex};
+    if (Visible()) MetalBackend::Frame(command_buffer, target, [] {});
 }
 
 } // namespace BbOverlay

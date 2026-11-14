@@ -14,6 +14,8 @@
 #include <vector>
 
 #include "core/libraries/videoout/buffer.h"
+#include "bbport_framegen.h"
+#include "bbport_frame_rates.h"
 #include "video_core/renderer_metal/mtl_device.h"
 #include "video_core/renderer_metal/mtl_object.h"
 #include "video_core/renderer_metal/mtl_present.h"
@@ -39,6 +41,8 @@ struct Frame {
     u32 width{};
     u32 height{};
     Metal::Object texture; ///< id<MTLTexture>, BGRA8Unorm render target (empty: never drawn)
+    Metal::Object generated; ///< optional post-processed intermediate image, same dimensions
+    BbFrameGen::FramePtr framegen; ///< pins inputs until both presents complete
     u64 ready_tick{};      ///< draw-scheduler tick that wrote it; 0: blank (Present clears)
     bool is_hdr{false};
     u32 id{};
@@ -101,7 +105,8 @@ public:
     Frame* PrepareBlankFrame(bool present_thread);
 
     /// Presents `frame` on the present queue once its draw-scheduler tick is done, and returns
-    /// it to the pool when the present completed. Never touches the draw scheduler.
+    /// it to the pool when the present completed. Paired deadlines wait on the committed
+    /// render timeline; this thread never records or flushes draw-scheduler work.
     /// present_id (bbport, frame spike log): unused until presented-time stats (M5).
     void Present(Frame* frame, bool is_reusing_frame = false, bool is_game_frame = true,
                  u32 present_id = 0);
@@ -175,6 +180,8 @@ private:
     HostPasses::PostProcessingPass pp_pass;
     std::unique_ptr<Metal::PresentQueue> present_queue;
     std::shared_ptr<FramePool> pool;
+    std::shared_ptr<BbFrameRates::Tracker> frame_rates{std::make_shared<BbFrameRates::Tracker>()};
+    BbFrameRates::PresentAverage present_average;
     PresentTiming last_present{};
     std::vector<VAddr> vo_buffers_addr;
     // bbport: frame timeline (BB_FRAME_STATS): flips waiting for GPU completion. Last, so the

@@ -2555,3 +2555,253 @@ frame pool peak 8 of 256 KiB (3%), last new peak at frame 212k; 60 FPS and 6-11 
 frame from start to end (no #55-style drift). The owner checked glare and lens flares (no visible
 change) and played 36 min on their own save at 1440p (frame pool peak 7 KiB, normal exit).
 Shipped in 0.5.14.
+
+## 2026-10-31 — Frame-generation gamma rows and absent fragment programs (#64)
+
+The HUD-free scene capture sampled the gamma LUT with normalized Y coordinates
+`0`, `1` and `2`. These are row numbers, not normalized row centers: green and
+blue clamp to the bottom edge instead of selecting their channel curves. Sample
+`0.5 / height`, `1.5 / height` and `2.5 / height` in array slice zero instead.
+The real frame and HUD composition keep their existing paths.
+
+The previous GPU fixture used one LUT row, so clamping every channel to that row
+hid this defect. A new production-path readback uses different red, green and
+blue curves, with both three rows and a fourth sentinel row. It fails on the
+published implementation and passes with the correction, including alpha
+preservation and Metal validation. Existing frame-generation history, motion,
+snapshot-lifetime and cropped-display checks also pass; both GPU architectures
+build.
+
+A separate gameplay test reproduced a GPU-process SIGSEGV with the published
+renderer (`edf3fe4`) and frame generation enabled. At the first gameplay frames,
+`Rasterizer::DrawRecord` called `AmdGpu::GetParams(regs.ps_program)` with address
+zero while checking for the retail display pass. Pipeline selection already
+allows absent shader stages, including fragment-less depth draws. Display-pass
+detection must reject those draws too: check the draw shape, attachments, scissor
+and both program addresses before reading or fingerprinting shader memory.
+
+On M4 Max/macOS 27, at 1080p MetalFX Native AA with a 60 FPS real cap and Metal
+validation, the original framegen-off control completed 60 seconds of measured
+gameplay; framegen on crashed about 17 seconds after launch. The corrected
+renderer completed the same 60-second gameplay window and a separate replay of
+the first 30 seconds of the benchmark route (1,831 game frames). Both enabled
+runs encoded intermediate frames, exited normally and logged no Metal errors.
+The frame-rate, upscaler-support and overlay fixtures also pass, with Metal
+validation for the overlay and framegen GPU cases.
+
+Runs used independent caches and disposable save copies, with unchanged source
+save hashes. The common diagnostic runtime included the existing local DLC-folder
+provider solely to load the DLC-dependent benchmark save; that provider is not
+part of this renderer change. Concurrent workload and later framegen-off/on
+throughput varied, so these runs establish bounded crash coverage, not a
+performance comparison. Combat, long sessions, other Macs and 4K remain untested.
+
+**Correction (same day, owner's play test): the LUT is slices, not rows, and the channels are
+reversed.** In the game the bound LUT is 1025x1 with 3 array slices (R32Float; logged from
+`CaptureDisplay` in a diagnostic build), so row-centre sampling in slice zero still gives every channel the slice-zero
+curve. The retail display pass (PS `0x38d65b32`, decompiled from the pipeline cache) is
+`red = LUT[2](blue)`, `green = LUT[1](green)`, `blue = LUT[0](red)`. The generated frames kept
+red and blue in place, so the owner saw wrong colours on every other frame. `scene_gamma` now
+copies that mapping and `CaptureDisplay` rejects a LUT with fewer than 3 slices. The fixture now
+builds a 1-row LUT with one distinct curve per slice (and a fourth sentinel slice); it fails on
+the rows version and passes with the change, with and without Metal validation. A 1080p MetalFX
+Native AA frame-generation run to the benchmark route's measuring stage encoded intermediate frames
+with no errors. Owner's verdict on feel: playable, but noticeably laggier
+than frame generation off; it stays opt-in.
+
+The single-rate FPS counter also retained the worst-case resolution-text width
+reserved for the paired layout. Restore the original content-sized, left-aligned
+single row when generation is inactive, and clear any previous paired width.
+The production overlay readback measured 326 pixels before and 186 after at its
+fixed test size, while the paired counter stays at 377 pixels. Normal and Metal
+validation runs check the compact counter, restart-dependent transitions,
+unsupported/refresh-limited fallback, and stable paired columns.
+
+
+## 2026-11-01 — Absolute framegen deadlines and automatic GPU admission (#64)
+
+Paired presentation now uses host deadlines anchored to each GPU-ready source,
+with the real image due half a configured cap period after its intermediate.
+A late acquisition cannot extend the following pair's hold. This removes the
+per-image minimum-duration rounding that throttled non-integer refresh ratios.
+Windowed framegen no longer forces a third drawable; full screen retains three.
+The presenter waits only on the already-committed render timeline, and continues
+to acquire/submit/release the two drawables sequentially.
+
+On the M4 Max/macOS 27 with a 120 Hz presentation cadence, 60-second stationary
+windows measured 59.69 real FPS off and 59.53 real / 119.61 displayed FPS on.
+The last 4,000 displayed-image timestamps had no gaps over 25.1 ms on. A private
+queue trace also isolated about 8.3 ms of extra queueing from forcing three
+windowed drawables; it was removed after measurement. These are presentation
+queue measurements, not hardware input-to-photon latency.
+
+Two additional 60-second runs exercised the non-integer ratios physically: 50
+real / 100 displayed on 120 Hz matches the 144:120 ratio; 45 / 90 matches 160:120.
+They measured 50.00 / 99.99 and 45.00 / 89.99 FPS respectively, with displayed
+intervals quantised to 8.33/16.67 ms. This checks the pacing mechanism without
+claiming an external 144/160 Hz hardware test.
+
+4K Quality exposed a separate GPU limit: sustained generation on the normal
+three-drawable full-screen path measured 49.08 real FPS in this scene. Automatic
+admission first measures real-only gameplay, leaves generation paused when GPU
+time is needed for real frames, and resumes only when the measured optional-work
+cost fits with a margin. It never periodically probes a saturated scene. That
+60-second candidate measured 59.96 real FPS, using real-only fallback; the off
+control measured 58.84 FPS. Sequential controls vary, so this establishes fallback
+coverage rather than a speedup. A forced-two-drawable full-screen experiment was
+slower and is excluded from the implementation.
+
+Native output can now provide scene/depth/motion/HUD inputs without selecting a
+temporal upscaler. It copies native scene pixels without adding jitter or changing
+saved upscaler/preset/resolution choices. Native aspect patches keep their exact
+sizes and skip capture-only UI redirection and object motion while automatically
+paused. Camera admission accepts the first valid scene after a history reset,
+so enabling native capture does not feed that reset back into its own gate.
+
+The supplied gamma-slice/channel correction is retained unchanged. GPU fixtures
+cover distinct LUT slices, source lifetimes, absolute presentation, counters,
+refresh eligibility and GPU-budget transitions (including sustained pressure,
+CPU hitches, configuration changes, missing timestamps and no periodic probes).
+Native-off full-screen gameplay and 1920×1200 / 2560×1080 native-aspect routes
+also completed with generated frames; the aspect cases used Metal validation.
+Gameplay uses private save/cache copies and the existing local DLC diagnostic
+adapter; original save hashes remain unchanged. These are bounded checks, with
+no claim of long-session or hardware button-to-photon validation.
+
+## 2026-11-07 — Frame-generation recovery and conflicting settings
+
+The owner reported generation appearing briefly in a cutscene, then staying off during
+gameplay in the dev build. The session log confirms admission followed by a GPU-budget pause.
+The old budget takes the last interpolation submission's duration as its permanent resume
+cost. A single cold/stalled submission followed by a scene transition can therefore lock out
+otherwise eligible gameplay: paused generation produces no fresh timings to replace it.
+The cold-submission regression fails with the original policy and passes with the fix.
+
+Use the median of distinct completed interpolation submissions after five warmup samples,
+retaining the initial conservative estimate during warmup. Repeated reads of one completion
+do not count as new samples. Sustained pressure and genuinely expensive interpolation still
+prevent admission; no periodic probes are added to saturated scenes. Publish the pause state
+to the FPS overlay and report scene, measurement, GPU-pressure and display/configuration
+reasons instead of silently reverting to an unexplained single-rate counter.
+
+The launcher rejects display/cap conflicts when changing dependent settings and before Play,
+including launch.conf/environment overrides. Existing preferences remain recoverable by
+disabling generation. Model and Metal-overlay checks exercise rejected changes, warning
+visibility, pending restart and recovery. The personal dev integration additionally guards
+HDR/Spatial conflicts; those providers stay in their separate PRs.
+
+Both GPU architectures, the native launcher and model tests build. The framegen and overlay
+fixtures pass normally and with Metal validation. A bounded stationary Central Yharnam check
+on M4 Max/macOS 27 with 1080p output, MetalFX Quality, adaptive 60 cap, HDR off and low extra
+lighting encoded more than 8,400 intermediate frames; a captured point reads 57 real / 114
+displayed FPS. Later GPU-pressure pauses resumed with a measured ~1.5–1.8 ms optional cost.
+This is functional generation/recovery evidence, not a matched performance benchmark or a
+reproduction of the owner's exact cutscene. It uses disposable save/cache/config copies and
+the existing private DLC-provider diagnostic adapter; all 61 protected save/settings hashes
+remain unchanged. No DLC-provider change, release publication or version change is included.
+
+## 2026-11-07 — Frame-generation startup headroom
+
+The owner reports a base M4 Mac mini remaining at "GPU is busy" with both 30- and 60-FPS
+caps, native 1080p and roughly 27–34 FPS without generation. That machine has not been
+tested locally. Native GPU saturation remains a possible limit; enabling a temporal
+upscaler at Performance and retaining a 30-FPS cap is the first configuration to try.
+
+The admission policy also unnecessarily rejects some usable workloads: an initial optional
+estimate of 15% combined with an 85% total limit requires the real scene to stay below 70%
+of the capped period forever, before interpolation can supply any measured cost. Reduce
+the initial estimate to 5% and admit below 95% total, leaving 10% initial headroom. Once
+available, the median measured interpolation cost replaces that estimate. Retain the
+two-window sustained-pressure fallback and no periodic probes of a saturated scene.
+
+Policy regressions model 25 ms real + 3 ms optional at 30 FPS and 13 ms + 1 ms at 60 FPS.
+The old policy rejects both; the revised policy admits and sustains them, then learns and
+rejects deliberately expensive interpolation without retrying. Existing cold-sample,
+scene/configuration reset, missing-timestamp and saturation regressions still pass.
+Log the first measured pressure rejection as well as later availability transitions, so a
+never-admitted remote machine reports its actual GPU timing and initial cost estimate.
+
+Both renderer architectures build; frame-generation and overlay fixtures pass normally
+and with Metal validation, and the independent real/displayed-rate fixture passes.
+These checks establish policy and GPU-fixture behavior, not base M4 gameplay performance.
+
+## 2026-11-12 — Framegen foreground depth/motion footprint (#64)
+
+Reported target: jitter on bridges, especially the Yharnam sewers with MetalFX
+Temporal and frame generation. The framegen capture kernel previously copied
+each raw depth/motion sample directly. It now selects the nearest valid depth
+in a 3×3 render-pixel neighbourhood and copies motion from that same sample,
+expanding thin foreground geometry's footprint without blending it with the
+background. Equal depths retain the centre vector. Invalid depths are ignored;
+non-finite vectors remain zeroed. This changes framegen snapshots only.
+
+The offscreen production-kernel regression covers a one-pixel foreground edge,
+distant perspective depths, stationary foreground over moving background,
+equal-depth ties, texture boundaries, invalid samples and sky rotation. Four
+checks fail against the previous capture kernel and pass with this change.
+Existing snapshot ownership, HUD/gamma and history tests pass. A repeated-stripe
+translation fixture uses identical endpoints one full period apart, making
+optical flow ambiguous: the generated midpoint is correct at native and 2×
+output resolution (mean absolute error 0.0000). This also rules out the initial
+motion-scale suspicion: render-pixel vectors with scale 1 are correct here, so
+the scale remains unchanged.
+
+Both renderer architectures build. The offscreen fixtures pass normally and
+with Metal API/shader validation on the local GPU. These are synthetic checks;
+the reported sewer scene, visual improvement and gameplay cost have not been
+measured. No release/version change is included.
+
+## 2026-11-12 — Shared MetalFX preprocessing and hitch recovery (#64)
+
+MetalFX Temporal's scaler is now supplied to the frame-interpolator descriptor.
+Each frame retains its scaler through deferred encoding and GPU completion;
+replacing it or switching providers resets interpolation history. Combined
+creation failure falls back to independent preprocessing and caches the result.
+Native, TAA and FSR continue using the independent path.
+
+Interpolation continuity now checks the configured real FPS cap: source periods
+outside 0.5–1.5 times the cap period withhold generated presentation. This covers
+stalls and rapid catch-up submissions without extending the real image's hold.
+The rejected real frame seeds history, allowing the next normal adjacent pair
+to resume. Cap changes also reset history. Policy regressions cover 30/60/120 FPS.
+
+The production MetalFX upscale/capture/gamma/interpolation fixture rasterizes a
+static rectangle with eight two-axis subpixel jitter phases and depth edges.
+After warmup its generated centre stays within 0.01 output pixels across phases
+on each axis, with shared and separate scalers. Resolved color therefore keeps
+the existing zero interpolator jitter offset. Sharing transitions also verify
+one-frame history seeding and resumption.
+
+A moving-rail fixture exposes background behind four-pixel foreground bars and
+compares the generated image to known midpoint geometry. Mean absolute linear
+color error is 0.0117, versus 0.1784 for the current real image. A depth-only
+current-pixel fallback raises error to 0.1194 by replacing valid midpoint rails;
+it is evaluated in the fixture and is not enabled in the renderer. MetalFX
+continues handling visibility rather than applying that extra mask.
+
+An opt-in offscreen benchmark (`BB_FRAMEGEN_BENCHMARK=1 out/gpu-arm64/framegen-test`)
+times complete 960×540 → 1920×1080 upscale/capture/interpolation submissions.
+Separate/shared/shared/separate order, eight warmup frames per run and 48 timed
+samples per path give medians of 2.386 ms separate and 2.148 ms shared; p95 is
+2.754/2.221 ms. This is approximately 10% less GPU time in this synthetic scene,
+not a gameplay FPS measurement or a base M4 result.
+
+Both renderer architectures build. Arm64 fixtures pass normally and with Metal
+API/shader validation; the x86-64 fixture passes under Rosetta. The reported
+Yharnam sewer scene still needs a visual A/B comparison. No release is included.
+
+A bounded integrated-renderer gameplay smoke completed a 20-second measurement
+with Metal API validation, MetalFX Temporal Quality at 1920×1080, framegen on and
+a 30-FPS cap. It used the unchanged November 7 packaged runtime, the new `dev`
+native renderer, and copies of the previously validated fresh-game save. It
+encoded more than 300 intermediate frames with no reported Metal errors and no
+shared-scaler fallback. The CSV contains 477 real frames over 20.033 seconds
+(23.81 FPS); this validation run does not establish 30→60 delivery or a gameplay
+speedup. The harness stopped its own process group after measurement.
+
+The first attempt used the checkout's existing prebuilt runtime and benchmark
+save, remained in menus and failed in guest code before gameplay (SIGBUS at
+guest offset `0x53b3260`). It is not counted as a passing gameplay test. Both
+attempts used isolated config/cache and copied saves; checked source game and
+seed-save hashes were unchanged. Evidence remains local under
+`out/framegen-stability-20261112/` in the integration worktree.
