@@ -36,4 +36,9 @@ struct ZeroInputsRewrite {
 /// Fails when such a variable reaches anything but loads and access chains (calls, copies).
 ZeroInputsRewrite ZeroUnwrittenInputs(std::span<const u32> spirv, u64 locations);
 
+/// Duplicate a fragment shader's sole float4 colour output at locations 1 and 2.
+/// The original shader and its bindings remain intact. Used to accumulate HDR UI
+/// blend coefficients in the original draw, sharing rasterisation and stencil.
+ZeroInputsRewrite DuplicateFragmentOutput(std::span<const u32> spirv);
+
 } // namespace Metal

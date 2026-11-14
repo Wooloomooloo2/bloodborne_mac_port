@@ -179,7 +179,7 @@ int main() {
         }
         // The MetalFX segment of the Display tab at this size (drawable pixels; window id 0
         // means density 1).
-        constexpr float mx = 1862.0f, my = 354.0f;
+        constexpr float mx = 1862.0f, my = 670.0f;
         SDL_Event mouse{};
         mouse.type = SDL_EVENT_MOUSE_MOTION;
         mouse.motion.x = mx;

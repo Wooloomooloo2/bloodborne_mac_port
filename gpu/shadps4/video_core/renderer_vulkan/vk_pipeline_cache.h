@@ -161,6 +161,7 @@ public:
     }
 
     const ComputePipeline* GetComputePipeline();
+    const GraphicsPipeline* HdrUiPipeline(const GraphicsPipeline& source);
 
     using Result = std::tuple<const Shader::Info*, const Metal::ShaderModule*,
                               std::optional<Shader::Gcn::FetchShaderData>, u64>;
@@ -214,6 +215,7 @@ private:
     const PreparedDraw* used_prepared = nullptr;
     tsl::robin_map<ComputePipelineKey, std::unique_ptr<ComputePipeline>> compute_pipelines;
     tsl::robin_map<GraphicsPipelineKey, std::unique_ptr<GraphicsPipeline>> graphics_pipelines;
+    std::unordered_map<const GraphicsPipeline*, std::unique_ptr<GraphicsPipeline>> hdr_ui_pipelines;
     PipelineSelection sel{}; ///< GPU thread selection state
     ComputePipelineKey compute_key{};
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
