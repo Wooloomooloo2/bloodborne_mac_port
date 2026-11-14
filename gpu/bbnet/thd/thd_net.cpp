@@ -479,6 +479,13 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
             std::vector<std::uint8_t> packet(buf, buf + n);
             const std::uint32_t from_addr = sa.sin_addr.s_addr;
             const std::uint16_t from_port = sa.sin_port;
+            static int signal_logs = 0;
+            if (trace_now(signal_logs)) {
+                char ip[32];
+                write_ipv4(ip, sizeof(ip), from_addr);
+                Log("net: signaling datagram kind 0x%02x, %zu bytes <- %s:%u", n >= 5 ? buf[4] : 0,
+                    static_cast<std::size_t>(n), ip, bswap16(from_port));
+            }
             DispatchAfter(0, Prio::Signaling, [packet = std::move(packet), from_addr, from_port] {
                 SignalingControl(packet.data(), packet.size(), from_addr, from_port);
             });
@@ -1186,7 +1193,15 @@ void P2pSignalSend(std::uint32_t addr, std::uint16_t port_host, const void* data
     const std::uint16_t port_nbo = bswap16(port_host);
     std::uint8_t token[kStunTokenLen];
     sockaddr_in stun_sa{};
-    if (relay_target(addr, port_nbo, token, &stun_sa)) {
+    const bool relayed = relay_target(addr, port_nbo, token, &stun_sa);
+    static int logs = 0;
+    if (trace_now(logs)) {
+        char ip[32];
+        write_ipv4(ip, sizeof(ip), addr);
+        Log("net: signaling datagram kind 0x%02x, %zu bytes -> %s:%u%s", len >= 5 ? static_cast<const std::uint8_t*>(data)[4] : 0,
+            len, ip, port_host, relayed ? " (relay)" : "");
+    }
+    if (relayed) {
         std::uint8_t frame[kRelayHeader + 512];
         frame[0] = kRelayMagic;
         frame[1] = kRelayToServer;

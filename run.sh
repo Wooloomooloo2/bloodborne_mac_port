@@ -191,6 +191,8 @@ if [[ ${BB_ONLINE:-0} == 1 && -f scripts/online.py ]]; then
         export SHADPS4_HTTP_HOST_OVERRIDES_JSON
         export BB_THD_SERVER=${BB_THD_SERVER:-$community:18671} BB_THD_AUTH=${BB_THD_AUTH:-$community}
         export BB_THD_RULESET=${BB_THD_RULESET:-vanilla} BB_P2P_PORT=${BB_P2P_PORT:-3658}
+        # BB_THD_TRACE=1 also traces the vendored NpSignaling's handshake (bbhost's own switch).
+        if [[ ${BB_THD_TRACE:-} == 1 ]]; then export BBHOST_NP_TRACE=${BBHOST_NP_TRACE:-1}; fi
         # The client field the server tells clients apart by (User-Agent on the backend's calls and
         # the game's, "name/version"). The operators ask every client for its own name and version
         # (2026-10-18): this port's, from its latest tag (mac-v0.5.0 -> "bbport-mac 0.5.0"; without
