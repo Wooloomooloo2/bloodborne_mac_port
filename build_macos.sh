@@ -110,6 +110,8 @@ if [[ ${1:-} == --test ]]; then
     out/sema-test
     "$CC" "${cflags[@]}" -I. -Isrc tests/test_content.c src/runtime_content.c -o out/content-test
     out/content-test
+    "$CC" "${cflags[@]}" -Isrc tests/test_text_input.c -o out/text-input-test
+    out/text-input-test
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test
