@@ -206,8 +206,8 @@ private:
     bool Resolve(const ResolveInputs& in);
     /// TAA (native resolution): the history ping-pong and the menu's sharpen (0..2).
     bool ResolveTaa(const ResolveInputs& in);
-    /// MetalFX's temporal scaler, encoded into the frame's command buffer; recreated (after
-    /// scheduler.Finish()) when a format or size changes. Then ExtraSharpen (sharpness > 1).
+    /// MetalFX's temporal scaler, encoded into the frame's command buffer; recreated
+    /// when a format or size changes. Then ExtraSharpen (sharpness > 1).
     bool ResolveMetalFx(const ResolveInputs& in);
     /// AMD FSR 3.1 on the FidelityFX Metal back end (fsr3, made by EnsureResources), recorded in
     /// order with the frame; its RCAS covers sharpness up to 1, ExtraSharpen the rest.
@@ -287,6 +287,7 @@ private:
 
     bool resources_ready = false; ///< the textures below match width/height/out size
     int resources_upscaler = -1;  ///< the provider they were made for
+    bool resources_reactive = false; ///< the full-size reactive resources are needed
     Metal::Object motion_image;   ///< RG16F, render size (BB_RENDER_RES: the colour's size)
     u32 motion_width = 0, motion_height = 0;
     Metal::Object output_image;   ///< output size RGBA16F
@@ -296,8 +297,8 @@ private:
     Taa::Kernels taa;                         ///< built at construction
     std::array<Metal::Object, 2> taa_history; ///< output size RGBA32F (TAA only): RGB, depth
     u32 taa_next = 0;                         ///< the history written this frame
-    /// MetalFX (id<MTLFXTemporalScaler>) and what it was made for. Recorded commands use it by
-    /// pointer (the encoder keeps it alive once encoded); replaced only after scheduler.Finish().
+    /// MetalFX (id<MTLFXTemporalScaler>) and what it was made for. Recorded closures own a
+    /// reference before encoding; the encoder keeps it alive through GPU completion.
     Metal::Object metalfx_scaler;
     BbMetalFx::Config metalfx_config{};
     /// FSR 3.1's context and shared textures for the current sizes and input kind (FSR 3.1 only).

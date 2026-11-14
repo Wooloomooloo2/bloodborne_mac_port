@@ -198,18 +198,25 @@ void RunCase(Device& device, const Case& c) {
         // Our own commands before and after the scaler's, in one command buffer: a copy that
         // leaves a blit encoder open, MetalFX, then the readback copy.
         encoder.CopyTexture(motion.Get(), 0, 0, {}, motion.Get(), 0, 0, {}, {1, 1, 1});
-        BbMetalFx::Encode(encoder, scaler.Get(),
-                          {.color = color.Get(),
-                           .depth = depth.Get(),
-                           .motion = motion.Get(),
-                           .output = output.Get(),
-                           .content_width = w,
-                           .content_height = h,
-                           .jitter_x = 0.25f,
-                           .jitter_y = -0.25f,
-                           .reset = true});
-        // The encoder keeps the scaler until its command buffer completes.
-        scaler.Reset();
+        {
+            auto recorded = [owned = Object::Retain(scaler.Get()), &encoder, color = color.Get(),
+                             depth = depth.Get(), motion = motion.Get(), output = output.Get()] {
+                BbMetalFx::Encode(encoder, owned.Get(),
+                                  {.color = color,
+                                   .depth = depth,
+                                   .motion = motion,
+                                   .output = output,
+                                   .content_width = w,
+                                   .content_height = h,
+                                   .jitter_x = 0.25f,
+                                   .jitter_y = -0.25f,
+                                   .reset = true});
+            };
+            // As with a deferred Scheduler::Record: replacing the owner's scaler
+            // before the closure runs must not require finishing the GPU first.
+            scaler.Reset();
+            recorded();
+        } // the recorded closure is gone; the command buffer now keeps the scaler
         encoder.CopyTextureToBuffer(output.Get(), 0, 0, {}, {ow, oh, 1}, Ref(readback),
                                     ow * texel, ow * oh * texel);
         device.Wait(encoder.Submit());
