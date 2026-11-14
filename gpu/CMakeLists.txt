@@ -466,6 +466,8 @@ if (BB_NET AND NOT BB_ARM64)
     else()
         message(STATUS "Online module: off (protobuf, nlohmann_json, OpenSSL, zlib or miniupnpc missing)")
     endif()
+endif()
+
 # CPU-only validation of the production GPU boundary helper.
 add_executable(gnm-submit-validation-test EXCLUDE_FROM_ALL ../tests/test_gnm_submit_validation.cpp)
 target_include_directories(gnm-submit-validation-test PRIVATE shim)
