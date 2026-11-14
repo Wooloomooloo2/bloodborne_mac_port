@@ -14,6 +14,11 @@ struct ReleaseUpdate: Equatable {
     var digest: String?
     /// A pre-release on GitHub or a test tag (mac-v0.5.2-test1): offered only with "Include test builds".
     var isTestBuild = false
+    /// An online play beta (its zip is Bloodborne-OnlineBeta-macOS-<version>.zip): offered only
+    /// with "Online play beta".
+    var isBeta = false
+    /// Back from a beta to the newest regular version, although its number may be lower.
+    var isReturn = false
 }
 
 /// Update checks against the repository's GitHub releases (launcher/App/Updater.swift does the
@@ -25,6 +30,10 @@ enum Updates {
     static let repositoryPage = URL(string: "https://github.com/\(repository)")!
     /// Automatic checks: once a day, when the launcher window shows.
     static let interval: TimeInterval = 24 * 60 * 60
+    /// The app's zip in a release. Betas use their own name so updaters before 0.5.16, which know
+    /// no beta channel, never offer one.
+    static let zipPrefix = "Bloodborne-macOS-"
+    static let betaZipPrefix = "Bloodborne-OnlineBeta-macOS-"
 
     static func isDue(last: Date?, now: Date) -> Bool {
         guard let last else { return true }
@@ -50,21 +59,22 @@ enum Updates {
 
     /// The API's releases newest version first, without drafts, tags that are not
     /// mac-v<numbers>, releases without the app's zip and (unless asked for) test builds: GitHub
-    /// pre-releases (each release is published as full or pre-release on purpose) and test tags.
-    static func releases(json: Data, includeTestBuilds: Bool) throws -> [ReleaseUpdate] {
+    /// pre-releases (each release is published as full or pre-release on purpose) and test tags;
+    /// and betas (unless asked for).
+    static func releases(json: Data, includeTestBuilds: Bool, includeBetas: Bool = false) throws -> [ReleaseUpdate] {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let found = try decoder.decode([Payload].self, from: json).compactMap { r -> ReleaseUpdate? in
             guard r.draft != true, r.tagName.hasPrefix("mac-v"), let version = ReleaseVersion(r.tagName) else { return nil }
             let isTestBuild = r.prerelease == true || !version.isPlain
-            guard includeTestBuilds || !isTestBuild,
-                  let asset = r.assets.first(where: {
-                      $0.name.hasPrefix("Bloodborne-macOS-") && $0.name.hasSuffix(".zip") && ($0.state ?? "uploaded") == "uploaded"
-                  }) else { return nil }
+            let zips = r.assets.filter { $0.name.hasSuffix(".zip") && ($0.state ?? "uploaded") == "uploaded" }
+            let beta = zips.first { $0.name.hasPrefix(betaZipPrefix) }
+            guard let asset = beta ?? zips.first(where: { $0.name.hasPrefix(zipPrefix) }),
+                  beta != nil ? includeBetas : includeTestBuilds || !isTestBuild else { return nil }
             let title = r.name.flatMap { $0.isEmpty ? nil : $0 } ?? r.tagName
             return ReleaseUpdate(version: version, tag: r.tagName, title: title, notes: r.body ?? "",
                                  page: r.htmlUrl, zip: asset.browserDownloadUrl, size: asset.size, digest: asset.digest,
-                                 isTestBuild: isTestBuild)
+                                 isTestBuild: isTestBuild, isBeta: beta != nil)
         }
         // Newest version first; equal versions keep the API's order (newest published first).
         return found.enumerated().sorted { a, b in
@@ -74,11 +84,16 @@ enum Updates {
     }
 
     /// The release to offer over `current` (nil: up to date). `skipping`: a version the player
-    /// chose to skip; still offered by a check they ask for.
-    static func newest(json: Data, current: ReleaseVersion?, includeTestBuilds: Bool,
+    /// chose to skip; still offered by a check they ask for. A beta with betas turned off is
+    /// offered the newest regular version, even an older one (`isReturn`).
+    static func newest(json: Data, current: ReleaseVersion?, includeTestBuilds: Bool, includeBetas: Bool = false,
                        skipping: String? = nil) throws -> ReleaseUpdate? {
-        guard let best = try releases(json: json, includeTestBuilds: includeTestBuilds).first else { return nil }
-        if let current, !best.version.isNewer(than: current) { return nil }
+        guard var best = try releases(json: json, includeTestBuilds: includeTestBuilds, includeBetas: includeBetas).first
+        else { return nil }
+        if let current, !best.version.isNewer(than: current) {
+            guard current.isBeta, !includeBetas, best.version != current else { return nil }
+            best.isReturn = true
+        }
         return best.version.text == skipping ? nil : best
     }
 

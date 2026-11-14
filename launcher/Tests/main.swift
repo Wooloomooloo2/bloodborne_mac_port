@@ -604,6 +604,30 @@ do {
     check(newest(nil) == "mac-v0.5.2", "dev build: newest release")
     check((try? Updates.releases(json: Data("{\"message\":\"rate limited\"}".utf8), includeTestBuilds: false)) == nil, "API error is an error")
 
+    // Online play betas: their own zip name, offered only with the beta channel; leaving the beta
+    // offers the newest regular version, even a lower number.
+    check(v("0.7.0-beta1").isBeta && v("0.7.0-beta1-3-g0b50589").isBeta && !v("0.7.0-test1").isBeta && !v("0.7.0").isBeta, "beta versions")
+    let betaJSON = Data(("[" + [release("mac-v0.7.0-beta2", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip"),
+                                release("mac-v0.5.17"), release("mac-v0.5.16-test1", prerelease: true),
+                                release("mac-v0.7.0-beta1", prerelease: true, asset: "Bloodborne-OnlineBeta-macOS-0.7.0-beta1.zip"),
+                                release("mac-v0.5.16")]
+        .joined(separator: ",") + "]").utf8)
+    func offered(_ current: String, tests: Bool = false, betas: Bool = false) -> (tag: String, isBeta: Bool, isReturn: Bool)? {
+        guard let r = (try? Updates.newest(json: betaJSON, current: v(current), includeTestBuilds: tests, includeBetas: betas)) ?? nil
+        else { return nil }
+        return (r.tag, r.isBeta, r.isReturn)
+    }
+    check(offered("0.5.16")?.tag == "mac-v0.5.17" && offered("0.5.16", tests: true)?.tag == "mac-v0.5.17", "betas not offered without the channel, also not as test builds")
+    check(offered("0.5.16", betas: true).map { $0.tag == "mac-v0.7.0-beta2" && $0.isBeta && !$0.isReturn } == true, "joining: the newest beta")
+    check((try? Updates.releases(json: betaJSON, includeTestBuilds: false, includeBetas: true))?.first?.zip.lastPathComponent
+          == "Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip", "the beta's own zip")
+    check(offered("0.7.0-beta1", betas: true)?.tag == "mac-v0.7.0-beta2" && offered("0.7.0-beta2", betas: true) == nil, "next beta; up to date")
+    check(offered("0.7.0-beta2").map { $0.tag == "mac-v0.5.17" && $0.isReturn && !$0.isBeta } == true, "leaving: back to the newest regular version")
+    check(offered("0.7.0-beta2", tests: true)?.tag == "mac-v0.5.17", "leaving with test builds: still the regular line")
+    check(offered("0.5.17", betas: false)?.tag == nil && offered("0.7.0")?.tag == nil, "no return from a regular version")
+    // Updaters before 0.5.16 look for Bloodborne-macOS-*.zip only, so they never see a beta.
+    check(!"Bloodborne-OnlineBeta-macOS-0.7.0-beta2.zip".hasPrefix("Bloodborne-macOS-"), "old updaters skip betas")
+
     let now = Date(timeIntervalSince1970: 2_000_000_000)
     check(Updates.isDue(last: nil, now: now) && Updates.isDue(last: now - Updates.interval, now: now), "due")
     check(!Updates.isDue(last: now - 3600, now: now) && Updates.isDue(last: now + 3600, now: now), "not due; clock set back")
@@ -627,19 +651,21 @@ do {
     // launch.conf keeps the update preferences.
     var conf = IniFile(text: "BB_GAME_DIR=/g\n")
     var config = LaunchConfig(ini: conf)
-    check(config.checkUpdates == nil && !config.testBuilds && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
+    check(config.checkUpdates == nil && !config.testBuilds && !config.onlineBeta && config.skippedVersion == nil && config.lastUpdateCheck == nil, "update defaults")
     config.checkUpdates = false
     config.testBuilds = true
+    config.onlineBeta = true
     config.skippedVersion = "0.5.2.2"
     config.lastUpdateCheck = now
     config.apply(to: &conf)
     check(LaunchConfig(ini: conf) == config && LaunchConfig(ini: conf).checkUpdates == false, "update preferences round trip")
-    check(conf["BB_UPDATE_CHECKED"] == "2000000000" && conf["BB_CHECK_UPDATES"] == "0", "update keys written")
+    check(conf["BB_UPDATE_CHECKED"] == "2000000000" && conf["BB_CHECK_UPDATES"] == "0" && conf["BB_UPDATE_ONLINE_BETA"] == "1", "update keys written")
     config.testBuilds = false
+    config.onlineBeta = false
     config.skippedVersion = nil
     config.checkUpdates = nil
     config.apply(to: &conf)
-    check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
+    check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_ONLINE_BETA"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
     check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
 }
 

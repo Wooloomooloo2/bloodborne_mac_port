@@ -50,7 +50,9 @@ jobs:
           version=${GITHUB_REF_NAME#mac-v}
           [[ $GITHUB_REF_TYPE == tag ]] || version=dev-$(git rev-parse --short HEAD)
           bash scripts/macos/package_app.sh "$version"
-          echo "ZIP=dist/Bloodborne-macOS-$version.zip" >> "$GITHUB_ENV"
+          zip=dist/Bloodborne-macOS-$version.zip
+          [[ $version == *-beta* ]] && zip=dist/Bloodborne-OnlineBeta-macOS-$version.zip # (package_app.sh)
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
           bash tools/pkg_extract/build_release.sh dist/pkg_extract
           (cd dist && ditto -c -k pkg_extract pkg_extract-macOS.zip)
 

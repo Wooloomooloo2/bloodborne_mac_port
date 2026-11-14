@@ -224,7 +224,9 @@ find "$contents/MacOS" "$contents/Frameworks" "$py" -type f \( -perm -u+x -o -na
 codesign --force --sign - "$app"
 codesign --verify --deep --strict "$app"
 
+# Online play betas (0.7.0-beta1) get their own name: only updaters with the beta channel offer them.
 zip=$dist/Bloodborne-macOS-$version.zip
+[[ $version == *-beta* ]] && zip=$dist/Bloodborne-OnlineBeta-macOS-$version.zip
 rm -f "$zip"
 (cd "$dist" && ditto -c -k --keepParent --sequesterRsrc Bloodborne.app "$(basename "$zip")")
 echo "Built $app ($(du -sh "$app" | cut -f1)) and $zip ($(du -h "$zip" | cut -f1))"

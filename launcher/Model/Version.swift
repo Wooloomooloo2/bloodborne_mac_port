@@ -26,6 +26,8 @@ struct ReleaseVersion: Equatable, CustomStringConvertible {
     }
 
     var isPlain: Bool { suffix.isEmpty }
+    /// An online play beta ("0.7.0-beta1", also with git describe's "-3-g…" after it).
+    var isBeta: Bool { suffix.hasPrefix("-beta") }
     var description: String { text }
 
     /// Order among versions with the same numbers: (-1, n) a test build ("-test<n>", "-rc<n>"),
