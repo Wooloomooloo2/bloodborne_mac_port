@@ -470,6 +470,20 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
         std::uint16_t src = 0, dst = 0;
         const std::size_t hdr = p2p_header(buf, static_cast<std::size_t>(n), &src, &dst);
         if (!hdr) {
+            // A bbhost peer's signaling handshake: answered by the signaling layer, never the game's.
+            if (n >= 4 && std::memcmp(buf, kSignalMagic, sizeof(kSignalMagic)) == 0) {
+                {
+                    std::lock_guard lk(port->mu);
+                    note_heard(*port, source_key(sa.sin_addr.s_addr, sa.sin_port));
+                }
+                std::vector<std::uint8_t> pkt(buf, buf + n);
+                const std::uint32_t from_addr = sa.sin_addr.s_addr;
+                const std::uint16_t from_port = bswap16(sa.sin_port);
+                DispatchAfter(0, Prio::Signaling, [pkt = std::move(pkt), from_addr, from_port] {
+                    SignalingControl(pkt.data(), pkt.size(), from_addr, from_port);
+                });
+                continue;
+            }
             // A peer's hole-punch probe or the STUN server's answer: neither is the game's.
             if (n >= 8 && std::memcmp(buf, kProbe, 5) == 0) {
                 std::lock_guard lk(port->mu);
@@ -1216,6 +1230,40 @@ void P2pPunch(const char* label, std::uint32_t addr, std::uint16_t port_host, st
             heard ? "peer heard" : "nothing heard");
         g_punches.fetch_sub(1);
     }).detach();
+}
+
+void P2pSignal(std::uint32_t addr, std::uint16_t port_host, const void* data, std::size_t len) {
+    std::shared_ptr<UdpPort> port;
+    {
+        std::lock_guard lk(g_net_mu);
+        auto it = g_p2p_ports.find(static_cast<std::uint16_t>(P2pPort()));
+        if (it != g_p2p_ports.end()) port = it->second;
+    }
+    if (!port || !addr || !port_host || !data || len > 256) return;
+    sockaddr_in sa{};
+    sa.sin_family = AF_INET;
+    sa.sin_addr.s_addr = addr;
+    sa.sin_port = bswap16(port_host);
+    std::uint8_t token[kStunTokenLen];
+    sockaddr_in stun_sa{};
+    ssize_type n;
+    if (relay_target(addr, sa.sin_port, token, &stun_sa)) {
+        std::uint8_t frame[256 + kRelayHeader];
+        frame[0] = kRelayMagic;
+        frame[1] = kRelayToServer;
+        std::memcpy(frame + 2, token, kStunTokenLen);
+        std::memcpy(frame + 10, &sa.sin_port, 2); // network order is the frame's big-endian
+        std::memcpy(frame + kRelayHeader, data, len);
+        n = sock_sendto(port->fd, frame, kRelayHeader + len, true, &stun_sa);
+    } else {
+        n = sock_sendto(port->fd, data, len, true, &sa);
+    }
+    static int logs = 0;
+    if (trace_now(logs)) {
+        char ip[32];
+        write_ipv4(ip, sizeof(ip), addr);
+        Log("net: signal -> %s:%u: %zu bytes -> %lld", ip, port_host, len, static_cast<long long>(n));
+    }
 }
 
 std::string DetectLanAddress(const std::string& host) {
