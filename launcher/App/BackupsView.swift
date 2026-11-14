@@ -27,10 +27,11 @@ struct BackupsView: View {
                 Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             }
             HStack {
-                Button("Back Up Now", action: model.backUpNow).disabled(model.running)
+                Button(model.backingUp ? "Backing Up…" : "Back Up Now", action: model.backUpNow)
+                    .disabled(model.running || model.backingUp)
                 Button("Show in Finder") {
                     if let entry = selected { NSWorkspace.shared.activateFileViewerSelecting([entry.folder]) }
-                    else { NSWorkspace.shared.open(model.modFiles.backups) }
+                    else { NSWorkspace.shared.open(model.backupDir) }
                 }
                 Spacer()
                 Button("Delete…") { if let entry = selected { model.deleteBackup(entry) } }

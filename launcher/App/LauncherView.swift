@@ -205,14 +205,18 @@ struct LauncherView: View {
                              : "Shared with the regular version: progress carries over both ways. Your saves are backed up before every beta launch.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    FolderRow(title: "Backup folder", path: model.backupDir.path, problem: model.backupProblem,
+                              choose: model.chooseBackupFolder, reset: model.resetBackupFolder)
                     HStack {
                         Text("Save backups")
                         Spacer()
-                        Button("Back Up Now", action: model.backUpNow).disabled(model.running)
+                        if model.backingUp { ProgressView().controlSize(.small) }
+                        Button(model.backingUp ? "Backing Up…" : "Back Up Now", action: model.backUpNow)
+                            .disabled(model.running || model.backingUp)
                         Button("Backups…") { model.refreshBackups(); model.showingBackups = true }
                     }
                     if let message = model.backupMessage, !model.showingBackups {
-                        Text(message).font(.caption).foregroundStyle(.secondary)
+                        Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                 }
             }

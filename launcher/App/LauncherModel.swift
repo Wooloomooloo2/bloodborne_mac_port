@@ -341,7 +341,7 @@ final class LauncherModel: ObservableObject {
     /// a new set of mods or cheats. False: the copy failed and the player cancelled.
     private func backUpSavesIfNeeded() -> Bool {
         refreshEnabledMods()
-        let backups = modFiles.backups
+        let backups = backupDir
         let signature = ModSignature(mods: enabledMods, cheats: settings.cheats)
         guard let reason = SaveBackup.launchReason(mods: signature, lastMods: SaveBackup.lastSignature(backups: backups),
                                                    version: appVersion, lastVersion: SaveBackup.lastVersion(backups: backups),
@@ -366,18 +366,73 @@ final class LauncherModel: ObservableObject {
     @Published var showingBackups = false
     @Published var backupMessage: String?
 
-    func refreshBackups() { saveBackups = SaveBackup.list(backups: modFiles.backups) }
+    func refreshBackups() { saveBackups = SaveBackup.list(backups: backupDir) }
+
+    /// The default backup folder, or the one chosen (launch.conf BB_BACKUP_DIR).
+    var defaultBackupDir: URL { dataDir.appendingPathComponent("save-backups") }
+    var backupDir: URL { config.backupDir ?? defaultBackupDir }
+    @Published private(set) var backingUp = false
+    @Published private(set) var backupProblem: String?
 
     func backUpNow() {
-        do {
-            if try SaveBackup.backUp(saveFolder: saveDir, backups: modFiles.backups, reason: .manual, version: appVersion) == nil {
+        guard !backingUp else { return }
+        backingUp = true
+        let (saves, backups, version) = (saveDir, backupDir, appVersion)
+        Task {
+            let result = await Task.detached { () -> Result<URL?, Error> in
+                Result { try SaveBackup.backUp(saveFolder: saves, backups: backups, reason: .manual, version: version) }
+            }.value
+            switch result {
+            case .success(nil):
                 backupMessage = "There are no saves to back up yet."
-            } else {
-                backupMessage = nil
+            case let .success(folder?):
+                let size = ByteCountFormatter.string(fromByteCount: SaveBackup.size(folder), countStyle: .file)
+                backupMessage = "Backed up at \(Date().formatted(date: .omitted, time: .standard)) (\(size)) to \(folder.path)."
+            case let .failure(error):
+                backupMessage = "The backup failed: \(error.localizedDescription)"
             }
-        } catch {
-            backupMessage = "The backup failed: \(error.localizedDescription)"
+            backingUp = false
+            refreshBackups()
         }
+    }
+
+    func chooseBackupFolder() {
+        guard let url = pickFolder("Choose the folder for your save backups.", start: backupDir) else { return }
+        setBackupFolder(url)
+    }
+
+    func resetBackupFolder() { setBackupFolder(defaultBackupDir) }
+
+    /// A new backup folder; the backups in the old one can move along.
+    private func setBackupFolder(_ url: URL) {
+        let old = backupDir
+        guard url.standardizedFileURL.path != old.standardizedFileURL.path else { return }
+        if let problem = SaveFolder.problem(url, create: true) {
+            backupProblem = problem
+            return
+        }
+        let existing = SaveBackup.list(backups: old)
+        if !existing.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "Move your \(existing.count) backup\(existing.count == 1 ? "" : "s") to the new folder?"
+            alert.informativeText = "They are moved from \(old.path) to \(url.path). Otherwise they stay where they are, and the Backups window lists the new folder's only."
+            alert.addButton(withTitle: "Move Backups")
+            alert.addButton(withTitle: "Leave Them")
+            if alert.runModal() == .alertFirstButtonReturn {
+                let fm = FileManager.default
+                for name in existing.map(\.name) + [SaveBackup.recordName, SaveBackup.versionRecordName] {
+                    let from = old.appendingPathComponent(name), to = url.appendingPathComponent(name)
+                    guard fm.fileExists(atPath: from.path), !fm.fileExists(atPath: to.path) else { continue }
+                    do { try fm.moveItem(at: from, to: to) } catch {
+                        backupProblem = "Moving \(name) failed: \(error.localizedDescription)"
+                        return
+                    }
+                }
+            }
+        }
+        config.backupDir = url.standardizedFileURL.path == defaultBackupDir.standardizedFileURL.path ? nil : url
+        backupProblem = nil
+        save()
         refreshBackups()
     }
 
@@ -393,7 +448,7 @@ final class LauncherModel: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
-            try SaveBackup.restore(entry, saveFolder: saveDir, backups: modFiles.backups, version: appVersion)
+            try SaveBackup.restore(entry, saveFolder: saveDir, backups: backupDir, version: appVersion)
             backupMessage = "Restored the saves from \(entry.name)."
         } catch {
             backupMessage = "The restore failed; your saves are as they were: \(error.localizedDescription)"

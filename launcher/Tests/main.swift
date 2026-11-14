@@ -493,6 +493,12 @@ do {
     check(conf["BB_UPDATE_TEST_BUILDS"] == nil && conf["BB_UPDATE_ONLINE_BETA"] == nil && conf["BB_UPDATE_SKIP"] == nil && conf["BB_CHECK_UPDATES"] == nil, "defaults leave no key (not asked yet)")
     check(LaunchConfig(ini: IniFile(text: "BB_CHECK_UPDATES=1\n")).checkUpdates == true, "agreed")
     check(LaunchConfig(ini: IniFile(text: "BB_UPDATE_ONLINE_BETA=0\n")).onlineBeta == false, "left the beta: remembered")
+    var withBackups = LaunchConfig()
+    withBackups.backupDir = URL(fileURLWithPath: "/Volumes/Backup/Bloodborne saves")
+    var backupConf = IniFile(text: "")
+    withBackups.apply(to: &backupConf)
+    check(LaunchConfig(ini: backupConf).backupDir?.path == "/Volumes/Backup/Bloodborne saves"
+          && LaunchConfig(ini: backupConf).extraEnvironment["BB_BACKUP_DIR"] == nil, "backup folder round trip, not passed to the game")
 }
 
 // High-resolution ultrawide selection on memory-constrained Macs.
