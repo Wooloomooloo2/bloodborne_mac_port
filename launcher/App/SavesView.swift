@@ -49,12 +49,13 @@ struct SavesView: View {
                         Text(message).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     }
                     Table(model.saveBackups, selection: $selection) {
-                        TableColumn("Date") { Text($0.date.map { $0.formatted(date: .abbreviated, time: .shortened) } ?? $0.name) }
-                            .width(min: 120, ideal: 140)
-                        TableColumn("Why") { Text($0.reason.label) }
-                            .width(min: 140, ideal: 170)
-                        TableColumn("Version") { Text($0.info?.version ?? "") }
-                            .width(min: 60, ideal: 90)
+                        TableColumn("Date") { Text($0.date.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? $0.name) }
+                            .width(min: 100, ideal: 110)
+                        TableColumn("Time") { Text($0.date.map { $0.formatted(date: .omitted, time: .standard) } ?? "") }
+                            .width(min: 90, ideal: 100)
+                        // (Room for long versions: 0.7.0-beta12, 0.5.16-4-g0b26f7e.)
+                        TableColumn("Version") { Text($0.info?.version ?? "").help($0.reason.label) }
+                            .width(min: 140, ideal: 180)
                     }
                     .frame(minHeight: 220)
                     HStack {
