@@ -205,7 +205,16 @@ struct Info : InfoPersistent {
 
     template <typename T>
     inline T ReadUdSharp(u32 sharp_idx) const noexcept {
-        return *reinterpret_cast<const T*>(&FlatUserData()[sharp_idx]);
+        const auto flat = FlatUserData();
+        const size_t offset = size_t{sharp_idx} * sizeof(u32);
+        T data{};
+        if (offset <= flat.size_bytes() && sizeof(T) <= flat.size_bytes() - offset) {
+            // A descriptor is DWORD aligned, which need not satisfy T's host
+            // alignment. Check the complete descriptor in the selected draw
+            // snapshot before copying; a partial descriptor stays entirely zero.
+            std::memcpy(&data, flat.data() + sharp_idx, sizeof(data));
+        }
+        return data;
     }
 
     /// bbport: table pointers below this read as zeros, as the GPU's faulting reads do. The

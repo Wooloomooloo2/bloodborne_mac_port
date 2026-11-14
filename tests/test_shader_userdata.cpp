@@ -102,6 +102,33 @@ int main() {
     descriptor.dst_sel_y = 5;
     descriptor.dst_sel_z = 6;
     descriptor.dst_sel_w = 7;
+    // Flattened descriptors obey the selected draw snapshot's extent, including
+    // a complete read at its final DWORD and unaligned typed host addresses.
+    info.flattened_ud_buf.assign(9, 0xa5a5a5a5);
+    std::memcpy(info.flattened_ud_buf.data() + 1, &descriptor, sizeof(descriptor));
+    std::memcpy(info.flattened_ud_buf.data() + 5, &descriptor, sizeof(descriptor));
+    assert(info.ReadUdSharp<AmdGpu::Buffer>(1) == descriptor);
+    assert(info.ReadUdSharp<AmdGpu::Buffer>(5) == descriptor);
+    ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(6));
+    ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(9));
+    ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(std::numeric_limits<u32>::max()));
+    info.flattened_ud_buf.clear();
+    ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(0));
+    // Image descriptors are twice as wide as buffer/sampler descriptors.
+    // Admission uses the complete requested type, including its final DWORD.
+    const auto check_width = [&]<typename T>() {
+        info.flattened_ud_buf.assign(sizeof(T) / sizeof(u32) + 1, 0x12345678);
+        T expected{};
+        std::memcpy(&expected, info.flattened_ud_buf.data() + 1, sizeof(T));
+        const auto full = info.ReadUdSharp<T>(1);
+        assert(std::memcmp(&full, &expected, sizeof(T)) == 0);
+        info.flattened_ud_buf.pop_back();
+        const auto short_read = info.ReadUdSharp<T>(1);
+        const T zero{};
+        assert(std::memcmp(&short_read, &zero, sizeof(T)) == 0);
+    };
+    check_width.operator()<AmdGpu::Image>();
+    check_width.operator()<AmdGpu::Sampler>();
     alignas(8) std::array<u32, 8> table{};
     std::memcpy(table.data(), &descriptor, sizeof(descriptor));
     SetPointer(ud, 2, table.data());
@@ -133,6 +160,21 @@ int main() {
     auto* pages = static_cast<u8*>(mmap(nullptr, page_size * 2, PROT_READ | PROT_WRITE,
                                       MAP_ANON | MAP_PRIVATE, -1, 0));
     assert(pages != MAP_FAILED);
+    assert(mprotect(pages + page_size, page_size, PROT_NONE) == 0);
+    // A truncated snapshot ends immediately before an inaccessible page. The
+    // bounds rejection must avoid entering fault recovery, on either thread.
+    auto* flat_tail = reinterpret_cast<u32*>(pages + page_size - sizeof(descriptor));
+    std::memcpy(flat_tail, &descriptor, sizeof(descriptor));
+    Shader::Info::ud_snapshots[0] = {&info, ud.data(), static_cast<u32>(ud.size()),
+                                    flat_tail, sizeof(descriptor) / sizeof(u32), 0};
+    Shader::Info::num_ud_snapshots = 1;
+    assert(info.ReadUdSharp<AmdGpu::Buffer>(0) == descriptor);
+    const auto flat_faults = faults;
+    ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(1));
+    Shader::Info::ud_snapshots[0].flat_size = 3;
+    assert(PreparedRead([&] { ExpectZero(info.ReadUdSharp<AmdGpu::Buffer>(0)); }));
+    assert(faults == flat_faults);
+    Shader::Info::num_ud_snapshots = 0;
     std::memset(pages, 0xa5, page_size);
     assert(mprotect(pages + page_size, page_size, PROT_NONE) == 0);
     // A stale non-null pointer, and a descriptor straddling a readable page and a hole.
