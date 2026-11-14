@@ -6,6 +6,7 @@
  * Every entry here is an explicit contract; unknown functions still stop. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "runtime_trophy.h"
 #include "gpu/bbgpu.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -277,7 +278,7 @@ static ABI int32_t ime_result(uint32_t *result) {
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
 
-/* ---- Trophies: accepted locally, recorded in the log ---- */
+/* ---- Local achievements; catalog/log shared with the launcher ---- */
 static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
     (void)user; (void)label; (void)options;
     if (!ctx) return TROPHY_INVALID;
@@ -287,19 +288,63 @@ static ABI int32_t trophy_handle(int32_t *handle) { if (!handle) return TROPHY_I
 static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { (void)ctx; (void)handle; (void)options; return 0; }
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
-    printf("Runtime: trophy %d unlocked\n",id);
-    if (platinum) *platinum=-1;
-    return 0;
+    return runtime_trophy_unlock(id,platinum);
 }
-static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {
+static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,RuntimeTrophyGameDetails *details,RuntimeTrophyGameData *data) {
     (void)ctx; (void)handle;
-    if (details) { uint64_t size; memcpy(&size,details,8); memset((char *)details+8,0,size>8 && size<4096 ? size-8 : 0); }
-    if (data) { uint64_t size; memcpy(&size,data,8); memset((char *)data+8,0,size>8 && size<4096 ? size-8 : 0); }
+    if ((!details && !data) || (details && details->size<sizeof(*details)) || (data && data->size<sizeof(*data))) return TROPHY_INVALID;
+    RuntimeTrophySnapshot snapshot; runtime_trophy_snapshot(&snapshot);
+    const RuntimeTrophy *catalog=runtime_trophy_catalog(NULL);
+    if (details) {
+        memset(details,0,sizeof(*details)); details->size=sizeof(*details); details->groups=1; details->total=BB_TROPHY_COUNT;
+        strcpy(details->title,"Bloodborne"); strcpy(details->description,"Trophies earned during the hunt.");
+        for (int i=0;i<BB_TROPHY_COUNT;++i) {
+            if (catalog[i].grade==1) ++details->platinum;
+            if (catalog[i].grade==2) ++details->gold;
+            if (catalog[i].grade==3) ++details->silver;
+            if (catalog[i].grade==4) ++details->bronze;
+        }
+    }
+    if (data) {
+        memset(data,0,sizeof(*data)); data->size=sizeof(*data);
+        for (int i=0;i<BB_TROPHY_COUNT;++i) if (snapshot.unlocked[i]) {
+            ++data->total;
+            if (catalog[i].grade==1) ++data->platinum;
+            if (catalog[i].grade==2) ++data->gold;
+            if (catalog[i].grade==3) ++data->silver;
+            if (catalog[i].grade==4) ++data->bronze;
+        }
+        data->progress=data->total*100/BB_TROPHY_COUNT;
+    }
     return 0;
 }
-static ABI int32_t trophy_info(int32_t ctx,int32_t handle,int32_t id,void *details,void *data) {
-    (void)id; return trophy_game_info(ctx,handle,details,data);
+static ABI int32_t trophy_info(int32_t ctx,int32_t handle,int32_t id,RuntimeTrophyDetails *details,RuntimeTrophyData *data) {
+    (void)ctx; (void)handle;
+    if (id<0 || id>=BB_TROPHY_COUNT) return (int32_t)0x8055160a;
+    if ((!details && !data) || (details && details->size<sizeof(*details)) || (data && data->size<sizeof(*data))) return TROPHY_INVALID;
+    const RuntimeTrophy *t=runtime_trophy_catalog(NULL)+id;
+    if (details) {
+        memset(details,0,sizeof(*details)); details->size=sizeof(*details);
+        details->trophy_id=id; details->grade=t->grade; details->group_id=t->group ? 1 : -1;
+        snprintf(details->name,sizeof(details->name),"%s",t->name);
+        snprintf(details->description,sizeof(details->description),"%s",t->description);
+    }
+    if (data) {
+        RuntimeTrophySnapshot snapshot; runtime_trophy_snapshot(&snapshot);
+        memset(data,0,sizeof(*data)); data->size=sizeof(*data); data->trophy_id=id;
+        data->unlocked=snapshot.unlocked[id]!=0;
+        if (data->unlocked) data->timestamp=UINT64_C(0xdcbffeff2bc000)+(uint64_t)snapshot.unlocked[id]*1000000;
+    }
+    return 0;
 }
+static ABI int32_t trophy_unlock_state(int32_t ctx,int32_t handle,uint32_t *flags,uint32_t *count) {
+    (void)ctx; (void)handle;
+    if (!flags || !count) return TROPHY_INVALID;
+    RuntimeTrophySnapshot snapshot; runtime_trophy_snapshot(&snapshot); memset(flags,0,16); *count=0;
+    for (int i=0;i<BB_TROPHY_COUNT;++i) if (snapshot.unlocked[i]) { flags[i/32]|=1u<<(i%32); ++*count; }
+    return 0;
+}
+static ABI int32_t trophy_destroy(int32_t id) { (void)id; return 0; }
 
 /* ---- PlayGo: fully installed package ---- */
 static int playgo_handle, playgo_chunks=-1;
@@ -469,6 +514,8 @@ static const RuntimeExport exports[]={
     {"sceImeDialogTerm",ime_term}, {"sceImeDialogAbort",ime_term},
     {"sceNpTrophyCreateContext",trophy_context}, {"sceNpTrophyCreateHandle",trophy_handle},
     {"sceNpTrophyRegisterContext",trophy_register}, {"sceNpTrophyUnlockTrophy",trophy_unlock},
+    {"sceNpTrophyGetTrophyUnlockState",trophy_unlock_state},
+    {"sceNpTrophyDestroyContext",trophy_destroy}, {"sceNpTrophyDestroyHandle",trophy_destroy},
     {"sceNpTrophyGetGameInfo",trophy_game_info}, {"sceNpTrophyGetTrophyInfo",trophy_info},
     {"scePlayGoInitialize",playgo_init}, {"scePlayGoOpen",playgo_open}, {"scePlayGoGetChunkId",playgo_chunk_ids},
     {"scePlayGoGetLocus",playgo_locus}, {"scePlayGoSetInstallSpeed",playgo_speed},
