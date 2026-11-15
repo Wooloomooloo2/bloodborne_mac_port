@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #ifdef __APPLE__
 #include "host/bbgpu_shared.h"
+#include "runtime_text_input.h"
 #endif
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -179,6 +180,10 @@ static void sample_devices(PadData *d) {
      * shortcuts (Cmd+Q, Cmd+, ...), not game input: Cmd+Q drank a Blood Vial. What each key and
      * mouse button does comes from bbport.ini bind_ keys (runtime_bindings.c). */
     if (k && (k[SDL_SCANCODE_LGUI] || k[SDL_SCANCODE_RGUI])) k=NULL;
+    /* While a text box is open the keys are typed into it, and the key that closed it stays out
+     * of the pad until released (runtime_text_input.h: the confirming Enter reopened the field). */
+    static int text_latch;
+    if (k && text_input_blocks_keys(runtime_text_input_open(),k,SDL_SCANCODE_COUNT,&text_latch)) k=NULL;
     const uint32_t mouse=mouse_inputs();
     if (!k && !mouse) return;
     const uint64_t held=runtime_bindings_held(k,mouse);
