@@ -139,6 +139,8 @@ if [[ ${1:-} == --test ]]; then
         out/gpu/bbnet-codec-test
         out/gpu/bbnet-session-test
     fi
+    "$CC" "${cflags[@]}" -Isrc tests/test_text_input.c -o out/text-input-test
+    out/text-input-test
     /usr/bin/clang++ -std=c++20 -O1 -Wall -Wextra -Igpu/shim tests/test_settings_keep.cpp \
         gpu/shim/bbport_settings.cpp -o out/settings-keep-test
     out/settings-keep-test

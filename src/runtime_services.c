@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <arpa/inet.h>
+#include "runtime_text_input.h"
 
 #define USER_ID 1
 #define ORBIS_OK 0
@@ -230,14 +231,18 @@ static void utf8_to_utf16(const char *in, uint16_t *out, uint32_t max) {
     }
     out[n<max ? n : max]=0;
 }
-static void ime_complete(int end_status, const char *text) {
-    /* Confirmed: exactly the typed text (an empty entry clears the field). Cancelled: the game's
-     * buffer is left as it was. No made-up defaults: a password field must get what was typed. */
-    if (!end_status && ime.buffer && ime.max_length) utf8_to_utf16(text ? text : "",ime.buffer,ime.max_length);
+static void ime_complete(int end_status, const char *typed) {
+    /* Confirmed: the typed text without spaces around it (text_input_trim; an empty entry clears
+     * the field). Cancelled: the game's buffer is left as it was. No made-up defaults: a password
+     * field must get what was typed. */
+    char text[512];
+    snprintf(text,sizeof(text),"%s",typed ? typed : "");
+    text_input_trim(text);
+    if (!end_status && ime.buffer && ime.max_length) utf8_to_utf16(text,ime.buffer,ime.max_length);
     ime.end_status=end_status; ime.finished=1; ime.running=0;
     if (end_status) printf("Runtime: ImeDialog cancelled\n");
-    else if (ime.password) printf("Runtime: ImeDialog text: (password, %zu bytes)\n",text ? strlen(text) : 0);
-    else printf("Runtime: ImeDialog text: %s\n",text ? text : "");
+    else if (ime.password) printf("Runtime: ImeDialog text: (password, %zu bytes)\n",strlen(text));
+    else printf("Runtime: ImeDialog text: %s\n",text);
 }
 static ABI int32_t ime_init(const ImeParam *param, const void *extended) {
     (void)extended;
@@ -276,6 +281,7 @@ static ABI int32_t ime_result(uint32_t *result) {
     return 0;
 }
 static ABI int32_t ime_term(void) { memset(&ime,0,sizeof(ime)); return 0; }
+int runtime_text_input_open(void) { return ime.running; }
 
 /* ---- Trophies: accepted locally, recorded in the log ---- */
 static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
