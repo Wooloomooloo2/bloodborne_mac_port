@@ -612,13 +612,19 @@ static void apply_patches(const char *path, Segment *segments, uint64_t ns, cons
     printf("Patches: %" PRIu64 " writes, %" PRIu64 " bytes applied, %" PRIu64 " pointers rebased\n",count,bytes,rebased);
 }
 /* Restarts the game through run.sh (the settings menu: a new render resolution is a patch
- * applied at start). Descriptors are closed first so the old GPU device and its memory are
- * released before the new process opens its own. */
+ * applied at start). Descriptors end with the exec so the old GPU device and its memory are
+ * released before the new process opens its own. On macOS they are marked close-on-exec, not
+ * closed: system frameworks keep guarded descriptors (Network.framework's NECP clients, opened
+ * by the online module), and closing one makes the kernel kill the process (#149: "Killed: 9"
+ * instead of a restart). Guarded descriptors are close-on-exec already. */
 void runtime_restart(void) {
     fflush(NULL);
     puts("Runtime: restarting through run.sh");
 #ifdef __APPLE__
-    for (int fd=3, end=getdtablesize(); fd<end; ++fd) close(fd);
+    for (int fd=3, end=getdtablesize(); fd<end; ++fd) {
+        int flags=fcntl(fd,F_GETFD);
+        if (flags>=0 && !(flags&FD_CLOEXEC)) fcntl(fd,F_SETFD,flags|FD_CLOEXEC);
+    }
 #else
     syscall(SYS_close_range, 3u, ~0u, 0u);
 #endif
