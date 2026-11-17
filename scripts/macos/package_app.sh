@@ -63,8 +63,16 @@ universal() { # name x86_64-file arm64-file
     lipo -create "$2" "$3" -output "$contents/Frameworks/$1"
     chmod 755 "$contents/Frameworks/$1"
 }
-universal libbbgpu.dylib out/gpu/libbbgpu.dylib out/gpu-arm64/libbbgpu.dylib
-set_rpath "$contents/Frameworks/libbbgpu.dylib" @loader_path
+# Each slice names its own deps/<arch>/lib, and install_name_tool cannot delete an rpath
+# that one slice of a universal file lacks: set them on the single-architecture files (#158).
+thin=$(mktemp -d)
+trap 'rm -rf "$thin"' EXIT
+for arch in x86_64 arm64; do
+    src=out/gpu-arm64/libbbgpu.dylib; [[ $arch == x86_64 ]] && src=out/gpu/libbbgpu.dylib
+    cp "$src" "$thin/libbbgpu-$arch.dylib"
+    set_rpath "$thin/libbbgpu-$arch.dylib" @loader_path
+done
+universal libbbgpu.dylib "$thin/libbbgpu-x86_64.dylib" "$thin/libbbgpu-arm64.dylib"
 for lib in libSDL3.0 libavformat.61 libavcodec.61 libswscale.8 libswresample.5 libavutil.59; do
     universal "$lib.dylib" "deps/x86_64/lib/$lib.dylib" "deps/arm64/lib/$lib.dylib"
 done
@@ -78,6 +86,9 @@ for file in "$contents"/MacOS/* "$contents"/Frameworks/*; do
         done < <(otool -arch "$arch" -L "$file" | awk 'NR > 1 && $1 ~ /^@rpath\// { print $1 }')
         if otool -arch "$arch" -L "$file" | awk 'NR > 1 { print $1 }' | grep -vE '^(@rpath/|/System/|/usr/lib/)'; then
             echo "$file ($arch) links a library outside the bundle and the system" >&2; exit 1
+        fi
+        if otool -arch "$arch" -l "$file" | awk '/cmd LC_RPATH/ { getline; getline; print $2 }' | grep -v '^@'; then
+            echo "$file ($arch) searches a folder outside the bundle (rpath above)" >&2; exit 1
         fi
         if nm -u -arch "$arch" "$file" 2>/dev/null | grep -q '^_vk'; then
             echo "$file ($arch) imports Vulkan functions" >&2; exit 1
