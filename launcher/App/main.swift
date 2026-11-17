@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var window: NSWindow?
     private var direct = false
     private var quitAfterStop = false
+    private let gameFocus = GameFocus()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let layout = Layout.detect(bundleURL: Bundle.main.bundleURL,
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         model.onStarted = { [weak self] in
             ModsWindow.hide()
             guard let self else { return }
+            self.gameFocus.start()
             if self.direct {
                 // Respect direct launch: only the game's window has a Dock icon.
                 self.window?.orderOut(nil)
@@ -61,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func gameEnded(_ status: Int32) {
+        gameFocus.stop()
         if quitAfterStop {
             NSApp.reply(toApplicationShouldTerminate: true)
             return
