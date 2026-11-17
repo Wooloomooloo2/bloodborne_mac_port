@@ -274,8 +274,7 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
   not yet played with it. **Next:** mouse speed retune (calibrate turn rate per stick value with
   `BB_PAD_FILE rx=`, needs ~5 min on the Mac), then a ≤1-day direct-camera spike. The in-game
   hint names the game's "Camera speed" option: unverified that Bloodborne has it.
-- **Preferred display (#60):** local branch `preferred-display` (8548d64, launcher Display picker,
-  `BB_DISPLAY` UUID → SDL display), tested full screen on the built-in display; not merged/pushed.
+- **Preferred display (#60):** shipped in 0.5.10 (f85b3c7); checked on an external display 2026-11-17.
 - **PRs:** #64 (frame gen, evill33t): works at 120 Hz/ProMotion, real FPS drops to 40 at 144/160 Hz
   (PresentDuration on fixed-rate displays); launcher switch added (6a1149c); needs a temporal
   upscaler, so not in 16:10 (user wants MetalFX on 16:10: experiment proposed, not approved).
@@ -287,6 +286,18 @@ the live path (the startup patch breaks geometry there). Check screenshots when 
 - Launcher test runs: open with `--env BB_FRAME_STATS=1`, or the scratch watchdog (waits for
   "Frame stats" lines) never arms. Worktree `../bb-fg` (branches test-90/test-fg/test-master)
   is scratch. `gpu/third_party/fsr-vulkan` shows a submodule change that isn't ours: don't commit.
+
+## State as of 2026-11-17 (mac-v0.5.17)
+
+- **0.5.17:** #157 (`bind_pad_touch_right`, DualSense click waits up to 150 ms for its finger),
+  #158 (rpaths set per slice before lipo; packaging refuses absolute rpaths), #149 (Restart marks
+  descriptors close-on-exec: closing a guarded NECP fd SIGKILLs the process), game window focus
+  (launcher `GameFocus.swift` yields/activates the GPU host; the host re-activates after a
+  full-screen/display move in its first 30 s, Steam took the front on the external display) and
+  the idle cursor (`NSCursor setHiddenUntilMouseMoves`). FINDINGS 2026-11-17.
+- Worktrees cleaned 2026-11-17: only bb-norosetta, bb-pe, bb-review78, bb-0517 remain.
+- A checkout app's run.sh rebuilds changed sources on launch and on Restart: don't leave edits in
+  a worktree the user plays from, and never build there while the game runs.
 
 ## Next steps (in order)
 
