@@ -279,7 +279,27 @@ int main(void) {
     assert(SDL_SetJoystickVirtualTouchpad(joystick,0,1,false,0,0,0));
     SDL_UpdateJoysticks();
     SDL_UpdateGamepads();
-    assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==480);
+    /* The click before its finger (a DualSense): no press until the finger says which side... */
+    assert(pad_read_state(1,&data)==0 && !(data.buttons & BTN_TOUCHPAD) && data.touch_count==0);
+    assert(SDL_SetJoystickVirtualTouchpad(joystick,0,0,true,0.8f,0.5f,1.0f));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_TOUCHPAD) && data.touch_count==1 && data.touches[0].x==1535);
+    /* ...and a click whose finger never comes is the left side, after the wait. */
+    assert(SDL_SetJoystickVirtualTouchpad(joystick,0,0,false,0,0,0));
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,false));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && data.buttons==0);
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,true));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && !(data.buttons & BTN_TOUCHPAD));
+    usleep(TOUCH_FINGER_WAIT_US+20000);
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_TOUCHPAD) && data.touch_count==1 && data.touches[0].x==480);
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,false));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
     test_controller_remap(joystick);
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);

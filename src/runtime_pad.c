@@ -76,6 +76,8 @@ static uint8_t trigger(int16_t v) { int x=v>>7; return (uint8_t)(x<0 ? 0 : x>255
 static uint16_t touch_axis(float v, int max) {
     return (uint16_t)(v<=0.0f ? 0 : v>=1.0f ? max : (int)(v*max+0.5f));
 }
+/* How long a touchpad click waits for its finger's position (sample_devices). */
+#define TOUCH_FINGER_WAIT_US 150000u
 static void touch_click(PadData *d, int right) {
     d->buttons|=BTN_TOUCHPAD;
     d->touch_count=1;
@@ -179,9 +181,19 @@ static void sample_devices(PadData *d) {
             }
         }
         // Back/Select on pads without a touch surface is a left-side click (Gestures); Touch
-        // Right's buttons a right-side one (Personal Effects). A finger on the pad wins.
+        // Right's buttons a right-side one (Personal Effects). A finger on the pad wins. A
+        // DualSense/DualShock click often comes a few reads before its finger: it waits for the
+        // finger (up to TOUCH_FINGER_WAIT_US) instead of being a left-side click, which opened
+        // Gestures from the right side unless the finger happened to be reported first.
+        static uint64_t touch_wait;
+        const int pad_click=((held>>PAD_TOUCHPAD)&1) && SDL_GetNumGamepadTouchpads(g)>0;
+        if (!pad_click || d->touch_count) touch_wait=0;
         if (touch_right && !d->touch_count) touch_click(d,1);
-        else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
+        else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) {
+            if (pad_click && !touch_wait) touch_wait=d->timestamp;
+            if (pad_click && d->timestamp-touch_wait<TOUCH_FINGER_WAIT_US) d->buttons&=~BTN_TOUCHPAD;
+            else touch_click(d,0);
+        }
     }
     /* The keyboard works beside a controller: its buttons add to the pad's, and the movement /
      * camera keys take over a stick only while held (with a controller connected the keyboard used
