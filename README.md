@@ -19,9 +19,9 @@ process.
 [watch it on YouTube](https://www.youtube.com/watch?v=_QgmfFyZbYo). Thank you, Andrew, for
 taking the time to make it!
 
-## Status (2026-11-14)
+## Status (2026-11-17)
 
-**Current version: [mac-v0.5.16](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.16)** (download the app, or build it as below).
+**Current version: [mac-v0.5.17](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.5.17)** (download the app, or build it as below).
 **Online play beta: [0.7.0 beta 2](https://github.com/Wooloomooloo2/bloodborne_mac_port/releases/tag/mac-v0.7.0-beta2)**, installed as a second app next to the regular one (in 0.5.16: **Join the Beta…** on the launcher's General page).
 
 **Work in progress, playable.** On an Apple M4 Max the game boots, character creation works,
@@ -41,7 +41,24 @@ The opening-movie freeze and crash are fixed in 0.5.8, the slowdowns on 16-18 GB
 in 0.5.9, 0.5.10 adds rebindable controls, 0.5.11 fixes 5120×2160 and a crash after long
 sessions, 0.5.12 fixes that crash's follow-up, 0.5.13 adds Mac Settings to the game's own
 menu, 0.5.14 fixes the freeze after 1.5 to 2 hours of play, 0.5.15 makes controller buttons
-remappable, and 0.5.16 adds save backups, the online play beta and MetalFX Spatial.
+remappable, 0.5.16 adds save backups, the online play beta and MetalFX Spatial, and 0.5.17
+opens Personal Effects from any controller and gives the game window the focus at launch.
+
+### New in 0.5.17: Personal Effects on any controller, focus and cursor fixes
+
+- **Personal Effects from any controller** (#157). Controllers without a touchpad (Xbox, 8BitDo...)
+  could only open Gestures, the touchpad's left side. **Controls > Controller > Controller
+  Buttons…** now has a **Personal effects (touchpad right)** row: bind a paddle or spare button to
+  it. Nothing changes until you set it.
+- **DualSense touchpad: the right side opens Personal Effects reliably.** Over Bluetooth the click
+  often arrived before the finger's position and counted as the left side (Gestures).
+- **The game window gets the focus at launch**, also full screen on an external display with
+  another app (Steam, for example) open there, so keys reach the game without a click first.
+- **The mouse cursor hides while you play with a controller.** It stayed on screen until the menu
+  was opened; it now hides 3 s after the mouse stops, and comes back when you move it.
+- **Restart in Mac Settings works in the online play beta** (#149): it ended the game instead.
+- **Release apps no longer refer to the build machine's folders** (#158), which macOS's
+  distribution check reported as an error.
 
 ### New in 0.5.16: save backups, the online play beta, MetalFX Spatial
 
