@@ -110,8 +110,9 @@ static uint8_t key_axis(int negative, int positive, int reach) {
 }
 /* The controller's buttons (bit per PAD_* button) and triggers as the game sees them, after
  * bbport.ini bind_pad_ keys (runtime_bindings.c). A trigger counts as pressed past 30 and keeps
- * its analog value when it is bound to L2/R2; any other button bound there presses it fully. */
-static void remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
+ * its analog value when it is bound to L2/R2; any other button bound there presses it fully.
+ * Returns whether a button bound to Touch Right (the touchpad's right side) is held. */
+static int remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
     static const uint32_t ps[PAD_COUNT]={
         [PAD_CROSS]=BTN_CROSS, [PAD_CIRCLE]=BTN_CIRCLE, [PAD_SQUARE]=BTN_SQUARE, [PAD_TRIANGLE]=BTN_TRIANGLE,
         [PAD_L1]=BTN_L1, [PAD_R1]=BTN_R1, [PAD_L2]=BTN_L2, [PAD_R2]=BTN_R2, [PAD_L3]=BTN_L3, [PAD_R3]=BTN_R3,
@@ -130,6 +131,12 @@ static void remap_buttons(PadData *d, uint32_t held, uint8_t l2, uint8_t r2) {
             if ((held>>b)&1) d->buttons|=ps[input];
         }
     }
+    int right=0;
+    for (int slot=0;slot<BIND_SLOTS;++slot) {
+        const int b=runtime_bindings_pad(PAD_TOUCH_RIGHT,slot);
+        if (b>=0 && ((held>>b)&1 || (b==PAD_L2 && l2>30) || (b==PAD_R2 && r2>30))) right=1;
+    }
+    return right;
 }
 static void sample_devices(PadData *d) {
     memset(d,0,sizeof(*d));
@@ -158,8 +165,8 @@ static void sample_devices(PadData *d) {
         for (size_t i=0;i<sizeof(map)/sizeof(*map);++i) if (SDL_GetGamepadButton(g,map[i].sdl)) held|=1u<<map[i].pad;
         d->left_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX)); d->left_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY));
         d->right_x=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTX)); d->right_y=axis(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHTY));
-        remap_buttons(d,held,trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)),
-                      trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)));
+        const int touch_right=remap_buttons(d,held,trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFT_TRIGGER)),
+                                            trigger(SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_RIGHT_TRIGGER)));
         if (SDL_GetNumGamepadTouchpads(g)>0) {
             const int fingers=SDL_GetNumGamepadTouchpadFingers(g,0);
             for (int finger=0;finger<fingers && d->touch_count<2;++finger) {
@@ -171,8 +178,10 @@ static void sample_devices(PadData *d) {
                 }
             }
         }
-        // Back/Select on pads without a touch surface is a left-side click.
-        if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
+        // Back/Select on pads without a touch surface is a left-side click (Gestures); Touch
+        // Right's buttons a right-side one (Personal Effects). A finger on the pad wins.
+        if (touch_right && !d->touch_count) touch_click(d,1);
+        else if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
     }
     /* The keyboard works beside a controller: its buttons add to the pad's, and the movement /
      * camera keys take over a stick only while held (with a controller connected the keyboard used

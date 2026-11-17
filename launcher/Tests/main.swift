@@ -211,7 +211,8 @@ do {
     let padSquare = PadBindings.actions.first { $0.key == "bind_pad_square" }!
     let padUp = PadBindings.actions.first { $0.key == "bind_pad_dpad_up" }!
     let padTouch = PadBindings.actions.first { $0.key == "bind_pad_touchpad" }!
-    check(defaults.padBindings.isDefault && !untouched.text.contains("bind_pad_") && defaults.padBindings[padTouch] == ["Touchpad", "Select"], "controller defaults write nothing")
+    let padTouchRight = PadBindings.actions.first { $0.key == "bind_pad_touch_right" }!
+    check(defaults.padBindings.isDefault && !untouched.text.contains("bind_pad_") && defaults.padBindings[padTouch] == ["Touchpad", "Select"] && defaults.padBindings[padTouchRight] == [], "controller defaults write nothing")
     let swapped = GameSettings(ini: IniFile(text: "bind_pad_cross= circle , paddle 1\nbind_pad_circle=Cross\nbind_pad_dpad_up=\nbind_pad_square=Bogus,Square\n"))
     check(swapped.padBindings[padCross] == ["Circle", "Paddle 1"] && swapped.padBindings[padUp] == [] && swapped.padBindings[padSquare] == ["Square"], "controller names read; unknown dropped")
     var shared = swapped.padBindings
@@ -227,6 +228,11 @@ do {
     padFile = IniFile(text: "bind_pad_cross=Circle\n")
     padBack.apply(to: &padFile)
     check(padFile["bind_pad_cross"] == nil && padFile["bind_pad_circle"] == nil, "back to the default removes the key")
+    var effects = PadBindings()
+    effects.set(padTouchRight, slot: 0, to: "Misc")
+    padFile = IniFile(text: "")
+    effects.apply(to: &padFile)
+    check(padFile["bind_pad_touch_right"] == "Misc" && GameSettings(ini: padFile).padBindings[padTouchRight] == ["Misc"], "Personal effects bound to a button and read back")
 }
 
 // Shell quoting and launch.conf (review focus 1: spaces, quotes; bash must source it).

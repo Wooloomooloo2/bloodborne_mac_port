@@ -46,7 +46,7 @@ static const char *const pad_names[PAD_BUTTON_COUNT]={
     [PAD_MISC]="Misc",
 };
 /* Each button presses its own input, as before controller bindings (0.5.14). */
-static const struct { const char *key, *defaults; } pad_inputs[PAD_COUNT]={
+static const struct { const char *key, *defaults; } pad_inputs[PAD_INPUT_COUNT]={
     [PAD_CROSS]={"bind_pad_cross","Cross"}, [PAD_CIRCLE]={"bind_pad_circle","Circle"},
     [PAD_SQUARE]={"bind_pad_square","Square"}, [PAD_TRIANGLE]={"bind_pad_triangle","Triangle"},
     [PAD_L1]={"bind_pad_l1","L1"}, [PAD_R1]={"bind_pad_r1","R1"}, [PAD_L2]={"bind_pad_l2","L2"},
@@ -54,10 +54,11 @@ static const struct { const char *key, *defaults; } pad_inputs[PAD_COUNT]={
     [PAD_OPTIONS]={"bind_pad_options","Options"}, [PAD_TOUCHPAD]={"bind_pad_touchpad","Touchpad,Select"},
     [PAD_UP]={"bind_pad_dpad_up","D-pad Up"}, [PAD_DOWN]={"bind_pad_dpad_down","D-pad Down"},
     [PAD_LEFT]={"bind_pad_dpad_left","D-pad Left"}, [PAD_RIGHT]={"bind_pad_dpad_right","D-pad Right"},
+    [PAD_TOUCH_RIGHT]={"bind_pad_touch_right",""},
 };
 
 static uint16_t bound[BIND_COUNT][BIND_SLOTS];
-static int8_t pad_bound[PAD_COUNT][BIND_SLOTS];
+static int8_t pad_bound[PAD_INPUT_COUNT][BIND_SLOTS];
 static bool camera_keys_dpad=true, use_wheel;
 static int loaded;
 
@@ -120,7 +121,7 @@ static void trim(char *s) {
 
 void runtime_bindings_load(const char *ini_path) {
     for (int a=0;a<BIND_COUNT;++a) parse_list(a,actions[a].defaults,0);
-    for (int i=0;i<PAD_COUNT;++i) parse_pad_list(i,pad_inputs[i].defaults,0);
+    for (int i=0;i<PAD_INPUT_COUNT;++i) if (PAD_IS_INPUT(i)) parse_pad_list(i,pad_inputs[i].defaults,0);
     camera_keys_dpad=true;
     loaded=1;
     FILE *f=ini_path ? fopen(ini_path,"r") : NULL;
@@ -133,8 +134,8 @@ void runtime_bindings_load(const char *ini_path) {
             char *key=line, *value=eq+1;
             trim(key); trim(value);
             if (!strcmp(key,"camera_keys_dpad")) { camera_keys_dpad=atoi(value)!=0; continue; }
-            for (int i=0;i<PAD_COUNT;++i) {
-                if (strcmp(key,pad_inputs[i].key)) continue;
+            for (int i=0;i<PAD_INPUT_COUNT;++i) {
+                if (!PAD_IS_INPUT(i) || strcmp(key,pad_inputs[i].key)) continue;
                 parse_pad_list(i,value,1);
                 printf("Runtime: %s=%s\n",key,value);
             }
@@ -176,10 +177,10 @@ bool runtime_bindings_camera_keys_dpad(void) { load_once(); return camera_keys_d
 bool runtime_bindings_use_wheel(void) { load_once(); return use_wheel; }
 int runtime_bindings_pad(int input, int slot) {
     load_once();
-    return input>=0 && input<PAD_COUNT && slot>=0 && slot<BIND_SLOTS ? pad_bound[input][slot] : -1;
+    return PAD_IS_INPUT(input) && slot>=0 && slot<BIND_SLOTS ? pad_bound[input][slot] : -1;
 }
-const char *runtime_bindings_pad_key(int input) { return input>=0 && input<PAD_COUNT ? pad_inputs[input].key : NULL; }
-const char *runtime_bindings_pad_default(int input) { return input>=0 && input<PAD_COUNT ? pad_inputs[input].defaults : NULL; }
+const char *runtime_bindings_pad_key(int input) { return PAD_IS_INPUT(input) ? pad_inputs[input].key : NULL; }
+const char *runtime_bindings_pad_default(int input) { return PAD_IS_INPUT(input) ? pad_inputs[input].defaults : NULL; }
 const char *runtime_bindings_pad_name(int button) { return button>=0 && button<PAD_BUTTON_COUNT ? pad_names[button] : NULL; }
 const char *runtime_bindings_key(int action) { return action>=0 && action<BIND_COUNT ? actions[action].key : NULL; }
 const char *runtime_bindings_default(int action) { return action>=0 && action<BIND_COUNT ? actions[action].defaults : NULL; }
