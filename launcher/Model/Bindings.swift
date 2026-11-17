@@ -47,7 +47,7 @@ struct Bindings: Equatable {
         BindAction(key: "bind_dpad_right", label: "Right (right-hand weapon)", group: "D-pad", defaults: ["L"]),
         BindAction(key: "bind_options", label: "Menu (Options)", group: "Menus", defaults: ["O", "F1"]),
         BindAction(key: "bind_touch_left", label: "Gestures (touchpad left)", group: "Menus", defaults: ["Tab"]),
-        BindAction(key: "bind_touch_right", label: "Touchpad right side", group: "Menus", defaults: ["Backspace"]),
+        BindAction(key: "bind_touch_right", label: "Personal effects (touchpad right)", group: "Menus", defaults: ["Backspace"]),
     ]
     static let groups = ["Movement", "Camera", "Combat", "Actions", "D-pad", "Menus"]
 
@@ -122,7 +122,7 @@ struct PadAction: Identifiable, Hashable {
 
 /// The controller bindings: bbport.ini bind_pad_<input>=Button,Button, buttons named by position
 /// as on a PlayStation pad, plus Select, the paddles and Misc. An absent key is the default (the
-/// button of the same name), an empty one unbinds.
+/// button of the same name; Personal effects has none), an empty one unbinds.
 struct PadBindings: Equatable {
     static let buttons = ["Cross", "Circle", "Square", "Triangle", "L1", "R1", "L2", "R2", "L3", "R3", "Options", "Touchpad", "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right", "Select", "Paddle 1", "Paddle 2", "Paddle 3", "Paddle 4", "Misc"]
 
@@ -142,7 +142,9 @@ struct PadBindings: Equatable {
         PadAction(key: "bind_pad_dpad_left", label: "D-pad left (left-hand weapon)", defaults: ["D-pad Left"]),
         PadAction(key: "bind_pad_dpad_right", label: "D-pad right (right-hand weapon)", defaults: ["D-pad Right"]),
         PadAction(key: "bind_pad_options", label: "Menu (Options)", defaults: ["Options"]),
-        PadAction(key: "bind_pad_touchpad", label: "Gestures (touchpad)", defaults: ["Touchpad", "Select"]),
+        PadAction(key: "bind_pad_touchpad", label: "Gestures (touchpad left)", defaults: ["Touchpad", "Select"]),
+        // No button of its own: pads without a touchpad bind one to reach Personal Effects.
+        PadAction(key: "bind_pad_touch_right", label: "Personal effects (touchpad right)", defaults: []),
     ]
 
     /// How a button is shown: its position on other pads where the name alone is unclear.
