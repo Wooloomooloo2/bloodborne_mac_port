@@ -12,6 +12,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_cursor.h"
 #include "bbport_mouse.h"
 #include "bbport_overlay.h"
 
@@ -271,6 +272,12 @@ bool WindowSDL::PollEvents() {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             UpdateVisible();
+            if (event.type == SDL_EVENT_WINDOW_ENTER_FULLSCREEN) {
+                BbCursor::ActivateAfterWindowMove("full screen");
+            }
+            break;
+        case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            BbCursor::ActivateAfterWindowMove("moved to another display");
             break;
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             // bbport: Cmd+W. W is "move forward", so pressing Cmd while running (to free the

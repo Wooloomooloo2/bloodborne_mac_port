@@ -179,12 +179,14 @@ if (APPLE)
     # bbport: one-frame Metal GPU capture (shim/bbport_gpu_capture.h).
     enable_language(OBJCXX)
     target_sources(bbgpu PRIVATE shim/bbport_gpu_capture.mm)
+    # Hiding a still cursor (shim/bbport_cursor.h, AppKit).
+    target_sources(bbgpu PRIVATE shim/bbport_cursor.mm)
     # MetalFX temporal upscaling on native textures (shim/bbport_metalfx.h), used by the upscaler.
     target_sources(bbgpu PRIVATE shim/bbport_metalfx.mm)
     # The settings overlay's Metal side and ImGui's Metal backend (both ARC).
     target_sources(bbgpu PRIVATE shim/bbport_overlay_metal.mm
                    third_party/imgui/backends/imgui_impl_metal.mm)
-    set_source_files_properties(shim/bbport_gpu_capture.mm shim/bbport_metalfx.mm
+    set_source_files_properties(shim/bbport_gpu_capture.mm shim/bbport_cursor.mm shim/bbport_metalfx.mm
                                 shim/bbport_overlay_metal.mm
                                 third_party/imgui/backends/imgui_impl_metal.mm
                                 PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -258,7 +260,7 @@ if (APPLE)
     list(REMOVE_ITEM METAL_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_object.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_buffer_barriers.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_compiled_shader.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_counters.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_device.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_draw_core.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_encoder.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_order.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_depth_stencil.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_present.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_render_pipeline.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_scale.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_specialize.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_texture.mm ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/mtl_timeline.cpp ${CMAKE_CURRENT_SOURCE_DIR}/shadps4/video_core/renderer_metal/vk_to_mtl.mm)
     target_sources(bbgpu PRIVATE ${METAL_SOURCES})
     target_link_libraries(bbgpu PRIVATE bbmetal_core "-framework Metal" "-framework QuartzCore"
-        "-framework CoreGraphics" "-framework ColorSync" "-framework ImageIO" "-framework Foundation")
+        "-framework CoreGraphics" "-framework ColorSync" "-framework ImageIO" "-framework Foundation" "-framework AppKit")
     foreach(source IN LISTS METAL_SOURCES)
         if (source MATCHES "\\.mm$")
             set_source_files_properties(${source} PROPERTIES COMPILE_OPTIONS

@@ -14,6 +14,7 @@ uint64_t bbgpu_bench_host_flips(void) { return 0; }
 void bbgpu_bench_set_phase(uint32_t phase, const char *error) { (void)phase; (void)error; }
 volatile int runtime_bench_map_opened;
 void runtime_mac_settings_pad(uint32_t *buttons) { (void)buttons; }
+int runtime_text_input_open(void) { return 0; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -150,8 +151,8 @@ static void test_launcher_tables(void) {
             assert(sscanf(k,"PadAction(key: \"%63[^\"]",key)==1);
             for (const char *p=d+11; *p && *p!=']'; ++p) if (*p!='"') strncat(list,(char[]){*p==' ' && p[-1]==',' ? 0 : *p,0},1);
             int found=0;
-            for (int i=0;i<PAD_COUNT;++i) {
-                if (strcmp(runtime_bindings_pad_key(i),key)) continue;
+            for (int i=0;i<PAD_INPUT_COUNT;++i) {
+                if (!PAD_IS_INPUT(i) || strcmp(runtime_bindings_pad_key(i),key)) continue;
                 found=1;
                 if (strcmp(runtime_bindings_pad_default(i),list)) { printf("Bindings.swift %s: %s, runtime_bindings.c: %s\n",key,list,runtime_bindings_pad_default(i)); assert(0); }
             }
@@ -171,7 +172,7 @@ static void test_launcher_tables(void) {
         }
     }
     fclose(f);
-    assert(pads==PAD_COUNT && buttons==PAD_BUTTON_COUNT);
+    assert(pads==PAD_COUNT+1 && buttons==PAD_BUTTON_COUNT); /* + Touch Right */
 }
 
 /* Controller bindings (bbport.ini bind_pad_): defaults as before, a swap, two buttons for one
@@ -200,7 +201,7 @@ static void test_controller_remap(SDL_Joystick *joystick) {
     assert(fd>=0);
     close(fd);
     write_file(path,"bind_pad_circle=cross\nbind_pad_cross = Circle , paddle 1\nbind_pad_r2=L1\nbind_pad_l1=\n"
-                    "bind_pad_dpad_up=\nbind_pad_square=Bogus,Square\nbind_pad_options=Misc\n");
+                    "bind_pad_dpad_up=\nbind_pad_square=Bogus,Square\nbind_pad_options=Misc\nbind_pad_touch_right=Paddle 2\n");
     runtime_bindings_load(path);
     assert(runtime_bindings_pad(PAD_CROSS,0)==PAD_CIRCLE && runtime_bindings_pad(PAD_CROSS,1)==PAD_PADDLE1 &&
            runtime_bindings_pad(PAD_CROSS,2)==-1 && runtime_bindings_pad(PAD_SQUARE,0)==PAD_SQUARE);
@@ -211,7 +212,11 @@ static void test_controller_remap(SDL_Joystick *joystick) {
     SET_PAD(20000,SDL_GAMEPAD_BUTTON_LEFT_STICK);
     assert(pad_read_state(1,&d)==0 && d.buttons==BTN_L3 && d.r2==0); /* R2 itself is unbound now */
     SET_PAD(-32768,SDL_GAMEPAD_BUTTON_BACK);
-    assert(pad_read_state(1,&d)==0 && (d.buttons & BTN_TOUCHPAD) && d.touch_count==1); /* Select: still the touchpad */
+    assert(pad_read_state(1,&d)==0 && (d.buttons & BTN_TOUCHPAD) && d.touch_count==1 && d.touches[0].x==480); /* Select: still Gestures */
+    /* Personal Effects (touchpad right) from a pad without a touchpad: a right-side click */
+    assert(runtime_bindings_pad(PAD_TOUCH_RIGHT,0)==PAD_PADDLE2 && runtime_bindings_pad(PAD_TOUCH_RIGHT,1)==-1);
+    SET_PAD(-32768,SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2);
+    assert(pad_read_state(1,&d)==0 && d.buttons==BTN_TOUCHPAD && d.touch_count==1 && d.touches[0].x==1440);
     unlink(path);
     runtime_bindings_load(NULL);
     SET_PAD(-32768,SDL_GAMEPAD_BUTTON_LEFT_STICK);
@@ -274,7 +279,27 @@ int main(void) {
     assert(SDL_SetJoystickVirtualTouchpad(joystick,0,1,false,0,0,0));
     SDL_UpdateJoysticks();
     SDL_UpdateGamepads();
-    assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==480);
+    /* The click before its finger (a DualSense): no press until the finger says which side... */
+    assert(pad_read_state(1,&data)==0 && !(data.buttons & BTN_TOUCHPAD) && data.touch_count==0);
+    assert(SDL_SetJoystickVirtualTouchpad(joystick,0,0,true,0.8f,0.5f,1.0f));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_TOUCHPAD) && data.touch_count==1 && data.touches[0].x==1535);
+    /* ...and a click whose finger never comes is the left side, after the wait. */
+    assert(SDL_SetJoystickVirtualTouchpad(joystick,0,0,false,0,0,0));
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,false));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && data.buttons==0);
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,true));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
+    assert(pad_read_state(1,&data)==0 && !(data.buttons & BTN_TOUCHPAD));
+    usleep(TOUCH_FINGER_WAIT_US+20000);
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_TOUCHPAD) && data.touch_count==1 && data.touches[0].x==480);
+    assert(SDL_SetJoystickVirtualButton(joystick,SDL_GAMEPAD_BUTTON_TOUCHPAD,false));
+    SDL_UpdateJoysticks();
+    SDL_UpdateGamepads();
     test_controller_remap(joystick);
     SDL_CloseJoystick(joystick);
     if (gamepad) SDL_CloseGamepad(gamepad);

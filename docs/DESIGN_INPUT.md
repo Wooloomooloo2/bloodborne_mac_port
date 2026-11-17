@@ -55,13 +55,19 @@ only reaches the ceiling sooner. The game's own Camera speed option raises the c
 Owner decisions 2026-11-08: controller buttons can be remapped too, on the keyboard's model, and
 the launcher listens for the button (a list of names fails players whose pad is not labelled
 like a PlayStation one, and misses paddles).
-- **Storage:** `bbport.ini` `bind_pad_<input>=Button,Button` (up to 4) for the 16 pad inputs
-  (`bind_pad_cross` ... `bind_pad_dpad_right`, `bind_pad_options`, `bind_pad_touchpad`). Buttons
+- **Storage:** `bbport.ini` `bind_pad_<input>=Button,Button` (up to 4) for the 17 pad inputs
+  (`bind_pad_cross` ... `bind_pad_dpad_right`, `bind_pad_options`, `bind_pad_touchpad`,
+  `bind_pad_touch_right`). Buttons
   are named by position as on a PlayStation pad (SDL's layout: South = `Cross`), plus `Select`
   (SDL Back: Share/Create/View), `Paddle 1`-`4` (SDL right paddle 1, right 2, left 1, left 2:
   Xbox Elite P1-P4; DualSense Edge back buttons = Paddle 1 and 3) and `Misc` (SDL Misc1: mic,
   capture, Xbox Share). Absent = default (the same name; Touchpad = `Touchpad,Select`, the
   0.5.14 behaviour), empty = unbound, unknown names logged and ignored. Sticks are not remappable.
+- **Touchpad sides (#157):** `bind_pad_touchpad` clicks the left side (Gestures) when the pad has
+  no finger on a touch surface; `bind_pad_touch_right` (no button by default) clicks the right
+  side (Personal Effects), so pads without a touchpad (Xbox, 8BitDo) can reach that menu. It has
+  no PlayStation button of its own (`PAD_TOUCH_RIGHT`, numbered after the buttons). A real finger
+  on a DualShock/DualSense touchpad wins over both.
 - **Triggers:** pressed past 30/255. A trigger bound to L2/R2 keeps its analog value; any other
   button bound there presses it fully; a trigger bound elsewhere presses that input.
 - `remap_buttons` (`src/runtime_pad.c`) applies it to the controller only; keyboard bindings are

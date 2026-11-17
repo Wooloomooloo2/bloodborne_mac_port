@@ -2569,3 +2569,23 @@ texture pool at 1536 MiB, the retail first heap, and the launcher's under-24 GB 
 Checked: the patch audit and ultrawide tests (all presets against the 1.09 eboot), launch
 settings and launcher tests. Not yet checked in game (needs the Mac): the scene, HUD and lock-on
 markers at 3840x1620.
+
+## 2026-11-17: game window focus and the idle cursor (0.5.17)
+
+The cursor stayed visible while playing with a controller, until the menu was opened or the game
+restarted. Two causes, both measured with log lines on an M4 Max, macOS 27.0.1, GS27U external
+display, Steam open:
+- **SDL's hide needs mouse motion.** SDL hides the cursor through the window's cursor rectangles,
+  which AppKit applies only when the mouse moves: a still mouse kept the cursor. Now also
+  `[NSCursor setHiddenUntilMouseMoves:YES]` (`gpu/shim/bbport_cursor.mm`).
+- **The game was not the active app.** "Cursor: hidden (app NOT active, key window none)" at every
+  launch on the external display: macOS ignores a hide from a background app. The GPU host is
+  started by bb-probe, not Launch Services, so nothing activates it, and since macOS 14 an app
+  cannot take the focus itself. The launcher now yields activation to the host as soon as it
+  appears and activates it once its window exists (`launcher/App/GameFocus.swift`). The macOS log
+  then showed the host made front (`SETFRONT`) and, 0.5 s later, Steam made front by the Spaces
+  switch of the full-screen window on the external display (`SetMenuBars`). The host takes the
+  focus back once after entering full screen or changing display in its first 30 s
+  (`activateIgnoringOtherApps`, honoured on macOS 27): "Steam Helper is in front: activating the
+  game", "game active", and the cursor hid 3 s later. On the built-in display the launcher's
+  handoff alone was enough.
