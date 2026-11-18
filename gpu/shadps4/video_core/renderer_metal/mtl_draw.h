@@ -103,6 +103,9 @@ struct DrawPipeline {
     /// What the shaders do to untracked buffers (Encoder::SetRenderPipeline); the cache's
     /// pipelines do not know, the rasterizer sets it from the guest shaders.
     Access buffers{Access::Write};
+    /// The shaders store to images, which Metal orders by encoder order: the draw is never held
+    /// in a tessellation run (Runs). The rasterizer sets it, as `buffers`.
+    bool writes_images{};
 };
 
 /// The dynamic state of one draw, in the guest's (Vulkan) conventions.
@@ -239,6 +242,14 @@ struct SkipTotals {
 /// bound slots. Every non-tessellated draw and dispatch here draws the waiting patches first;
 /// callers end passes and submit through EndRenderPass() / Submit() here (which flush first)
 /// and call Flush() before anything else that needs the run ordered (copies, clears).
+///
+/// Held draws (HoldsDraws, the default): a plain draw (Draw, not indirect) that stores to no
+/// image waits in the run too, in order, instead of ending it. The kernels of the tessellated
+/// draws after it then join the run's compute pass, and the render pass reopens once per run
+/// instead of once per tessellated draw (lit passes alternate light volumes of both kinds).
+/// The caller keeps the run open across held draws (Scheduler::RecordDraw); copies, clears,
+/// pass ends and order waits naming a command of the run still flush it first, and an order
+/// wait naming only earlier commands goes through OrderWait() here.
 class Runs {
 public:
     Runs(Device& device, const Nulls& nulls);
@@ -265,13 +276,28 @@ public:
     /// Flush (inside a pass), Encoder::Submit, then Submitted() with its tick; returns the tick.
     u64 Submit(Encoder& e);
     [[nodiscard]] bool HasPending() const noexcept {
-        return !pending.empty();
+        return num_pending != 0;
+    }
+    /// Whether plain draws are held in runs (BB_HOLD_DRAWS=0: never). Set before the first
+    /// draw; the scheduler asks it on the recording side's behalf.
+    [[nodiscard]] bool HoldsDraws() const noexcept {
+        return hold_draws;
+    }
+    void SetHoldDraws(bool hold) noexcept {
+        hold_draws = hold;
     }
 
     bool Dispatch(Encoder& e, const ComputeView& c, std::span<const Bound> bound,
                   std::span<const u8> push, Size3 groups);
     bool DispatchIndirect(Encoder& e, const ComputeView& c, std::span<const Bound> bound,
                           std::span<const u8> push, BufferRef args);
+
+    /// Encoder::OrderWait for the command about to be encoded, inside a run: the caller checked
+    /// that `request` names no command of the run (only earlier ones, or the uploads ahead). It
+    /// applies now, so the encoders this command opens wait (kernels, dispatches, a draw that
+    /// ends the run), and again right before the command's draw if that draw is held, whose
+    /// work is encoded with the run's under a later command.
+    void OrderWait(Encoder& e, const OrderRequest& request);
 
     // ---- Cache pipelines (mtl_draw.mm) ----
     /// The pipelines of a GraphicsPipeline (Render(), Tessellation(), Geometry()).
@@ -280,6 +306,7 @@ public:
         const TessellationPipeline* tessellation{};
         const GeometryPipeline* geometry{};
         Access buffers{Access::Write}; ///< as DrawPipeline::buffers (every stage, kernels too)
+        bool writes_images{};          ///< as DrawPipeline::writes_images
     };
     /// Routes to the tessellation, geometry or plain path.
     bool Draw(Encoder& e, const Graphics& g, const DrawState& s, const Resources& r,
@@ -303,6 +330,8 @@ public:
     struct Counters {
         std::atomic<u64> draws{}, dispatches{}, tess_draws{}, tess_after_tess{},
             geometry_draws{};
+        std::atomic<u64> runs{};       ///< runs drawn (Flush with draws waiting)
+        std::atomic<u64> held_draws{}; ///< plain draws held in them
         // Dropped draws and dispatches, by reason (published by ReportSkips).
         std::atomic<u64> skipped_no_pass{}, skipped_no_pipeline{}, skipped_tess{},
             skipped_emulated{}, unsupported{}, skipped_discard{}, skipped_cull_all{},
@@ -316,12 +345,19 @@ public:
     void ReportSkips();
 
 private:
+    /// A waiting patch draw (patch.patches != 0) or held plain draw.
     struct Pending {
         DrawPipeline pipeline;
         DrawState state;
         std::vector<Bound> bound;
         std::vector<u8> push;
         PatchDraw patch;
+        // Held draws.
+        std::vector<VertexStream> streams;
+        BufferRef indices{};
+        IndexType index_type{IndexType::U16};
+        DrawArgs args{};
+        OrderRequest request{}; ///< its order wait (OrderWait), made again before it is drawn
     };
     struct Chunk {
         Object buffer;
@@ -333,6 +369,10 @@ private:
     bool Count(Skip skip);
     /// Prepare + resources of both stages + vertex streams.
     bool Begin(Encoder& e, const DrawPipeline& p, const DrawState& s, const Resources& r);
+    /// The draw call of a plain draw that Begin() prepared.
+    void EncodeDraw(Encoder& e, const DrawPipeline& p, const Resources& r, const DrawArgs& a);
+    /// The next entry of `pending` (reused: its vectors keep their capacity).
+    Pending& NextPending();
     /// Ends a tessellation run before any other command.
     void EndRun(Encoder& e);
 
@@ -346,7 +386,12 @@ private:
     Device& device;
     Nulls nulls;
     Counters counters;
-    std::vector<Pending> pending;
+    std::vector<Pending> pending; ///< the first num_pending wait
+    size_t num_pending{};
+    bool hold_draws;
+    /// The order wait made for command `request_command` (OrderWait), for its draw if held.
+    OrderRequest next_request{};
+    u64 request_command{};
     bool last_draw_tess{};
     // Scratch.
     Object chunk;     ///< current chunk (id<MTLBuffer>)

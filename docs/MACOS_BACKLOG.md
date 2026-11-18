@@ -622,6 +622,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
   don't include the heaviest areas (e.g. the overlook above). Add scripted scenes there
   (owner will record routes / lantern 360 spins), some uncapped, so regressions in demanding
   areas show up in the report.
+  **Repeatability (owner, 2026-11-18):** A/B runs of the traversal route aren't comparable: the
+  replayed character drifts, ends up in different places and gets stuck in different spots
+  between runs (the #58 A/B gave 148 and 156 FPS for the same build). Needed: a standing pass
+  at a demanding spot (lots of lit, tessellated geometry; e.g. the #159 Central Yharnam sewer or
+  the overlook), identical frame to frame across runs (fixed camera, no input drift), with a
+  check that the start position matches before measuring. The current stand is one of the
+  lightest spots (~125 FPS at 1080p on an M4 Max, CPU-bound), so GPU-side changes barely show.
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
   pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
@@ -785,6 +792,10 @@ Each item: what was done for now, what the refinement is, and where it lives.
   hoist the remaining copies; (2) put consecutive dispatches in one compute encoder; (3) the 47
   tessellated draws per frame each split a pass (MoltenVK's emulation): batch them or emulate
   tessellation ourselves; (4) attachment-less vertex-only passes (~20/frame) folded together.
+  *(3) done on Metal (2026-10-21, FINDINGS "Tessellation runs hold plain draws"):* plain draws
+  wait in tessellation runs; the clinic's lighting pass reopened 82 → ~7 times per frame (+14%
+  on an M3 Pro). Left: one reopen per run whose pass drew before its first tessellated draw
+  (hoist the kernels to the pass start).
   *0.5.3 plan (2026-10-18):* the counts above are from MoltenVK; first re-measure encoders and
   render passes per frame on the native Metal renderer (Metal System Trace, 1080p and 1440p
   native) and list which splits are avoidable (a pass reading what the previous one wrote must
@@ -879,7 +890,9 @@ Each item: what was done for now, what the refinement is, and where it lives.
   frame. An empty split costs ~0.05 ms there (48 extra splits: +2.3 ms GPU), so the splits are
   ~4 ms of a 22 ms frame. Skipping the tessellated draws (wrong image) gave +22.5% at the clinic,
   +7% in Hunter's Dream. Fix idea: encode a pass's tessellation kernels before its render encoder
-  (buffer the pass's draws as `Runs` does for patch draws).
+  (buffer the pass's draws as `Runs` does for patch draws). *Done (2026-10-21, FINDINGS
+  "Tessellation runs hold plain draws"):* plain draws wait in the runs, 82 → ~7 reopens per frame
+  at the clinic (+14%), 3.8 in the city.
 - **Area loads stall the renderer.** Entering new parts of Central Yharnam creates 400–700
   textures in one frame (130–230 MB) and waits on the host copy threads: 100–300 ms frames.
   Spread the creation and uploads over frames, or use worker threads.
