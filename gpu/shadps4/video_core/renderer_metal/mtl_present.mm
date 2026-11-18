@@ -88,7 +88,11 @@ void PresentPasses::PostProcess(Encoder& encoder, void* input, void* output, u32
                                 u32 out_height, const PostProcessSettings& settings) {
     static_assert(sizeof(PostProcessSettings) == 12);
     RenderPassDesc pass{};
-    pass.colors[0].texture = output; // every pixel is written: no clear
+    pass.colors[0].texture = output;
+    id<MTLTexture> target = (__bridge id<MTLTexture>)output;
+    // This unblended triangle overwrites every pixel only when the supplied
+    // viewport matches the attachment. Preserve contents for a smaller viewport.
+    pass.colors[0].discard_load = out_width == target.width && out_height == target.height;
     pass.width = out_width;
     pass.height = out_height;
     encoder.BeginRenderPass(pass);
