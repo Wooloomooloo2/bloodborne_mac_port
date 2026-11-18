@@ -2629,3 +2629,21 @@ the held draw); `SignalAfterHostCopies` keeps the run.
   (routes differ between sessions).
 - The remaining ~7 reopens per frame are one per run whose pass drew before its first tessellated
   draw: hoisting the kernels to the pass start would remove them (~0.3 ms).
+
+### Re-measured on an M4 Max after rebasing onto 0.5.17 (2026-11-18)
+
+M4 Max 48 GB, macOS 27; benchmark save, throughput pass (40 s standing in Central Yharnam),
+window, upscaler off, uncapped (`BB_PRESENT_MODE=Immediate BB_FPS_LIMIT=0 BB_VBLANK_HZ=480`),
+same build with `BB_HOLD_DRAWS=0` against the default, last three `Frame stats` lines per run.
+
+| | Off | On |
+|---|---|---|
+| 1080p FPS (2 runs each) | 123.2 / 124.1 | 124.0 / 125.1 (+1%, CPU-bound) |
+| 1080p GPU busy, ms per frame | 6.88 / 6.78 | 6.18 / 6.01 (−11%) |
+| 1440p FPS (1 run each) | 111.5 | **120.2 (+7.8%)** |
+| 1440p GPU busy, ms per frame | 8.69 | 7.39 (−15%) |
+| Lighting-pass splits per frame (1080p) | 60.3 | 5.0 |
+| Metal encoders per frame (1080p) | 470 | 361 |
+| Tessellation runs per frame | 62.8 | 7.1 (4.0 draws held) |
+
+On the traversal route the splits went from 22.8 to 1.0 per frame. No Metal errors in any run.
