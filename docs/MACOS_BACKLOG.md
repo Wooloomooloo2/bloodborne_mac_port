@@ -622,6 +622,13 @@ Each item: what was done for now, what the refinement is, and where it lives.
   don't include the heaviest areas (e.g. the overlook above). Add scripted scenes there
   (owner will record routes / lantern 360 spins), some uncapped, so regressions in demanding
   areas show up in the report.
+  **Repeatability (owner, 2026-11-18):** A/B runs of the traversal route aren't comparable: the
+  replayed character drifts, ends up in different places and gets stuck in different spots
+  between runs (the #58 A/B gave 148 and 156 FPS for the same build). Needed: a standing pass
+  at a demanding spot (lots of lit, tessellated geometry; e.g. the #159 Central Yharnam sewer or
+  the overlook), identical frame to frame across runs (fixed camera, no input drift), with a
+  check that the start position matches before measuring. The current stand is one of the
+  lightest spots (~125 FPS at 1080p on an M4 Max, CPU-bound), so GPU-side changes barely show.
 
 - **Tessellated draws split their render pass (2026-10-21).** City at 1440p MetalFX: 67 render
   pass splits per frame, all from `Runs::DrawTessellated` (`BB_ENCODER_STATS=1`): each run of
