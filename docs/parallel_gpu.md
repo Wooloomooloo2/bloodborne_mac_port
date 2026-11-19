@@ -91,7 +91,8 @@ Findings, in the order they were fixed:
    to a new staging block makes the kernel allocate and clear it (~2 ms per 16 MiB), and the
    staging pool freed blocks after 3 s idle, between streaming bursts. It now keeps 512 MiB
    (`BB_STAGING_KEEP_MB`), frees the rest after 30 s and populates 128 MiB at startup.
-3. Write faults: a 256 KiB unprotect window (`BB_FAULT_WINDOW`) halves them again.
+3. Write faults: a 256 KiB unprotect window (`BB_FAULT_WINDOW`) halves them again (1024 KiB
+   by default on Macs with 24 GB or less since 2026-11-19, FINDINGS).
    `BB_UFFD=1` tracks writes with userfaultfd write-protection instead of mprotect (no
    address-space write lock, no mapping splits); read protection for readbacks still uses
    mprotect. It removes the mprotect time but did not change the stalls measurably; opt-in.
