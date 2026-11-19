@@ -2606,7 +2606,7 @@ with more than 600 draws a frame):
 | 256 KiB | 77 | 20.5 | 601 | ~170 | 183 ms |
 | 1024 KiB | 24 | 26.6 | 403 | ~90 | 219 ms |
 
-The player called it much better; single long frames remain. Not the same route twice, and
+The player called it much better; single long frames remain. Same location and the same run (by hand, not scripted);
 whether macOS 27.2.1 made each fault dearer is inferred (the only change), not shown. Change:
 1024 KiB by default on Macs with 24 GB or less (`hw.memsize`, the arena layout's threshold);
 others keep 256 (their numbers are unchanged). `BB_FAULT_WINDOW` still wins; the host logs
