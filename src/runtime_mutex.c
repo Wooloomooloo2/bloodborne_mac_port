@@ -8,31 +8,47 @@
 #include <string.h>
 #include <errno.h>
 #include <time.h>
+#include <stdatomic.h>
 
 enum { TYPE_ERRORCHECK = 1, TYPE_RECURSIVE = 2, TYPE_NORMAL = 3 }; /* 4: adaptive, error-checking here */
 
 #include <pthread.h>
-typedef pthread_mutex_t NativeMutex;
+typedef struct {
+    pthread_mutex_t value;
+    int type;
+    unsigned depth;
+    _Atomic uintptr_t owner; /* host condition waits do not always check ownership */
+} NativeMutex;
 typedef pthread_cond_t NativeCond;
+static _Thread_local char normal_owner_token;
+static uintptr_t normal_owner(void) { return (uintptr_t)&normal_owner_token; }
+static int native_note_lock(NativeMutex *m, int e) {
+    if (!e) {
+        if (m->type == TYPE_RECURSIVE) ++m->depth; else m->depth = 1;
+        atomic_store_explicit(&m->owner, normal_owner(), memory_order_release);
+    }
+    return e;
+}
 static int native_init(NativeMutex *m, int type) {
     pthread_mutexattr_t attr;
     int e = pthread_mutexattr_init(&attr);
     if (e) return e;
     int native_type = type == TYPE_RECURSIVE ? PTHREAD_MUTEX_RECURSIVE : type == TYPE_NORMAL ? PTHREAD_MUTEX_NORMAL : PTHREAD_MUTEX_ERRORCHECK;
     e = pthread_mutexattr_settype(&attr, native_type);
-    if (!e) e = pthread_mutex_init(m, &attr);
+    if (!e) e = pthread_mutex_init(&m->value, &attr);
     pthread_mutexattr_destroy(&attr);
+    if (!e) { m->type = type; m->depth = 0; atomic_init(&m->owner, 0); }
     return e;
 }
-static int native_destroy(NativeMutex *m) { return pthread_mutex_destroy(m); }
-static int native_lock(NativeMutex *m) { return pthread_mutex_lock(m); }
-static int native_trylock(NativeMutex *m) { return pthread_mutex_trylock(m); }
+static int native_destroy(NativeMutex *m) { return pthread_mutex_destroy(&m->value); }
+static int native_lock(NativeMutex *m) { return native_note_lock(m, pthread_mutex_lock(&m->value)); }
+static int native_trylock(NativeMutex *m) { return native_note_lock(m, pthread_mutex_trylock(&m->value)); }
 static struct timespec realtime(uint64_t ns) { return (struct timespec){(time_t)(ns / 1000000000), (long)(ns % 1000000000)}; }
 #ifdef __APPLE__
 /* No pthread_mutex_timedlock: retry until the realtime deadline, backing off to 1 ms sleeps. */
 static int native_timedlock(NativeMutex *m, uint64_t deadline) {
     for (unsigned attempt = 0;; ++attempt) {
-        int e = pthread_mutex_trylock(m);
+        int e = native_trylock(m);
         if (e != EBUSY) return e;
         if (host_realtime_ns() >= deadline) return ETIMEDOUT;
         if (attempt < 16) host_yield(); else host_sleep_ns(attempt < 64 ? 50000 : 1000000);
@@ -41,16 +57,35 @@ static int native_timedlock(NativeMutex *m, uint64_t deadline) {
 #else
 static int native_timedlock(NativeMutex *m, uint64_t deadline) {
     struct timespec end = realtime(deadline);
-    return pthread_mutex_timedlock(m, &end);
+    return native_note_lock(m, pthread_mutex_timedlock(&m->value, &end));
 }
 #endif
-static int native_unlock(NativeMutex *m) { return pthread_mutex_unlock(m); }
+static int native_unlock(NativeMutex *m) {
+    if (atomic_load_explicit(&m->owner, memory_order_acquire) != normal_owner()) return EPERM;
+    /* Clear before unlock: a new owner can publish immediately after it. */
+    if (--m->depth == 0)
+        atomic_store_explicit(&m->owner, 0, memory_order_release);
+    return pthread_mutex_unlock(&m->value);
+}
 static int native_cond_init(NativeCond *c) { return pthread_cond_init(c, NULL); }
 static int native_cond_destroy(NativeCond *c) { return pthread_cond_destroy(c); }
 static int native_cond_wait(NativeCond *c, NativeMutex *m, uint64_t deadline) {
-    if (!deadline) return pthread_cond_wait(c, m);
-    struct timespec end = realtime(deadline);
-    return pthread_cond_timedwait(c, m, &end);
+    if (atomic_load_explicit(&m->owner, memory_order_acquire) != normal_owner()) return EPERM;
+    const unsigned depth = m->depth;
+    m->depth = 0;
+    atomic_store_explicit(&m->owner, 0, memory_order_release);
+    int e;
+    if (!deadline) e = pthread_cond_wait(c, &m->value);
+    else {
+        struct timespec end = realtime(deadline);
+        e = pthread_cond_timedwait(c, &m->value, &end);
+    }
+    /* A timed-out wait also returns holding the mutex. Keep the normal host
+     * mutex, including its self-lock blocking behavior, rather than substituting
+     * an error-checking mutex just to detect a foreign unlock. */
+    m->depth = depth;
+    atomic_store_explicit(&m->owner, normal_owner(), memory_order_release);
+    return e;
 }
 static int native_cond_signal(NativeCond *c) { return pthread_cond_signal(c); }
 static int native_cond_broadcast(NativeCond *c) { return pthread_cond_broadcast(c); }
