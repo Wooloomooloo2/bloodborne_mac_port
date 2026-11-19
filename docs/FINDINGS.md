@@ -2647,3 +2647,39 @@ same build with `BB_HOLD_DRAWS=0` against the default, last three `Frame stats` 
 | Tessellation runs per frame | 62.8 | 7.1 (4.0 draws held) |
 
 On the traversal route the splits went from 22.8 to 1.0 per frame. No Metal errors in any run.
+
+## Central Yharnam sewer: the recording thread waited for the GPU at every motion texture resize (2026-11-18, #159)
+
+M4 Max 64 GB, macOS 27.2.1, MetalFX temporal (4K output, scene 1916x1078; #159 reports 1440p Ultra
+Performance), 60 FPS cap, `BB_FRAME_STATS=1 BB_ENCODER_STATS=1 BB_PASS_STATS=1`, 0.5.17-5-gb837b16
+(which has #39).
+
+**Symptom.** Below the first lamp the sewer falls to 20-47 FPS (36-50 elsewhere in the same session
+it held 60). The frame timeline there: `bb:DrawRec` busy 19-47 ms against 5-10 ms elsewhere, with a
+similar draw count (1000-1350), ~270-380 Metal encoders, GPU busy 16-22 ms. Tessellation is not the
+cause: 1-6 runs per frame with #39 holding their plain draws.
+
+**Profile.** `sample <bbgpu-host pid> 8 1` taken in the sewer (only the arm64 GPU process; never
+the x86 game process). `bb:DrawRec`, 8 s, 1 ms interval:
+
+| FPS when sampled | DrawRec samples | in `ObjectMotion::EnsureImage` -> `Metal::Device::Wait` |
+|---|---|---|
+| 35 | 4056 | 2536 (62.5%) |
+| 37 | 3663 | 2062 (56.3%) |
+| 22 | 4247 | 2967 (69.9%) |
+
+Call chain: `DrawRecord` -> `BeginRendering` -> `BeginRenderingFull` -> `ObjectMotion::Attach` ->
+`EnsureImage` -> `Scheduler::Finish` -> `Device::Wait`. The object motion attachment was one texture
+that followed the size of the pass being begun: when passes with motion vectors alternate between two
+sizes, every change drained the whole GPU queue and created a new texture (losing the frame's vectors,
+so the upscaler read invalid motion after a smaller pass). It only happens with a temporal upscaler
+(MetalFX, FSR 3), which is why the cost did not follow the output resolution.
+
+**Fix.** `ObjectMotion` keeps one texture per render-target size (up to 8; more sizes, as in live
+resolution changes, start over with a `Finish`). No waits or recreations when sizes alternate;
+`PrepareRead` and `Image` find the scene-size texture instead of whichever size came last.
+`BB_FRAME_STATS=1` logs each texture created. The fixed build creates two at the start of the first
+level: 1916x1080 and 958x540 (full and half size), the pair that alternated.
+
+**Status.** In a one-minute session on the fixed build (Central Yharnam approach, not the sewer) the
+frame was 60 FPS with `bb:DrawRec` at 4-15 ms. Not yet measured in the sewer itself.
