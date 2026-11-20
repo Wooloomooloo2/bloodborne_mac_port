@@ -114,3 +114,19 @@ endif()
 set_target_properties(bbnet-rejoin-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     INTERPROCEDURAL_OPTIMIZATION OFF)
 
+
+# The vendored bbhost NpSignaling on our glue: the v0.2.31 handshake, strangers, short packets,
+# and a connection the server resolves only later (the host's half of the rejoin bug).
+add_executable(bbnet-vendored-signaling-test EXCLUDE_FROM_ALL ../../tests/test_thd_vendored_signaling.cpp
+    thd/thd_session.cpp thd/thd_bbhost_glue.cpp vendor/bbhost/np_signaling.cpp)
+target_include_directories(bbnet-vendored-signaling-test PRIVATE ../../tests/thd_shim . thd vendor/bbhost_shim
+    ../third_party/httplib ../shadps4)
+target_compile_options(bbnet-vendored-signaling-test PRIVATE -UNDEBUG)
+target_compile_definitions(bbnet-vendored-signaling-test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(bbnet-vendored-signaling-test PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL
+    OpenSSL::Crypto ZLIB::ZLIB)
+if (APPLE)
+    target_link_libraries(bbnet-vendored-signaling-test PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+set_target_properties(bbnet-vendored-signaling-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)
