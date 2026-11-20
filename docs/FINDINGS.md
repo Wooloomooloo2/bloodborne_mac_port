@@ -2590,6 +2590,28 @@ display, Steam open:
   game", "game active", and the cursor hid 3 s later. On the built-in display the launcher's
   handoff alone was enough.
 
+## 2026-11-19: a 1024 KiB write-fault window on 16 GB Macs
+
+A player's M3 (16 GB, macOS 27.2.1, 1080p, upscaler off, cap 30, fixed timing) fell to 11-22 FPS
+in a heavy area (1,000-1,500 draws a frame) that had played smoothly on the same build and
+settings under macOS 27.2. `BB_FRAME_STATS=1` spike lines: the game waited **30-55 ms a frame
+on GPU page faults** (45-90 a frame); GPU busy 37-41 ms. MetalFX Performance and dynamic
+shadows off did not help (the time is not pixels or shadow geometry).
+
+Same spot, same settings, `BB_FAULT_WINDOW=1024` against the 256 KiB default (5 s stat samples
+with more than 600 draws a frame):
+
+| Window | Samples | Average FPS | Write faults/s | Spike frames/min | Worst frame (avg of samples) |
+|---|---|---|---|---|---|
+| 256 KiB | 77 | 20.5 | 601 | ~170 | 183 ms |
+| 1024 KiB | 24 | 26.6 | 403 | ~90 | 219 ms |
+
+The player called it much better; single long frames remain. Same location and the same run (by hand, not scripted);
+whether macOS 27.2.1 made each fault dearer is inferred (the only change), not shown. Change:
+1024 KiB by default on Macs with 24 GB or less (`hw.memsize`, the arena layout's threshold);
+others keep 256 (their numbers are unchanged). `BB_FAULT_WINDOW` still wins; the host logs
+`Write faults: unprotect N KiB around each (...)`.
+
 ## Tessellation runs hold plain draws: one lighting-pass split per run (M3 Pro, 2026-10-21)
 
 MacBook Pro M3 Pro (14 GPU cores), 18 GB, macOS 15.7.5; a copy of a player's save at the lamp
