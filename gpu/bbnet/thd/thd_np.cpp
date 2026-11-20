@@ -4,6 +4,7 @@
 // Adapted from droogie/bbhost src/hle/np_signaling.cpp and src/hle/system.cpp (566184a).
 #include "thd_internal.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -22,7 +23,8 @@ namespace {
 // (0x0c); its status read wants 2 with the peer's address and port. 0x00 is dead.
 
 constexpr int kSigErrInvalidArg = static_cast<int>(0x80550003);
-constexpr std::uint16_t kEvDead = 0x00, kEvEstablished = 0x01, kEvActive = 0x0c;
+constexpr std::uint16_t kEvDead = 0x00, kEvEstablished = 0x01, kEvPeerActivated = 0x0a, kEvPeerDeactivated = 0x0b,
+                        kEvActive = 0x0c;
 
 struct SigCtx {
     void* cb = nullptr;
@@ -34,10 +36,22 @@ struct Conn {
     std::uint16_t member_id = 0;
     bool announced = false;
     bool dead = false;
+    bool local = true;                 // the game activated it (else only a bbhost peer did)
+    bool peer_activated_fired = false; // PEER_ACTIVATED sent for a connection only the peer made
+};
+// A bbhost v0.2.30+ peer's handshake with us (bbhost src/hle/np_signaling.cpp). We only answer
+// it: bbhost peers start it whenever their game activates a connection, so our side never needs
+// to, and Mac peers on this backend skip it (both ends announce at once).
+struct Handshake {
+    std::uint32_t addr = 0; // network order: where its datagrams came from (often the relay)
+    std::uint16_t port = 0; // host order
+    bool established = false;
+    bool sent_activation = false; // our ActivationRequest went out (once our game has a connection)
 };
 std::mutex g_sig_mu;
 std::map<unsigned, SigCtx> g_sig_ctx;
 std::map<unsigned, Conn> g_conn;
+std::map<std::string, Handshake> g_hs; // by the peer's online id
 unsigned g_next_sig_ctx = 1;
 unsigned g_next_conn = 1;
 
@@ -69,15 +83,11 @@ s32 PS4_SYSV_ABI sig_term() {
     std::lock_guard lk(g_sig_mu);
     g_sig_ctx.clear();
     g_conn.clear();
+    g_hs.clear();
     return 0;
 }
 s32 PS4_SYSV_ABI sig_create_ctx(const void*, void* cb, void* arg, unsigned* ctx) {
-    if (!ctx) return kSigErrInvalidArg;
-    std::lock_guard lk(g_sig_mu);
-    const unsigned id = g_next_sig_ctx++;
-    g_sig_ctx[id] = SigCtx{cb, arg};
-    *ctx = id;
-    return 0;
+    return SignalingCreateContext(cb, arg, ctx);
 }
 s32 PS4_SYSV_ABI sig_delete_ctx(unsigned ctx) {
     std::lock_guard lk(g_sig_mu);
@@ -87,58 +97,9 @@ s32 PS4_SYSV_ABI sig_delete_ctx(unsigned ctx) {
 }
 // Idempotent per peer: the game re-activates.
 s32 PS4_SYSV_ABI sig_activate(unsigned ctx, const void* npid, unsigned* conn_out) {
-    if (!conn_out) return kSigErrInvalidArg;
-    const std::string peer = NpIdText(npid);
-    std::lock_guard lk(g_sig_mu);
-    for (auto& [id, c] : g_conn) {
-        if (c.ctx == ctx && c.online_id == peer && !c.dead) {
-            *conn_out = id;
-            if (!c.member_id) {
-                Peer p;
-                if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
-            }
-            announce_locked(id, c);
-            return 0;
-        }
-    }
-    const unsigned id = g_next_conn++;
-    Conn c;
-    c.ctx = ctx;
-    c.online_id = peer;
-    Peer p;
-    if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
-    std::string how;
-    if (!c.member_id) {
-        // The host activates its connection to the guest it summons before the guest is a room
-        // member: the server resolves the address from the guest's context_start.
-        std::uint32_t addr = 0;
-        std::uint16_t port = 0;
-        std::string error;
-        if (ServerSignalingResolve(peer, &addr, &port, error)) {
-            c.member_id = PeersProvisional(peer, addr, port).member_id;
-            char text[64];
-            std::snprintf(text, sizeof(text), " (resolved %u.%u.%u.%u:%u)", addr & 0xff, (addr >> 8) & 0xff,
-                          (addr >> 16) & 0xff, addr >> 24, port);
-            how = text;
-        } else {
-            how = " (not known and not resolved: " + error + ")";
-        }
-    }
-    g_conn[id] = c;
-    *conn_out = id;
-    Log("sceNpSignalingActivateConnection %s -> conn %u%s", peer.c_str(), id, how.c_str());
-    announce_locked(id, g_conn[id]);
-    return 0;
+    return SignalingActivate(ctx, NpIdText(npid), conn_out);
 }
-s32 PS4_SYSV_ABI sig_deactivate(unsigned ctx, unsigned conn) {
-    std::lock_guard lk(g_sig_mu);
-    const auto it = g_conn.find(conn);
-    if (it != g_conn.end() && it->second.ctx == ctx) {
-        it->second.dead = true;
-        if (it->second.member_id) PeersSetConn(it->second.member_id, conn, 0);
-    }
-    return 0;
-}
+s32 PS4_SYSV_ABI sig_deactivate(unsigned ctx, unsigned conn) { return SignalingDeactivate(ctx, conn); }
 // (ctxId, connId, status*, SceNetInAddr*, SceInPort_t*)
 s32 PS4_SYSV_ABI sig_status(unsigned ctx, unsigned conn, int* st, std::uint32_t* addr, std::uint16_t* port) {
     int status = 0;
@@ -363,7 +324,243 @@ s32 PS4_SYSV_ABI webapi_parse_npid(const char* json, void* npid) {
     return 0;
 }
 
+// ---- bbhost v0.2.30+ handshake: magic (4), kind, reason, sender id (16), receiver id (16), nonce (8)
+
+enum SigKind : std::uint8_t {
+    kActivationRequest = 0x01,
+    kActivationAck = 0x02,
+    kClose = 0x03,
+    kEstablishedMsg = 0x04,
+    kOffer = 0x11,
+    kAccept = 0x12,
+    kCheck = 0x13,
+    kCheckAck = 0x14,
+};
+constexpr std::uint8_t kReasonDeactivate = 1;
+constexpr std::size_t kSigIdLen = 16, kSigFromAt = 6, kSigToAt = kSigFromAt + kSigIdLen,
+                      kSigNonceAt = kSigToAt + kSigIdLen, kSigPacketLen = kSigNonceAt + 8;
+
+const char* sig_kind_name(std::uint8_t k) {
+    switch (k) {
+    case kActivationRequest: return "ActivationRequest";
+    case kActivationAck: return "ActivationAck";
+    case kClose: return "Close";
+    case kEstablishedMsg: return "Established";
+    case kOffer: return "Offer";
+    case kAccept: return "Accept";
+    case kCheck: return "Check";
+    case kCheckAck: return "CheckAck";
+    default: return "?";
+    }
+}
+
+std::string sig_id_at(const std::uint8_t* d) {
+    std::string s(reinterpret_cast<const char*>(d), kSigIdLen);
+    s.resize(std::strlen(s.c_str()));
+    return s;
+}
+
+void sig_send(const std::string& to, const Handshake& h, std::uint8_t kind, std::uint8_t reason = kReasonDeactivate,
+              std::uint64_t nonce = 0) {
+    if (!h.addr || !h.port) return;
+    std::uint8_t pkt[kSigPacketLen] = {};
+    std::memcpy(pkt, kSignalMagic, sizeof(kSignalMagic));
+    pkt[4] = kind;
+    pkt[5] = reason;
+    const std::string me = OnlineId();
+    std::memcpy(pkt + kSigFromAt, me.data(), std::min(me.size(), kSigIdLen));
+    std::memcpy(pkt + kSigToAt, to.data(), std::min(to.size(), kSigIdLen));
+    std::memcpy(pkt + kSigNonceAt, &nonce, sizeof(nonce));
+    P2pSignal(h.addr, h.port, pkt, sizeof(pkt));
+}
+
+// The game's live connection to that player, or 0.
+unsigned find_conn_locked(const std::string& online_id) {
+    for (const auto& [id, c] : g_conn) {
+        if (!c.dead && c.online_id == online_id) return id;
+    }
+    return 0;
+}
+
+// Our ActivationRequest, once, when our game has activated its own connection to a bbhost peer.
+// bbhost marks its connection "peer activated" only from this message, and its game waits for
+// MUTUAL_ACTIVATED (0x0c), which needs that mark: without it the summon stops after the handshake.
+// Sent only to peers that spoke the handshake, so Mac peers never get it.
+void sig_activation_locked(const std::string& peer, Handshake& h) {
+    if (h.sent_activation) return;
+    bool local = false;
+    for (const auto& [id, c] : g_conn) local |= !c.dead && c.local && c.online_id == peer;
+    if (!local) return;
+    h.sent_activation = true;
+    sig_send(peer, h, kActivationRequest);
+}
+
+// The peer's handshake is through: Established to it once, and PEER_ACTIVATED for a connection
+// only the peer made (the game then activates its own, which announces as usual).
+void sig_establish_locked(const std::string& from, Handshake& h, std::vector<std::pair<unsigned, unsigned>>& events) {
+    if (!h.established) {
+        h.established = true;
+        sig_send(from, h, kEstablishedMsg);
+        Log("np: bbhost handshake with %s done", from.c_str());
+    }
+    for (auto& [id, c] : g_conn) {
+        if (c.dead || c.local || c.peer_activated_fired || c.online_id != from) continue;
+        c.peer_activated_fired = true;
+        events.emplace_back(c.ctx, id);
+    }
+}
+
 } // namespace
+
+int SignalingCreateContext(void* cb, void* arg, unsigned* ctx) {
+    if (!ctx) return kSigErrInvalidArg;
+    std::lock_guard lk(g_sig_mu);
+    const unsigned id = g_next_sig_ctx++;
+    g_sig_ctx[id] = SigCtx{cb, arg};
+    *ctx = id;
+    return 0;
+}
+
+int SignalingDeactivate(unsigned ctx, unsigned conn) {
+    std::lock_guard lk(g_sig_mu);
+    const auto it = g_conn.find(conn);
+    if (it != g_conn.end() && it->second.ctx == ctx) {
+        Conn& c = it->second;
+        const auto h = g_hs.find(c.online_id);
+        if (!c.dead && h != g_hs.end() && h->second.established) sig_send(c.online_id, h->second, kClose);
+        c.dead = true;
+        if (c.member_id) PeersSetConn(c.member_id, conn, 0);
+    }
+    return 0;
+}
+
+void SignalingControl(const std::uint8_t* data, std::size_t len, std::uint32_t addr, std::uint16_t port) {
+    if (!data || len < kSigPacketLen || std::memcmp(data, kSignalMagic, sizeof(kSignalMagic)) != 0) return;
+    const std::uint8_t kind = data[4];
+    const std::uint8_t reason = data[5];
+    const std::string from = sig_id_at(data + kSigFromAt);
+    const std::string to = sig_id_at(data + kSigToAt);
+    if (from.empty() || to != OnlineId()) return; // not addressed to us
+    std::uint64_t nonce = 0;
+    std::memcpy(&nonce, data + kSigNonceAt, sizeof(nonce));
+    if (Trace()) Log("np: bbhost signaling %s from %s", sig_kind_name(kind), from.c_str());
+
+    std::vector<std::pair<unsigned, unsigned>> activated; // (ctx, conn): PEER_ACTIVATED
+    unsigned deactivated_ctx = 0, deactivated = 0;
+    bool dead = false;
+    {
+        std::lock_guard lk(g_sig_mu);
+        auto hs = g_hs.find(from);
+        const bool known = hs != g_hs.end() || find_conn_locked(from);
+        if (kind == kActivationRequest) {
+            // The peer's game activated its connection to us: answer where it came from, and give
+            // our game a connection to that player if it has none.
+            Handshake& h = g_hs[from];
+            h.addr = addr;
+            h.port = port;
+            Peer p;
+            const std::uint16_t member = PeersFindOnline(from, &p) ? p.member_id : PeersProvisional(from, addr, port).member_id;
+            if (!find_conn_locked(from) && !g_sig_ctx.empty()) {
+                Conn c;
+                c.ctx = g_sig_ctx.begin()->first;
+                c.online_id = from;
+                c.member_id = member;
+                c.local = false;
+                const unsigned id = g_next_conn++;
+                g_conn[id] = c;
+                Log("np: bbhost peer %s activated a connection to us -> conn %u", from.c_str(), id);
+            }
+            sig_send(from, h, kActivationAck);
+            sig_activation_locked(from, h);
+            if (h.established) sig_establish_locked(from, h, activated);
+        } else if (!known) {
+            // A player we have no connection or handshake with: not answered.
+        } else {
+            Handshake& h = g_hs[from];
+            if (!h.addr) {
+                h.addr = addr;
+                h.port = port;
+            }
+            sig_activation_locked(from, h);
+            switch (kind) {
+            case kOffer: sig_send(from, h, kAccept); break;
+            case kCheck:
+                sig_send(from, h, kCheckAck, kReasonDeactivate, nonce);
+                sig_establish_locked(from, h, activated);
+                break;
+            case kEstablishedMsg: sig_establish_locked(from, h, activated); break;
+            case kClose: {
+                const unsigned cid = find_conn_locked(from);
+                if (reason == kReasonDeactivate && cid && h.established) {
+                    deactivated_ctx = g_conn[cid].ctx;
+                    deactivated = cid;
+                } else {
+                    dead = true;
+                    g_hs.erase(from);
+                }
+                break;
+            }
+            default: break; // ActivationAck, Accept, CheckAck: answers to steps we never start
+            }
+        }
+    }
+    for (const auto& [ctx, conn] : activated) {
+        DispatchAfter(0, Prio::Signaling, [ctx = ctx, conn = conn] { sig_fire(ctx, conn, kEvPeerActivated, 0); });
+    }
+    if (deactivated) {
+        DispatchAfter(0, Prio::Signaling, [ctx = deactivated_ctx, conn = deactivated] {
+            sig_fire(ctx, conn, kEvPeerDeactivated, 0);
+        });
+    }
+    if (dead) SignalingPeerDead(from);
+}
+
+int SignalingActivate(unsigned ctx, const std::string& peer, unsigned* conn_out) {
+    if (!conn_out) return kSigErrInvalidArg;
+    std::lock_guard lk(g_sig_mu);
+    for (auto& [id, c] : g_conn) {
+        if (c.ctx == ctx && c.online_id == peer && !c.dead) {
+            *conn_out = id;
+            c.local = true;
+            if (!c.member_id) {
+                Peer p;
+                if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
+            }
+            announce_locked(id, c);
+            if (const auto h = g_hs.find(peer); h != g_hs.end()) sig_activation_locked(peer, h->second);
+            return 0;
+        }
+    }
+    const unsigned id = g_next_conn++;
+    Conn c;
+    c.ctx = ctx;
+    c.online_id = peer;
+    Peer p;
+    if (PeersFindOnline(peer, &p)) c.member_id = p.member_id;
+    std::string how;
+    if (!c.member_id) {
+        // The host activates its connection to the guest it summons before the guest is a room
+        // member: the server resolves the address from the guest's context_start.
+        std::uint32_t addr = 0;
+        std::uint16_t port = 0;
+        std::string error;
+        if (ServerSignalingResolve(peer, &addr, &port, error)) {
+            c.member_id = PeersProvisional(peer, addr, port).member_id;
+            char text[64];
+            std::snprintf(text, sizeof(text), " (resolved %u.%u.%u.%u:%u)", addr & 0xff, (addr >> 8) & 0xff,
+                          (addr >> 16) & 0xff, addr >> 24, port);
+            how = text;
+        } else {
+            how = " (not known and not resolved: " + error + ")";
+        }
+    }
+    g_conn[id] = c;
+    *conn_out = id;
+    Log("sceNpSignalingActivateConnection %s -> conn %u%s", peer.c_str(), id, how.c_str());
+    announce_locked(id, g_conn[id]);
+    if (const auto h = g_hs.find(peer); h != g_hs.end()) sig_activation_locked(peer, h->second);
+    return 0;
+}
 
 void SignalingPeerKnown(std::uint16_t member_id) {
     Peer p;
@@ -372,7 +569,7 @@ void SignalingPeerKnown(std::uint16_t member_id) {
     for (auto& [id, c] : g_conn) {
         if (!c.dead && c.online_id == p.online_id) {
             c.member_id = member_id;
-            announce_locked(id, c);
+            if (c.local) announce_locked(id, c);
         }
     }
 }
@@ -381,6 +578,7 @@ void SignalingPeerDead(const std::string& online_id) {
     std::vector<std::pair<unsigned, unsigned>> dead;
     {
         std::lock_guard lk(g_sig_mu);
+        g_hs.erase(online_id);
         for (auto& [id, c] : g_conn) {
             if (!c.dead && c.online_id == online_id) {
                 c.dead = true;
@@ -396,6 +594,7 @@ void SignalingPeerDead(const std::string& online_id) {
 void SignalingReset() {
     std::lock_guard lk(g_sig_mu);
     for (auto& [id, c] : g_conn) c.dead = true;
+    g_hs.clear();
 }
 
 void RegisterNp(Core::Loader::SymbolsResolver* sym) {

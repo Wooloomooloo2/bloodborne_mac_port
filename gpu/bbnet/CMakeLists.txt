@@ -94,3 +94,17 @@ if (APPLE)
 endif()
 set_target_properties(bbnet-session-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     INTERPROCEDURAL_OPTIMIZATION OFF)
+
+# bbhost v0.2.30+ peers: answering their NpSignaling handshake.
+add_executable(bbnet-bbhost-signaling-test EXCLUDE_FROM_ALL ../../tests/test_thd_bbhost_signaling.cpp
+    thd/thd_session.cpp thd/thd_np.cpp)
+target_include_directories(bbnet-bbhost-signaling-test PRIVATE ../../tests/thd_shim . ../third_party/httplib ../shadps4)
+target_compile_options(bbnet-bbhost-signaling-test PRIVATE -UNDEBUG)
+target_compile_definitions(bbnet-bbhost-signaling-test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(bbnet-bbhost-signaling-test PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL
+    OpenSSL::Crypto ZLIB::ZLIB)
+if (APPLE)
+    target_link_libraries(bbnet-bbhost-signaling-test PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+set_target_properties(bbnet-bbhost-signaling-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)

@@ -137,6 +137,12 @@ void P2pPunch(const char* label, std::uint32_t addr, std::uint16_t port, std::ui
               std::uint16_t local_port);
 // The address of this machine that reaches `host` (the LAN address peers on it use).
 std::string DetectLanAddress(const std::string& host);
+// bbhost v0.2.30+'s NpSignaling handshake datagrams start with this (bbhost src/hle/net_p2p.h).
+// They never reach a game socket: SignalingControl answers them.
+inline constexpr std::uint8_t kSignalMagic[4] = {0xfe, 'b', 'b', 's'};
+// One such datagram from the P2P port to addr (network order):port (host order), through the
+// relay when the peer is behind it.
+void P2pSignal(std::uint32_t addr, std::uint16_t port, const void* data, std::size_t len);
 
 // ---- game memory (1.09 only)
 void SetSignalingGate();
@@ -149,7 +155,12 @@ std::string NpIdText(const void* npid);
 // ---- signaling (thd_np.cpp), driven by matching2
 void SignalingPeerKnown(std::uint16_t member_id);
 void SignalingPeerDead(const std::string& online_id);
+int SignalingCreateContext(void* cb, void* arg, unsigned* ctx);
+int SignalingActivate(unsigned ctx, const std::string& peer, unsigned* conn_out);
+int SignalingDeactivate(unsigned ctx, unsigned conn);
 void SignalingReset();
+// A kSignalMagic datagram from a bbhost peer, from addr (network order):port (host order).
+void SignalingControl(const std::uint8_t* data, std::size_t len, std::uint32_t addr, std::uint16_t port);
 
 void RegisterNet(Core::Loader::SymbolsResolver* sym);
 void RegisterMatching2(Core::Loader::SymbolsResolver* sym);
