@@ -59,15 +59,27 @@ public:
     void* PrepareRead(u32 width, u32 height, bool& valid);
     /// The motion texture (id<MTLTexture>), or null before the first Attach/PrepareRead.
     [[nodiscard]] void* View() const noexcept {
-        return image.Get();
+        return current ? current->image.Get() : nullptr;
     }
     /// The motion texture if it holds this frame's vectors at `width` x `height`, else null.
     [[nodiscard]] void* Image(u32 width, u32 height) const noexcept {
-        return written && width == image_width && height == image_height ? image.Get() : nullptr;
+        const Target* target = FindTarget(width, height);
+        return target && target->written ? target->image.Get() : nullptr;
     }
 
 private:
-    void EnsureImage(u32 width, u32 height);
+    /// One motion texture per render-target size. Passes of a frame come in several sizes (the
+    /// sewer alternates them), and one texture that followed the size made the recording thread
+    /// wait for the whole GPU queue at every change (Scheduler::Finish) and lose the vectors.
+    struct Target {
+        Metal::Object image; ///< id<MTLTexture>
+        u32 width = 0, height = 0;
+        bool written = false; ///< this frame's vectors are in the image
+    };
+    static constexpr size_t MaxTargets = 8;
+
+    const Target* FindTarget(u32 width, u32 height) const noexcept;
+    Target& EnsureTarget(u32 width, u32 height);
 
     Metal::Device& device;
     Scheduler& scheduler;
@@ -90,9 +102,9 @@ private:
 
     u64 frame = 0;
     u32 params_used = 0;
-    Metal::Object image; ///< id<MTLTexture>
-    u32 image_width = 0, image_height = 0;
-    bool written = false; ///< this frame's vectors are in the image
+    std::array<Target, MaxTargets> targets;
+    size_t target_count = 0;
+    Target* current = nullptr; ///< the last one attached or read
 };
 
 } // namespace Vulkan
