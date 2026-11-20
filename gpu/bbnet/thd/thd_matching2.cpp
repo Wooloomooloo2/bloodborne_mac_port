@@ -454,6 +454,9 @@ void on_server_event(const Json& ev) {
             if (had) PeersUpsert(before);
             else PeersErase(1);
         }
+        // An invite that repeats a known address punches again too: without a session our NAT's
+        // mapping toward the host expires, and a host that restarted needs a fresh one anyway.
+        if (!g.in_room) PeersPunchAgain(1);
         Log("np: guest_invite: room %lld from %s (%s:%lld)", IntOf(ev, "RoomId", 0), StrOf(ev, "HostOnlineId").c_str(),
             StrOf(ev, "HostAddr").c_str(), IntOf(ev, "HostPort", 0));
         return;
