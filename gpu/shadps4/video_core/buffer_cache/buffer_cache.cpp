@@ -468,10 +468,26 @@ void BufferCache::SmallGuestCopy(const BbCopy::Item& item) {
 }
 
 void BufferCache::ExtendWriteFault(VAddr device_addr) {
+    // bbport: a guest write fault unprotects the aligned window around it (BB_FAULT_WINDOW KiB,
+    // 4-1024). 1024 KiB on Macs with 24 GB or less: on a 16 GB M3 (macOS 27.2.1, heavy scenes
+    // of 1,000-1,500 draws) the game waited 30-55 ms a frame on these faults; 1024 instead of
+    // 256 gave 26.6 FPS instead of 20.5 and a third fewer faults (FINDINGS 2026-11-19).
     static const u64 window = [] {
+        u64 memsize = 0;
+        size_t memsize_size = sizeof memsize;
+        if (sysctlbyname("hw.memsize", &memsize, &memsize_size, nullptr, 0) != 0) {
+            memsize = 0;
+        }
+        const bool small_mac = memsize != 0 && memsize <= (24ULL << 30);
         const char* env = std::getenv("BB_FAULT_WINDOW");
-        const u64 kib = env ? std::strtoull(env, nullptr, 10) : 256;
-        return std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+        const u64 kib = env ? std::strtoull(env, nullptr, 10) : small_mac ? 1024 : 256;
+        const u64 bytes = std::bit_ceil(std::clamp<u64>(kib, 4, 1024)) * 1024;
+        std::printf("Write faults: unprotect %llu KiB around each (%s)\n",
+                    static_cast<unsigned long long>(bytes / 1024),
+                    env         ? "BB_FAULT_WINDOW"
+                    : small_mac ? "a Mac with 24 GB or less"
+                                : "default");
+        return bytes;
     }();
     if (window <= TRACKER_BYTES_PER_PAGE || BbToggle::Disabled(BbToggle::FaultWindow)) {
         return;

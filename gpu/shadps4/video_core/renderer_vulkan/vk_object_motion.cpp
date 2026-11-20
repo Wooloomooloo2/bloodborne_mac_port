@@ -118,7 +118,9 @@ void ObjectMotion::OnFrameStart() {
         params_ticks[slot] = 0;
     }
     params_used = 0;
-    written = false;
+    for (size_t i = 0; i < target_count; ++i) {
+        targets[i].written = false;
+    }
     // Last frame's position stores before this frame's loads, and this frame's stores after the
     // loads two frames back (constructor): a phase boundary in the motion history's ordering.
     scheduler.Record([](Metal::Encoder& e) { e.OrderBarrier(Metal::HazardClass::MotionHistory); });
@@ -149,15 +151,32 @@ u32 ObjectMotion::PrepareDraw(const DrawInfo& draw) {
     return index;
 }
 
-void ObjectMotion::EnsureImage(u32 width, u32 height) {
-    if (image && width == image_width && height == image_height) {
-        return;
+const ObjectMotion::Target* ObjectMotion::FindTarget(u32 width, u32 height) const noexcept {
+    for (size_t i = 0; i < target_count; ++i) {
+        if (targets[i].width == width && targets[i].height == height) {
+            return &targets[i];
+        }
     }
-    if (image) {
-        // Recorded passes and the compose pass may still use the old texture.
+    return nullptr;
+}
+
+ObjectMotion::Target& ObjectMotion::EnsureTarget(u32 width, u32 height) {
+    if (const Target* found = FindTarget(width, height)) {
+        current = const_cast<Target*>(found);
+        return *current;
+    }
+    if (target_count == MaxTargets) {
+        // Many sizes (live resolution changes): start over. Recorded passes and the compose
+        // pass may still use the old textures, so this is the only place that waits.
         scheduler.Finish();
+        for (auto& target : targets) {
+            target = {};
+        }
+        target_count = 0;
+        current = nullptr;
     }
-    image = Metal::CreateTexture(
+    Target& target = targets[target_count++];
+    target.image = Metal::CreateTexture(
         device,
         Metal::TextureDesc{
             .pixel_format = Metal::VkToMtl::PixelFormat(vk::Format::eR32G32B32A32Sfloat),
@@ -166,31 +185,44 @@ void ObjectMotion::EnsureImage(u32 width, u32 height) {
             .render_target = true,
         },
         "ObjectMotion", nullptr);
-    ASSERT_MSG(image, "Object motion: {}x{} motion texture creation failed", width, height);
-    image_width = width;
-    image_height = height;
-    written = false;
+    ASSERT_MSG(target.image, "Object motion: {}x{} motion texture creation failed", width, height);
+    target.width = width;
+    target.height = height;
+    target.written = false;
+    current = &target;
+    if (BbStats::enabled) {
+        std::printf("Object motion: texture %ux%u (%zu sizes)\n", width, height, target_count);
+    }
+    return target;
 }
 
 void ObjectMotion::Attach(RenderState& state, u32 width, u32 height) {
     constexpr u32 slot = Shader::MotionVectors::Output;
-    EnsureImage(width, height);
+    Target& target = EnsureTarget(width, height);
     auto& attachment = state.colors[slot];
     attachment = {};
-    attachment.texture = image.Get();
+    attachment.texture = target.image.Get();
     // Clear (to zero: no motion) once per frame; later passes load, so a read in between does
     // not erase the vectors already written.
-    attachment.clear = !written;
-    written = true;
+    attachment.clear = !target.written;
+    target.written = true;
     state.num_colors = std::max(state.num_colors, slot + 1);
     // The motion pipelines' position history (see the constructor).
     state.vertex_rw_buffer = positions_buffer.Get();
 }
 
 void* ObjectMotion::PrepareRead(u32 width, u32 height, bool& valid) {
-    EnsureImage(std::max(image_width, 1u), std::max(image_height, 1u));
-    valid = written && width == image_width && height == image_height;
-    return image.Get();
+    if (const Target* found = FindTarget(width, height)) {
+        current = const_cast<Target*>(found);
+        valid = current->written;
+        return current->image.Get();
+    }
+    // No pass of this size has written vectors: the compose pass only needs some texture to bind.
+    valid = false;
+    if (!current) {
+        EnsureTarget(1, 1);
+    }
+    return current->image.Get();
 }
 
 } // namespace Vulkan

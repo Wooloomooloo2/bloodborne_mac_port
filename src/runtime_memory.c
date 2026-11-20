@@ -844,7 +844,8 @@ void runtime_low_free_aligned(void *ptr) {
  * 8192 prepared draws from the draw-preparation workers,
  * 16384 small read-only buffer copies on the recording thread,
  * 32768 hot pages (opt-in with BB_HOT_PAGES=1),
- * 65536 unprotect the 256 KiB window around a guest write fault (BB_FAULT_WINDOW KiB),
+ * 65536 unprotect the window around a guest write fault (BB_FAULT_WINDOW KiB; 1024 on
+ *       Macs with 24 GB or less, 256 on others),
  * 131072 large guest memory copies split across copy threads (BB_COPY_THREADS),
  * 262144 with BB_ASYNC_FENCES=1: wait for guest copies at fences again,
  * 524288 small guest copies batched for the copy threads instead of the recording thread,
