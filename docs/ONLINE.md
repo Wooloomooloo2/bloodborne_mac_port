@@ -94,6 +94,14 @@ The **Connection** group of the same tab has the UPnP switch (the module asks th
 forward the co-op port while the game runs) and the co-op UDP port (3658, the PS4's, by
 default; 0 picks any free port).
 
+Since 2026-11-11 The Hunter's Dream's server runs bbhost v0.2.31's connection code (bbhost PR
+#217): co-op, invasions and PvP need its NpSignaling handshake on both sides (Offer, Accept, Check,
+CheckAck datagrams on the P2P port, 30 s to give up), while messages, bloodstains and ghosts work
+without it. This backend carries bbhost's `np_signaling.cpp` as it is
+(`gpu/bbnet/vendor/bbhost`), so it plays with bbhost 0.2.31+ and Lantern Engine 0.9.42+; an older
+client on either side times out after about 30 seconds. `BBHOST_NP_TRACE=1` logs every handshake
+step.
+
 ## 4. Launch and check
 
 Start the game as usual (the app, or from Terminal):
