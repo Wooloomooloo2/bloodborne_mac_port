@@ -175,6 +175,9 @@ if [[ ${1:-} == --test ]]; then
         # Vertex/tessellation descriptor reads use the same bounded guest-fault recovery.
         cmake --build "${walker#*:}" --target shader-userdata-test >/dev/null
         "${walker#*:}/shader-userdata-test"
+        # The buffer cache's range set (#162: Boost.ICL broke on Apple's libc++).
+        cmake --build "${walker#*:}" --target range-set-test >/dev/null
+        "${walker#*:}/range-set-test"
     done
     # Metal-native M1: Metal::Object, Device ticks and limits, Metal::Encoder (arm64, no window);
     # again under Metal's validation layer.

@@ -53,6 +53,22 @@ class SelfTests(unittest.TestCase):
         self.assertEqual(ph[0]['vaddr'], 0)
         self.assertEqual(missing, [])
 
+    def test_plain_elf_reads_like_the_self(self):
+        # GoldHEN's FTP decryption writes eboot.bin as a plain ELF (#163).
+        elf, header, ph, _, _ = parse_self(fixture())
+        plain = bytes(elf)
+        self.assertEqual(plain[:4], b'\x7fELF')
+        elf2, header2, ph2, segments2, missing2 = parse_self(plain)
+        self.assertEqual(elf2, elf)
+        self.assertEqual(ph2, ph)
+        self.assertEqual(header2[5], header[5])
+        self.assertEqual((segments2, missing2), ([], []))
+
+    def test_truncated_plain_elf_rejected(self):
+        elf, *_ = parse_self(fixture())
+        with self.assertRaisesRegex(ValueError, 'required segment 0'):
+            parse_self(bytes(elf[:-1]))
+
     def test_truncated_payload_rejected(self):
         with self.assertRaisesRegex(ValueError, 'out of bounds'):
             parse_self(fixture()[:-1])
