@@ -2705,3 +2705,39 @@ level: 1916x1080 and 958x540 (full and half size), the pair that alternated.
 
 **Status.** In a one-minute session on the fixed build (Central Yharnam approach, not the sewer) the
 frame was 60 FPS with `bb:DrawRec` at 4-15 ms. Not yet measured in the sewer itself.
+
+**Sewer measured (fparrav, 2026-11-20, 0.5.18 test 1).** M4 Max 64 GB, 1440p MetalFX Ultra
+Performance, motion vectors on, 60 cap: a steady 60 FPS in the sewer (was 20-27), recording thread
+35 -> 9.2 ms in the heaviest frames. Old Yharnam's bonfires and smoke columns (4K MetalFX
+Performance): 49.4 -> 58.8 FPS in the heaviest intervals.
+
+## Boost.ICL range sets on Apple's libc++ (2026-11-23, PR #162)
+
+`boost::icl::interval_set::add()` finds the intervals a new one overlaps with `std::set`
+`lower_bound`/`upper_bound` and a comparator that is not a strict weak ordering for such a key.
+Apple's current libc++ (and LLVM libc++ 22) returns one overlapping element where libstdc++ and
+older libc++ return all of them, so `add()` left overlapping ranges behind. In the buffer cache's
+`gpu_modified_ranges` that dropped GPU-written ranges: a later upload of stale guest memory
+overwrote the GPU's copy (flat, stretched slabs on the cloak after ~4.6% of respawns, reported by
+adurham; likely also "half-rendered character after reloading"). `RangeSet` and the rasterizer's
+`mapped_ranges` are now a `std::map<start, end>`; `tests/test_range_set.cpp` runs on both
+architectures in `build_macos.sh --test`. `RangeMap`/`SplitRangeMap` (same header) still use ICL but
+have no users; `AddressSpace::GetUsableRegions` builds a one-interval set.
+
+Throughput stand, 1080p uncapped, M4 Max (same build with the old header swapped back):
+
+| | Runs | FPS | GPU ms | p99 frame ms |
+|---|---|---|---|---|
+| ICL (0.5.18 test 1) | 2 | 122.5, 111.6 | 6.21, 6.32 | 14.5, 20.8 |
+| `std::map` (#162) | 3 | 123.9, 123.2, 123.9 | 6.20 | 13.2-14.7 |
+
+No cost; the 111.6 run is noise (one of the two ICL runs).
+
+## Plain-ELF eboot.bin from GoldHEN's FTP decryption (2026-11-23, #163)
+
+GoldHEN's FTP server decrypts executables to plain ELF files instead of plaintext SELFs. The game
+check and `prepare.py`/`link_libc.py`/`link_modules.py` only read SELFs, so the launcher said the
+eboot "could not be read as a decrypted PS4 executable". `parse_self` now also reads a plain ELF
+(`parse_elf`). The 1.09 SELF converted to a plain ELF is 93,667,640 bytes (the reporter's size
+exactly), has the same loaded-image hash, passes the game check, and ran the throughput benchmark
+(123.9 FPS) from a folder holding it.
