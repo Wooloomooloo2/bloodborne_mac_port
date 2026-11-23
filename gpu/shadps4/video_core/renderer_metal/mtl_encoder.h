@@ -63,6 +63,9 @@ struct ColorAttachment {
     u32 depth_plane{};         ///< 3D targets
     void* resolve_texture{};   ///< MSAA resolve target (StoreAndMultisampleResolve)
     u32 resolve_level{}, resolve_slice{};
+    /// Previous contents are unused: DontCare on the first encoder only. Clear takes
+    /// precedence; a pass reopened after other work still loads its stored contents.
+    bool discard_load{};
 };
 
 struct DepthAttachment {

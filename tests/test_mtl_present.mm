@@ -280,6 +280,42 @@ void TestPostProcessAfterDepthState(Device& device, PresentPasses& passes) {
     Expect(ok, "post-process after a depth-stencil state: gamma 1.0 round-trips");
 }
 
+void TestPostProcessColorLoads(Device& device, PresentPasses& passes) {
+    const u8 white[4] = {255, 255, 255, 255};
+    Object input = Upload(device, kBGRA8, 1, 1, white);
+    Object output = CreateTexture(device,
+                                  TextureDesc{.pixel_format = kBGRA8,
+                                              .width = 4, .height = 4,
+                                              .render_target = true},
+                                  "post-process load test", nullptr);
+    const u32 sizes[3][2] = {{4, 4}, {2, 4}, {4, 2}};
+    for (const auto& size : sizes) {
+        Encoder encoder{device};
+        RenderPassDesc pass{};
+        pass.colors[0].texture = output.Get();
+        pass.colors[0].clear = true;
+        pass.colors[0].clear_color = {0.125, 0.25, 0.5, 1.0};
+        encoder.BeginRenderPass(pass);
+        encoder.EndRenderPass();
+        passes.PostProcess(encoder, input.Get(), output.Get(), size[0], size[1], {.gamma = 1.0f});
+        id<MTLBuffer> readback = SharedBuffer(device, 4 * 4 * 4);
+        encoder.CopyTextureToBuffer(output.Get(), 0, 0, {}, {4, 4, 1}, Ref(readback), 16, 64);
+        device.Wait(encoder.Submit());
+        const u8* out = static_cast<const u8*>(readback.contents);
+        bool ok = true;
+        for (u32 y = 0; y < 4; ++y) {
+            for (u32 x = 0; x < 4; ++x) {
+                const u8* pixel = out + (y * 4 + x) * 4;
+                const bool inside = x < size[0] && y < size[1];
+                ok &= Near(pixel[0], inside ? 255 : 128) &&
+                      Near(pixel[1], inside ? 255 : 64) &&
+                      Near(pixel[2], inside ? 255 : 32) && pixel[3] == 255;
+            }
+        }
+        Expect(ok, "post-process full overwrite and partial width/height preserve all other pixels");
+    }
+}
+
 CAMetalLayer* OffscreenLayer(Device& device, u32 width, u32 height, u32 max_drawables) {
     CAMetalLayer* layer = [CAMetalLayer layer];
     ConfigureLayer(device, (__bridge void*)layer,
@@ -627,6 +663,7 @@ int main() {
         TestPostProcessSrgbInput(device, passes);
         TestAlphaSwizzle(device, passes);
         TestPostProcessAfterDepthState(device, passes);
+        TestPostProcessColorLoads(device, passes);
         TestLayerConfig(device);
         {
             PresentQueue queue{device};

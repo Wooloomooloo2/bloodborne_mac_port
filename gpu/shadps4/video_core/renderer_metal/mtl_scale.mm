@@ -169,9 +169,10 @@ void ScaleHelper::ScaleColor(Encoder& encoder, void* src, void* dst, ScaleFilter
     id<MTLTexture> target = (__bridge id<MTLTexture>)dst;
     const u32 format = u32(target.pixelFormat);
     void* const pipeline = impl->Pipeline(ColorKey(format, filter));
+    const u32 width = std::max<u32>(1, u32(target.width) >> dst_level);
+    const u32 height = std::max<u32>(1, u32(target.height) >> dst_level);
     if (rect.width == 0) {
-        rect = {0, 0, std::max<u32>(1, u32(target.width) >> dst_level),
-                std::max<u32>(1, u32(target.height) >> dst_level)};
+        rect = {0, 0, width, height};
     }
     // The shaders read level 0 of a 2D texture: other levels and types go through a view.
     void* texture = src;
@@ -183,8 +184,12 @@ void ScaleHelper::ScaleColor(Encoder& encoder, void* src, void* dst, ScaleFilter
         encoder.KeepAlive(std::move(view));
     }
     RenderPassDesc pass{};
-    pass.colors[0].texture = dst; // Load: pixels outside `rect` keep their content
+    pass.colors[0].texture = dst;
     pass.colors[0].level = dst_level;
+    // A full, unblended color copy overwrites the whole attached mip. Partial
+    // copies still Load: pixels outside `rect` must retain their content.
+    pass.colors[0].discard_load = rect.x == 0 && rect.y == 0 &&
+                                  rect.width == width && rect.height == height;
     encoder.BeginRenderPass(pass);
     SetFullscreenState(encoder, pipeline, rect);
     encoder.SetDepthStencil(nullptr);
