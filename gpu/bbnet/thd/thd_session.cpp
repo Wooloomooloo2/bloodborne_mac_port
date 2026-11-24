@@ -408,6 +408,23 @@ void DispatchAfter(int delay_ms, Prio prio, std::function<void()> fn) {
     g_dcv.notify_all();
 }
 
+namespace {
+std::atomic<int> g_signaling_queued{0};
+} // namespace
+
+bool SignalingQueueTry() {
+    const int prev = g_signaling_queued.fetch_add(1, std::memory_order_acq_rel);
+    if (prev >= Signal::kMaxQueued) {
+        g_signaling_queued.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
+    return true;
+}
+
+void SignalingQueueDone() { g_signaling_queued.fetch_sub(1, std::memory_order_acq_rel); }
+
+int SignalingQueueDepth() { return g_signaling_queued.load(std::memory_order_acquire); }
+
 std::int64_t NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch())
         .count();

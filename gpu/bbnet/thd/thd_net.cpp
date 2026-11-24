@@ -471,23 +471,28 @@ void p2p_reader(std::shared_ptr<UdpPort> port) {
         }
         if (n >= 4 && Signal::IsSignal(buf, static_cast<std::size_t>(n))) {
             // Another bbhost's signaling datagram (the handshake): the vendored NpSignaling's, on
-            // the dispatcher, where its callbacks into the game belong. Never the game's.
+            // the dispatcher, where its callbacks into the game belong. Never the game's. Drop
+            // short/oversized packets and bound how many sit on the dispatcher (any sender who
+            // knows the P2P port could otherwise grow memory without a limit).
+            const auto wire = static_cast<std::size_t>(n);
+            if (!Signal::WireOk(wire) || !SignalingQueueTry()) continue;
             {
                 std::lock_guard lk(port->mu);
                 note_heard(*port, source_key(sa.sin_addr.s_addr, sa.sin_port));
             }
-            std::vector<std::uint8_t> packet(buf, buf + n);
+            std::vector<std::uint8_t> packet(buf, buf + Signal::kPacket);
             const std::uint32_t from_addr = sa.sin_addr.s_addr;
             const std::uint16_t from_port = sa.sin_port;
             static int signal_logs = 0;
             if (trace_now(signal_logs)) {
                 char ip[32];
                 write_ipv4(ip, sizeof(ip), from_addr);
-                Log("net: signaling datagram kind 0x%02x, %zu bytes <- %s:%u", n >= 5 ? buf[4] : 0,
-                    static_cast<std::size_t>(n), ip, bswap16(from_port));
+                Log("net: signaling datagram kind 0x%02x, %zu bytes <- %s:%u", packet[4], wire, ip,
+                    bswap16(from_port));
             }
             DispatchAfter(0, Prio::Signaling, [packet = std::move(packet), from_addr, from_port] {
                 SignalingControl(packet.data(), packet.size(), from_addr, from_port);
+                SignalingQueueDone();
             });
             continue;
         }

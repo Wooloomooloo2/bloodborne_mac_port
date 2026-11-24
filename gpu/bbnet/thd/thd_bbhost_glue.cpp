@@ -43,6 +43,12 @@ void bbhost_np_log(const char* format, ...) {
     va_start(args, format);
     std::vsnprintf(text, sizeof(text), format, args);
     va_end(args);
+    // Packet fields (online ids) can carry control bytes; keep them off the session log so a
+    // newline cannot forge a Crash:/STOP: line the launcher grades by severity.
+    for (char* p = text; *p; ++p) {
+        const auto c = static_cast<unsigned char>(*p);
+        if (c < 0x20 || c == 0x7f) *p = '?';
+    }
     BbThd::Log("%s", text);
 }
 

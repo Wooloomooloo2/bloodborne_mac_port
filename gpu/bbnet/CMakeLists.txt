@@ -130,3 +130,18 @@ if (APPLE)
 endif()
 set_target_properties(bbnet-vendored-signaling-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     INTERPROCEDURAL_OPTIMIZATION OFF)
+
+# Inbound signaling size/queue caps (short, oversized, flood) — no network.
+add_executable(bbnet-signaling-ingress-test EXCLUDE_FROM_ALL ../../tests/test_thd_signaling_ingress.cpp
+    thd/thd_session.cpp)
+target_include_directories(bbnet-signaling-ingress-test PRIVATE ../../tests/thd_shim . thd
+    ../third_party/httplib ../shadps4)
+target_compile_options(bbnet-signaling-ingress-test PRIVATE -UNDEBUG)
+target_compile_definitions(bbnet-signaling-ingress-test PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT CPPHTTPLIB_ZLIB_SUPPORT)
+target_link_libraries(bbnet-signaling-ingress-test PRIVATE nlohmann_json::nlohmann_json OpenSSL::SSL
+    OpenSSL::Crypto ZLIB::ZLIB)
+if (APPLE)
+    target_link_libraries(bbnet-signaling-ingress-test PRIVATE "-framework Security" "-framework CoreFoundation")
+endif()
+set_target_properties(bbnet-signaling-ingress-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+    INTERPROCEDURAL_OPTIMIZATION OFF)

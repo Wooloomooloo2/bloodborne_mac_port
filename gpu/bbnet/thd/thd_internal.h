@@ -157,6 +157,11 @@ void SignalingPeerDead(const std::string& online_id);
 void SignalingReset();
 // A kSignalMagic datagram the P2P reader took off the port (thd_net.cpp), on the dispatcher.
 void SignalingControl(const std::uint8_t* data, std::size_t len, std::uint32_t addr, std::uint16_t port_nbo);
+// Bound how many signaling jobs sit on the dispatcher (Signal::kMaxQueued). The P2P reader
+// reserves a slot before DispatchAfter and releases it when the job finishes.
+bool SignalingQueueTry();
+void SignalingQueueDone();
+int SignalingQueueDepth(); // for tests
 // A signaling datagram out through the P2P port (and the relay, for a relayed peer).
 void P2pSignalSend(std::uint32_t addr, std::uint16_t port_host, const void* data, std::size_t len);
 void RegisterVendoredSignaling(Core::Loader::SymbolsResolver* sym);

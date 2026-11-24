@@ -9,10 +9,16 @@ inline constexpr int kNpUtilErrorNotMatch = static_cast<int>(0x80550609);
 inline constexpr std::size_t kMaxDatagram = 65507;
 
 namespace Signal {
+inline constexpr std::size_t kPacket = 46;     // what NpSignaling reads
+inline constexpr std::size_t kMaxWire = 64;    // drop anything longer on the P2P port
+inline constexpr int kMaxQueued = 256;         // pending dispatcher jobs for signaling
+
 inline bool IsSignal(const std::uint8_t* data, std::size_t size) {
     static constexpr std::uint8_t kMagic[4] = {0xfe, 'b', 'b', 's'};
     return size >= sizeof(kMagic) && std::memcmp(data, kMagic, sizeof(kMagic)) == 0;
 }
+// Wire length we will accept on the P2P port (before copying the first kPacket bytes).
+inline bool WireOk(std::size_t size) { return size >= kPacket && size <= kMaxWire; }
 }
 
 inline int CompareOnlineId(const void* a, const void* b) {
