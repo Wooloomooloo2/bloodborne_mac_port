@@ -408,6 +408,23 @@ void DispatchAfter(int delay_ms, Prio prio, std::function<void()> fn) {
     g_dcv.notify_all();
 }
 
+namespace {
+std::atomic<int> g_signaling_queued{0};
+} // namespace
+
+bool SignalingQueueTry() {
+    const int prev = g_signaling_queued.fetch_add(1, std::memory_order_acq_rel);
+    if (prev >= Signal::kMaxQueued) {
+        g_signaling_queued.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
+    return true;
+}
+
+void SignalingQueueDone() { g_signaling_queued.fetch_sub(1, std::memory_order_acq_rel); }
+
+int SignalingQueueDepth() { return g_signaling_queued.load(std::memory_order_acquire); }
+
 std::int64_t NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch())
         .count();
@@ -451,6 +468,17 @@ std::uint32_t AddrOf(const std::string& text) {
     return a.s_addr;
 }
 
+// When the last probes toward an address started (PeersPunchAgain).
+std::map<std::uint64_t, std::int64_t> g_punched;
+
+void Punch(const Peer& p) {
+    {
+        std::lock_guard lk(g_pmu);
+        g_punched[(static_cast<std::uint64_t>(p.addr) << 16) | p.port] = NowMs();
+    }
+    P2pPunch(p.online_id.c_str(), p.addr, p.port, p.local_addr, p.local_port);
+}
+
 // A peer with a new address: probes toward it so our NAT lets its datagrams in.
 void PunchIfNew(const Peer& before, const Peer& after) {
     if (after.online_id == OnlineId() || !after.addr || !after.port) return;
@@ -458,13 +486,27 @@ void PunchIfNew(const Peer& before, const Peer& after) {
         before.local_addr == after.local_addr && before.local_port == after.local_port) {
         return;
     }
-    P2pPunch(after.online_id.c_str(), after.addr, after.port, after.local_addr, after.local_port);
+    Punch(after);
 }
 } // namespace
 
 void PeersClear() {
     std::lock_guard lk(g_pmu);
     g_peers.clear();
+    g_punched.clear();
+}
+void PeersPunchAgain(std::uint16_t member_id, int min_age_ms) {
+    Peer p;
+    {
+        std::lock_guard lk(g_pmu);
+        const auto it = g_peers.find(member_id);
+        if (it == g_peers.end()) return;
+        p = it->second;
+        const auto last = g_punched.find((static_cast<std::uint64_t>(p.addr) << 16) | p.port);
+        if (last != g_punched.end() && NowMs() - last->second < min_age_ms) return;
+    }
+    if (p.online_id == OnlineId() || !p.addr || !p.port) return;
+    Punch(p);
 }
 void PeersUpsert(const Peer& p) {
     Peer before;
