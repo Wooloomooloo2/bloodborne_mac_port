@@ -3,6 +3,7 @@
 // the dispatcher that runs the game's callbacks, the peer table and the P2P port's STUN, relay
 // and hole punching. Adapted from droogie/bbhost src/net/{http,account,session,stun}.h (566184a).
 #pragma once
+#include "thd_signal.h"
 
 #include <cstdint>
 #include <functional>
@@ -103,6 +104,9 @@ void PeersErase(std::uint16_t member_id);
 std::vector<Peer> PeersAll();
 int PeersFromMembers(const Json& members);
 Peer PeersProvisional(const std::string& id, std::uint32_t addr, std::uint16_t port);
+// Probes toward a peer whose address did not change, unless the last ones are younger than
+// min_age_ms: a NAT forgets an idle mapping, and a peer that restarted has lost its own.
+void PeersPunchAgain(std::uint16_t member_id, int min_age_ms = 15000);
 
 // ---- the session service
 bool ServerContextStart(Json& reply, std::string& error);
@@ -146,10 +150,16 @@ void HostExtra(Json& extra);
 void FillNpId(void* out, const char* online);
 std::string NpIdText(const void* npid);
 
-// ---- signaling (thd_np.cpp), driven by matching2
+// ---- signaling: bbhost's vendored NpSignaling (vendor/bbhost, through thd_bbhost_glue.cpp),
+// driven by matching2 (thd_np.cpp forwards these)
 void SignalingPeerKnown(std::uint16_t member_id);
 void SignalingPeerDead(const std::string& online_id);
 void SignalingReset();
+// A kSignalMagic datagram the P2P reader took off the port (thd_net.cpp), on the dispatcher.
+void SignalingControl(const std::uint8_t* data, std::size_t len, std::uint32_t addr, std::uint16_t port_nbo);
+// A signaling datagram out through the P2P port (and the relay, for a relayed peer).
+void P2pSignalSend(std::uint32_t addr, std::uint16_t port_host, const void* data, std::size_t len);
+void RegisterVendoredSignaling(Core::Loader::SymbolsResolver* sym);
 
 void RegisterNet(Core::Loader::SymbolsResolver* sym);
 void RegisterMatching2(Core::Loader::SymbolsResolver* sym);
